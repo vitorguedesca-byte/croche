@@ -1,0 +1,41 @@
+# ===== Dependências =====
+node_modules/
+
+# ===== Variáveis de ambiente / segredos =====
+.env
+.env.*
+!.env.example
+
+# ===== Credenciais e certificados (NUNCA versionar) =====
+# Certificado + chave privada mTLS da CORA e afins
+backend/certs/
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+# Acessos/senhas soltos
+acesso google.txt
+
+# ===== Build / saída =====
+dist/
+build/
+frontend/dist/
+
+# ===== Logs =====
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ===== Sistema operacional =====
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# ===== Editores/IDE =====
+.vscode/
+.idea/
+*.swp

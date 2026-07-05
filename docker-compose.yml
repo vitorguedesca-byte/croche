@@ -1,0 +1,19 @@
+# Opcional: sobe um MySQL local pronto para o sistema.
+# Uso:  docker compose up -d
+# Depois aponte o backend/.env para:
+#   DATABASE_URL="mysql://root:fios123@localhost:3306/fios_que_curam"
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: fios_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: fios123
+      MYSQL_DATABASE: fios_que_curam
+    ports:
+      - "3306:3306"
+    volumes:
+      - fios_mysql_data:/var/lib/mysql
+
+volumes:
+  fios_mysql_data:

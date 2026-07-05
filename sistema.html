@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fios que Curam — Sistema de Gestão</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Nunito+Sans:wght@400;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --offwhite:#FAF6EF; --cream:#F3EADB; --sand:#E7D8BE; --beige:#D9C6A4;
+    --terracota:#C2714F; --terracota-soft:#D68A68; --sage:#8C9A78; --sage-deep:#6E7C5A;
+    --green-deep:#1F6B3A; --green-mid:#3FA34D; --green-light:#7FC241; --brown:#5E4A38;
+    --ink:#3A3228; --muted:#8A7E6E; --line:rgba(94,74,56,.12);
+    --ok:#3FA34D; --warn:#D9A441; --danger:#C2543F; --info:#4E79A8;
+    --radius:16px; --shadow:0 14px 40px -26px rgba(58,50,40,.5);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Nunito Sans',sans-serif;color:var(--ink);background:var(--cream);-webkit-font-smoothing:antialiased}
+  h1,h2,h3{font-family:'Fraunces',serif;font-weight:600;letter-spacing:-.01em}
+  button{font-family:inherit;cursor:pointer}
+  input,select,textarea{font-family:inherit;font-size:.95rem}
+  .hidden{display:none!important}
+
+  /* App shell */
+  .app{display:flex;min-height:100vh}
+  .sidebar{width:248px;background:var(--green-deep);color:#fff;padding:1.4rem 1rem;display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+  .sidebar .brand{display:flex;align-items:center;gap:.6rem;padding:.3rem .5rem 1.3rem}
+  .sidebar .brand img{height:46px;background:#fff;border-radius:10px;padding:4px}
+  .sidebar .brand b{font-family:'Fraunces',serif;font-size:1.05rem;line-height:1.1}
+  .sidebar .brand span{font-size:.7rem;opacity:.7;display:block}
+  .nav-item{display:flex;align-items:center;gap:.7rem;padding:.7rem .8rem;border-radius:12px;color:rgba(255,255,255,.82);font-weight:600;font-size:.95rem;border:none;background:none;width:100%;text-align:left;transition:background .15s,color .15s}
+  .nav-item:hover{background:rgba(255,255,255,.08);color:#fff}
+  .nav-item.active{background:#fff;color:var(--green-deep)}
+  .nav-item .ic{font-size:1.1rem;width:22px;text-align:center}
+  .nav-sep{margin:1rem .5rem .4rem;font-size:.68rem;letter-spacing:.16em;text-transform:uppercase;opacity:.5}
+  .sidebar .spacer{flex:1}
+  .side-foot{font-size:.72rem;opacity:.6;padding:.5rem}
+  .side-foot button{color:#fff;background:rgba(255,255,255,.1);border:none;padding:.5rem .7rem;border-radius:10px;font-size:.78rem;width:100%;margin-top:.4rem}
+
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .topbar{background:var(--offwhite);border-bottom:1px solid var(--line);padding:1rem 1.6rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;position:sticky;top:0;z-index:20}
+  .topbar h1{font-size:1.4rem;color:var(--green-deep)}
+  .topbar .sub{font-size:.85rem;color:var(--muted)}
+  .content{padding:1.6rem;flex:1;background:var(--cream)}
+
+  .btn{display:inline-flex;align-items:center;gap:.5rem;background:var(--green-deep);color:#fff;font-weight:700;font-size:.9rem;padding:.6rem 1.1rem;border-radius:10px;border:none;transition:.15s}
+  .btn:hover{background:var(--green-mid);transform:translateY(-1px)}
+  .btn.sec{background:#fff;color:var(--green-deep);border:1.5px solid var(--green-deep)}
+  .btn.sec:hover{background:var(--green-deep);color:#fff}
+  .btn.terra{background:var(--terracota)}.btn.terra:hover{background:var(--terracota-soft)}
+  .btn.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+  .btn.ghost:hover{background:#fff;color:var(--ink)}
+  .btn.sm{padding:.4rem .7rem;font-size:.8rem;border-radius:8px}
+  .btn.danger{background:var(--danger)}.btn.danger:hover{background:#a8412f}
+  .btn.wa{background:#25D366}.btn.wa:hover{background:#1eb558}
+
+  /* Cards / grid */
+  .grid{display:grid;gap:1rem}
+  .stats{grid-template-columns:repeat(4,1fr)}
+  .card{background:#fff;border-radius:var(--radius);border:1px solid var(--line);box-shadow:var(--shadow)}
+  .stat{padding:1.2rem 1.3rem}
+  .stat .lbl{font-size:.8rem;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:.4rem}
+  .stat .val{font-family:'Fraunces',serif;font-size:2rem;color:var(--green-deep);line-height:1.1;margin-top:.3rem}
+  .stat .val.warn{color:var(--warn)} .stat .val.terra{color:var(--terracota)}
+  .stat .foot{font-size:.78rem;color:var(--muted);margin-top:.2rem}
+
+  .panel{background:#fff;border-radius:var(--radius);border:1px solid var(--line);box-shadow:var(--shadow);padding:1.3rem;margin-bottom:1.2rem}
+  .panel-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;gap:1rem;flex-wrap:wrap}
+  .panel-h h2{font-size:1.15rem;color:var(--green-deep)}
+  .panel-h .tools{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+
+  /* Table */
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:.6rem .7rem;border-bottom:2px solid var(--line);font-weight:700}
+  td{padding:.7rem .7rem;border-bottom:1px solid var(--line);font-size:.92rem;vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:rgba(243,234,219,.4)}
+  .cli-name{font-weight:700;color:var(--ink)}
+  .cli-sub{font-size:.78rem;color:var(--muted)}
+
+  /* Badges */
+  .badge{display:inline-flex;align-items:center;gap:.35rem;font-size:.74rem;font-weight:700;padding:.25rem .6rem;border-radius:999px;white-space:nowrap}
+  .b-warn{background:rgba(217,164,65,.16);color:#9a7011}
+  .b-ok{background:rgba(63,163,77,.15);color:#1f6b3a}
+  .b-info{background:rgba(78,121,168,.15);color:#34597f}
+  .b-danger{background:rgba(194,84,63,.15);color:#a8412f}
+  .b-muted{background:rgba(94,74,56,.1);color:var(--brown)}
+  .b-terra{background:rgba(194,113,79,.16);color:#9c4f30}
+  .b-sage{background:rgba(140,154,120,.2);color:#586348}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+
+  .tags{display:flex;gap:.35rem;flex-wrap:wrap}
+  .chip{font-size:.72rem;font-weight:700;padding:.22rem .55rem;border-radius:999px;background:var(--cream);color:var(--brown);border:1px solid var(--line)}
+
+  .filters{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem}
+  .filters input,.filters select{padding:.5rem .7rem;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
+  .seg{display:inline-flex;background:var(--cream);border-radius:10px;padding:3px;border:1px solid var(--line)}
+  .seg button{border:none;background:none;padding:.4rem .8rem;border-radius:8px;font-weight:700;font-size:.82rem;color:var(--muted)}
+  .seg button.on{background:#fff;color:var(--green-deep);box-shadow:0 2px 6px -3px rgba(0,0,0,.2)}
+
+  /* Agenda calendar */
+  .agenda{display:grid;grid-template-columns:repeat(var(--cols,5),1fr);gap:.6rem}
+  .day-col{background:var(--offwhite);border:1px solid var(--line);border-radius:12px;padding:.5rem;min-height:120px}
+  .day-h{text-align:center;padding:.3rem;border-bottom:1px solid var(--line);margin-bottom:.5rem}
+  .day-h b{display:block;font-family:'Fraunces',serif;font-size:1.1rem;color:var(--green-deep)}
+  .day-h span{font-size:.72rem;color:var(--muted);text-transform:capitalize}
+  .day-h.today b{color:var(--terracota)}
+  .slot{border-radius:9px;padding:.5rem .55rem;margin-bottom:.45rem;font-size:.8rem;cursor:pointer;border-left:4px solid var(--muted);background:#fff;border:1px solid var(--line);transition:.12s}
+  .slot:hover{transform:translateX(2px);box-shadow:var(--shadow)}
+  .slot .t{font-weight:800;font-size:.82rem}
+  .slot .n{font-size:.76rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .slot.free{border-left-color:var(--sage);background:rgba(140,154,120,.08)}
+  .slot.free .n{color:var(--sage-deep);font-weight:700}
+  .slot.confirmada{border-left-color:var(--ok)}
+  .slot.aguardando{border-left-color:var(--warn);background:rgba(217,164,65,.07)}
+  .slot.cancelada{border-left-color:var(--danger);opacity:.55;text-decoration:line-through}
+  .slot.concluida{border-left-color:var(--info)}
+
+  /* ===== Agenda v2 — visualizações ===== */
+  .ag-toolbar{display:flex;align-items:center;justify-content:space-between;gap:.8rem;flex-wrap:wrap;margin-bottom:1rem}
+  .ag-views{display:inline-flex;background:var(--cream);border-radius:11px;padding:3px;border:1px solid var(--line)}
+  .ag-views button{border:none;background:none;padding:.45rem .85rem;border-radius:9px;font-weight:700;font-size:.82rem;color:var(--muted);display:flex;align-items:center;gap:.35rem;transition:.12s}
+  .ag-views button:hover{color:var(--ink)}
+  .ag-views button.on{background:#fff;color:var(--green-deep);box-shadow:0 2px 6px -3px rgba(0,0,0,.25)}
+  .ag-nav{display:flex;align-items:center;gap:.4rem}
+  .ag-nav .navbtn{width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--brown);font-size:1rem}
+  .ag-nav .navbtn:hover{background:var(--green-deep);color:#fff;border-color:var(--green-deep)}
+  .ag-period{font-family:'Fraunces',serif;font-size:1.05rem;color:var(--green-deep);min-width:172px;text-align:center;text-transform:capitalize}
+
+  /* filtro de unidade + legenda unificados */
+  .ag-filters{display:flex;align-items:center;justify-content:space-between;gap:.8rem;flex-wrap:wrap;margin-bottom:1.1rem;padding-bottom:1.1rem;border-bottom:1px dashed var(--line)}
+  .ag-units{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+  .unit-chip{display:inline-flex;align-items:center;gap:.45rem;padding:.4rem .8rem;border-radius:999px;border:1.5px solid var(--line);background:#fff;font-weight:700;font-size:.82rem;color:var(--muted);transition:.12s}
+  .unit-chip:hover{border-color:var(--beige)}
+  .unit-chip .sw{width:12px;height:12px;border-radius:50%;flex:none}
+  .unit-chip.on{color:var(--ink);border-color:currentColor;background:rgba(255,255,255,1);box-shadow:0 2px 8px -4px rgba(0,0,0,.3)}
+  .ag-legend{display:flex;gap:.9rem;flex-wrap:wrap;font-size:.76rem;color:var(--muted);align-items:center}
+  .ag-legend .lg{display:inline-flex;align-items:center;gap:.35rem}
+  .ag-legend .lgdot{width:9px;height:9px;border-radius:50%}
+
+  /* slot: borda = cor da UNIDADE; bolinha = status */
+  .slot{border-left:4px solid var(--uc,var(--muted))}
+  .slot .slot-top{display:flex;align-items:center;justify-content:space-between;gap:.4rem}
+  .slot .st-dot{width:10px;height:10px;border-radius:50%;flex:none}
+  .slot .st-lbl{font-size:.68rem;font-weight:700;margin-top:.1rem}
+  .slot .plus{color:var(--uc,var(--sage));font-weight:800;font-size:.95rem;line-height:1}
+  .slot.free{border-left-style:dashed;background:#fff}
+  .slot.free .n{color:var(--brown);font-weight:700}
+  .day-empty{font-size:.76rem;color:var(--muted);text-align:center;padding:.6rem}
+
+  /* visão mês */
+  .month-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+  .month-dow{text-align:center;font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:.3rem 0}
+  .m-cell{background:var(--offwhite);border:1px solid var(--line);border-radius:10px;min-height:104px;padding:.4rem;cursor:pointer;transition:.12s;display:flex;flex-direction:column;gap:.2rem;overflow:hidden}
+  .m-cell:hover{border-color:var(--green-mid);box-shadow:var(--shadow)}
+  .m-cell.out{opacity:.42}
+  .m-cell .dn{font-weight:800;font-size:.82rem;color:var(--ink);align-self:flex-start;line-height:1.5}
+  .m-cell.today .dn{color:#fff;background:var(--terracota);min-width:23px;height:23px;padding:0 .3rem;border-radius:999px;display:inline-flex;align-items:center;justify-content:center}
+  .m-ev{font-size:.69rem;font-weight:700;padding:.13rem .35rem;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left:3px solid var(--uc,var(--muted));color:var(--ink)}
+  .m-ev.free{color:var(--muted);background:transparent;font-weight:600}
+  .m-more{font-size:.67rem;color:var(--muted);font-weight:700;margin-top:auto}
+  .m-dots{display:none;gap:3px;flex-wrap:wrap;margin-top:auto}
+
+  /* visão dia */
+  .day-view{display:flex;flex-direction:column;gap:.55rem;max-width:560px}
+  .day-view .slot{margin-bottom:0;padding:.75rem .9rem}
+  .day-view .slot .t{font-size:.95rem}
+  .day-view .slot .n{font-size:.82rem}
+  .day-head{font-family:'Fraunces',serif;color:var(--green-deep);font-size:1.05rem;margin-bottom:.8rem;text-transform:capitalize}
+
+  /* visão lista */
+  .list-day{margin-bottom:1.2rem}
+  .list-day-h{font-family:'Fraunces',serif;color:var(--green-deep);font-size:.98rem;text-transform:capitalize;padding-bottom:.4rem;border-bottom:2px solid var(--line);margin-bottom:.5rem}
+  .list-row{display:flex;align-items:center;gap:.9rem;padding:.65rem .7rem;border-radius:10px;border:1px solid var(--line);border-left:4px solid var(--uc,var(--muted));background:#fff;margin-bottom:.45rem;cursor:pointer;transition:.12s}
+  .list-row:hover{transform:translateX(2px);box-shadow:var(--shadow)}
+  .list-row .lr-time{font-weight:800;font-size:.95rem;color:var(--brown);min-width:48px}
+  .list-row .lr-main{flex:1;min-width:0}
+  .list-row .lr-main b{display:block;font-size:.92rem}
+  .list-row .lr-main span{font-size:.76rem;color:var(--muted)}
+
+  /* ocupação / capacidade de turma */
+  .occ{font-size:.7rem;font-weight:800;padding:.1rem .4rem;border-radius:999px;background:rgba(94,74,56,.1);color:var(--brown);flex:none}
+  .occ.is-part{background:var(--uc,var(--sage));color:#fff;opacity:.92}
+  .occ.is-full{background:var(--danger);color:#fff}
+  .occbar{height:4px;border-radius:999px;background:rgba(94,74,56,.12);margin-top:.4rem;overflow:hidden}
+  .occbar span{display:block;height:100%;border-radius:999px}
+  .slot.full{opacity:.92}
+  .slot.full .n::after{content:' · lotada';color:var(--danger);font-weight:800}
+  .m-ev.full{font-weight:800;outline:1px solid var(--danger);outline-offset:-1px}
+  .slot-btn .vagas{display:block;font-size:.72rem;font-weight:800;color:var(--green-mid);margin-top:.25rem}
+  .slot-btn .vagas.few{color:var(--terracota)}
+  .slot-btn.lotada{opacity:.85;background:var(--cream)}
+
+  /* lista de espera + presença */
+  .wl-badge{font-size:.66rem;font-weight:800;color:var(--terracota);margin-top:.35rem}
+  .roster-row{display:flex;align-items:center;gap:.6rem;padding:.55rem 0;border-bottom:1px dashed var(--line)}
+  .roster-row:last-child{border-bottom:none}
+  .roster-row .rr-info{flex:1;min-width:0}
+  .roster-row .rr-info b{font-size:.92rem}
+  .att{display:inline-flex;gap:.25rem;flex:none}
+  .att-btn{width:30px;height:30px;border-radius:8px;border:1.5px solid var(--line);background:#fff;font-weight:800;font-size:.85rem;color:var(--muted);line-height:1}
+  .att-btn:hover{border-color:var(--beige)}
+  .att-btn.on-pres{background:var(--ok);border-color:var(--ok);color:#fff}
+  .att-btn.on-falt{background:var(--danger);border-color:var(--danger);color:#fff}
+
+  /* Modal */
+  .overlay{position:fixed;inset:0;background:rgba(58,50,40,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:100;padding:1rem}
+  .modal{background:var(--offwhite);border-radius:18px;width:min(540px,96vw);max-height:92vh;overflow:auto;box-shadow:0 30px 80px -20px rgba(0,0,0,.5)}
+  .modal-h{padding:1.2rem 1.4rem;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:var(--offwhite)}
+  .modal-h h3{font-size:1.25rem;color:var(--green-deep)}
+  .modal-h button{background:none;border:none;font-size:1.5rem;color:var(--muted);line-height:1}
+  .modal-b{padding:1.4rem}
+  .modal-f{padding:1rem 1.4rem;border-top:1px solid var(--line);display:flex;gap:.6rem;justify-content:flex-end;flex-wrap:wrap;position:sticky;bottom:0;background:var(--offwhite)}
+  .field{margin-bottom:1rem}
+  .field label{display:block;font-size:.82rem;font-weight:700;color:var(--brown);margin-bottom:.35rem}
+  .field input,.field select,.field textarea{width:100%;padding:.65rem .8rem;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
+  .field textarea{resize:vertical;min-height:70px}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}
+  .info-line{display:flex;justify-content:space-between;padding:.5rem 0;border-bottom:1px dashed var(--line);font-size:.92rem}
+  .info-line b{color:var(--brown)}
+  .help{font-size:.82rem;color:var(--muted);background:rgba(140,154,120,.1);padding:.7rem .9rem;border-radius:10px;border-left:3px solid var(--sage)}
+
+  .empty{text-align:center;padding:2.5rem;color:var(--muted)}
+  .empty .ic{font-size:2.5rem;opacity:.4}
+
+  /* Cliente mode */
+  .cli-wrap{max-width:760px;margin:0 auto;padding:1.5rem}
+  .cli-head{text-align:center;margin-bottom:1.5rem}
+  .cli-head img{height:64px;margin-bottom:.6rem}
+  .cli-head h1{color:var(--green-deep);font-size:1.7rem}
+  .cli-head p{color:var(--muted)}
+  .steps{display:flex;gap:.5rem;justify-content:center;margin:1.2rem 0}
+  .step{font-size:.78rem;font-weight:700;color:var(--muted);display:flex;align-items:center;gap:.4rem}
+  .step .num{width:24px;height:24px;border-radius:50%;background:var(--sand);display:flex;align-items:center;justify-content:center;font-size:.75rem}
+  .step.on .num{background:var(--green-deep);color:#fff}
+  .step.on{color:var(--green-deep)}
+  .unit-pick{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+  .unit-card{background:#fff;border:2px solid var(--line);border-radius:16px;padding:1.5rem;text-align:center;cursor:pointer;transition:.15s}
+  .unit-card:hover{border-color:var(--green-mid);transform:translateY(-3px);box-shadow:var(--shadow)}
+  .unit-card .ic{font-size:2rem}
+  .unit-card b{display:block;font-family:'Fraunces',serif;font-size:1.3rem;color:var(--green-deep);margin-top:.4rem}
+  .unit-card span{font-size:.84rem;color:var(--muted)}
+  .slot-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.7rem}
+  .slot-btn{background:#fff;border:1.5px solid var(--line);border-radius:12px;padding:.8rem;text-align:left;transition:.15s}
+  .slot-btn:hover{border-color:var(--green-mid);box-shadow:var(--shadow)}
+  .slot-btn b{color:var(--green-deep);display:block;font-size:1rem}
+  .slot-btn span{font-size:.78rem;color:var(--muted)}
+  .cli-mode-toggle{position:fixed;top:12px;right:12px;z-index:30}
+
+  @media(max-width:900px){
+    .sidebar{position:fixed;left:-260px;z-index:90;transition:left .2s}
+    .sidebar.open{left:0}
+    .stats{grid-template-columns:1fr 1fr}
+    .agenda{grid-template-columns:1fr;}
+    .month-grid{gap:3px}
+    .m-cell{min-height:62px;padding:.25rem}
+    .m-cell .m-ev,.m-cell .m-more{display:none}
+    .m-cell .m-dots{display:flex;gap:3px;flex-wrap:wrap}
+    .ag-period{min-width:120px;font-size:.92rem}
+    .row2{grid-template-columns:1fr}
+    .unit-pick{grid-template-columns:1fr}
+    .menu-btn{display:inline-flex!important}
+  }
+  .menu-btn{display:none;background:none;border:1px solid var(--line);border-radius:8px;padding:.4rem .6rem;font-size:1.1rem}
+</style>
+</head>
+<body>
+
+<!-- ============ ADMIN APP ============ -->
+<div class="app" id="adminApp">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <img src="logo-1.PNG" alt="Fios que Curam" />
+      <div><b>Fios que Curam</b><span>Gestão · por Inêz</span></div>
+    </div>
+    <div class="nav-sep">Operação</div>
+    <button class="nav-item active" data-view="dashboard"><span class="ic">📊</span> Painel</button>
+    <button class="nav-item" data-view="agenda"><span class="ic">📅</span> Agenda</button>
+    <button class="nav-item" data-view="marcacoes"><span class="ic">📝</span> Marcações</button>
+    <div class="nav-sep">Relacionamento</div>
+    <button class="nav-item" data-view="clientes"><span class="ic">👩</span> Clientes</button>
+    <button class="nav-item" data-view="recebimentos"><span class="ic">💰</span> Recebimentos</button>
+    <div class="spacer"></div>
+    <div class="side-foot">
+      Protótipo — dados salvos neste navegador.
+      <button onclick="App.switchToCliente()">👁 Ver como cliente</button>
+      <button onclick="App.resetData()">↺ Restaurar dados de exemplo</button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:.8rem">
+        <button class="menu-btn" onclick="document.getElementById('sidebar').classList.toggle('open')">☰</button>
+        <div>
+          <h1 id="viewTitle">Painel</h1>
+          <div class="sub" id="viewSub"></div>
+        </div>
+      </div>
+      <div id="topActions"></div>
+    </div>
+    <div class="content" id="content"></div>
+  </div>
+</div>
+
+<!-- ============ CLIENTE APP ============ -->
+<div id="clienteApp" class="hidden">
+  <button class="btn ghost sm cli-mode-toggle" onclick="App.switchToAdmin()">← Voltar ao painel admin</button>
+  <div class="cli-wrap" id="cliContent"></div>
+</div>
+
+<div id="modalRoot"></div>
+
+<script>
+/* =================== ESTADO =================== */
+const STORE_KEY = 'fqc_sistema_v2';
+const UNITS = ['Ipatinga','Timóteo'];
+const PROFS = ['Inêz','Equipe FQC'];
+const VALOR_PADRAO = 80;
+const CAPACITY_PADRAO = 4; // vagas por turma (configurável por horário)
+
+const STATUS = {
+  aguardando: {label:'Aguardando pagamento', badge:'b-warn', slot:'aguardando', dot:'var(--warn)'},
+  confirmada: {label:'Confirmada',            badge:'b-ok',   slot:'confirmada', dot:'var(--ok)'},
+  concluida:  {label:'Concluída',             badge:'b-info', slot:'concluida',  dot:'var(--info)'},
+  cancelada:  {label:'Cancelada',             badge:'b-danger',slot:'cancelada', dot:'var(--danger)'},
+};
+const TAG_OPTIONS = ['Em atendimento','Em marcação','Aluna ativa','Confirmada','Lead','Inadimplente'];
+
+function todayISO(){const d=new Date();return d.toISOString().slice(0,10);}
+function addDays(iso,n){const d=new Date(iso+'T00:00');d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);}
+function fmtDate(iso){const d=new Date(iso+'T00:00');return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});}
+function fmtDateLong(iso){const d=new Date(iso+'T00:00');return d.toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'long'});}
+function weekdayShort(iso){const d=new Date(iso+'T00:00');return d.toLocaleDateString('pt-BR',{weekday:'short'}).replace('.','');}
+function money(v){return 'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function uid(){return Math.random().toString(36).slice(2,9);}
+function waLink(phone,msg){const p=(phone||'').replace(/\D/g,'');return 'https://wa.me/55'+p+'?text='+encodeURIComponent(msg||'');}
+
+function seed(){
+  const t=todayISO();
+  const slots=[];
+  // gera horários para os próximos 14 dias, seg-sáb, manhã/tarde, por unidade
+  for(let i=0;i<14;i++){
+    const date=addDays(t,i);
+    const dow=new Date(date+'T00:00').getDay(); // 0 dom
+    if(dow===0) continue;
+    const times = dow===6 ? ['09:00'] : ['09:00','14:00','16:00'];
+    UNITS.forEach(u=>{
+      times.forEach(time=>{
+        slots.push({id:uid(),date,time,unit:u,prof:u==='Ipatinga'?'Inêz':'Equipe FQC',capacity:CAPACITY_PADRAO});
+      });
+    });
+  }
+  const clients=[
+    {id:uid(),name:'Maria Souza',phone:'31988880001',unit:'Ipatinga',tags:['Aluna ativa','Em atendimento'],notes:'Adora amigurumi. Já comprou 2 kits.'},
+    {id:uid(),name:'Ana Clara',phone:'31988880002',unit:'Timóteo',tags:['Em marcação','Lead'],notes:'Iniciante, perguntou sobre horário de sábado.'},
+    {id:uid(),name:'Rosa Lima',phone:'31988880003',unit:'Ipatinga',tags:['Aluna ativa','Confirmada'],notes:''},
+    {id:uid(),name:'Juliana Reis',phone:'31988880004',unit:'Timóteo',tags:['Em atendimento'],notes:'Quer turma de crochê que vira renda.'},
+  ];
+  // algumas marcações
+  const bk=[];
+  const pick=(d,tm,u)=>slots.find(s=>s.date===d&&s.time===tm&&s.unit===u);
+  const mk=(cli,slot,status,paid)=>{
+    if(!slot) return;
+    bk.push({id:uid(),clientName:cli.name,phone:cli.phone,unit:slot.unit,date:slot.date,time:slot.time,
+      prof:slot.prof,slotId:slot.id,status,value:VALOR_PADRAO,paid:!!paid,
+      paymentMethod:paid?'Pix':'',paymentDate:paid?t:'',createdAt:t});
+  };
+  const ipaSlots=slots.filter(s=>s.unit==='Ipatinga'&&s.date>=t).slice(0,2);
+  const timSlots=slots.filter(s=>s.unit==='Timóteo'&&s.date>t).slice(0,2);
+  mk(clients[0],ipaSlots[0],'confirmada',true);
+  mk(clients[2],ipaSlots[0],'aguardando',false); // mesma turma
+  mk(clients[2],ipaSlots[1],'confirmada',true);
+  mk(clients[1],timSlots[0],'aguardando',false);
+  mk(clients[3],timSlots[1],'aguardando',false);
+  // turma cheia (2/2) com uma pessoa na lista de espera — demonstra o recurso
+  if(ipaSlots[0]){ipaSlots[0].capacity=2; ipaSlots[0].waitlist=[{id:uid(),name:'Beatriz Alves',phone:'31988880005',createdAt:t}];}
+  // aula passada concluída (slot próprio, fora da grade futura)
+  const pastSlot={id:uid(),date:addDays(t,-4),time:'09:00',unit:'Ipatinga',prof:'Inêz',capacity:CAPACITY_PADRAO};
+  slots.push(pastSlot);
+  bk.push({id:uid(),clientName:clients[0].name,phone:clients[0].phone,unit:'Ipatinga',date:pastSlot.date,time:'09:00',prof:'Inêz',slotId:pastSlot.id,status:'concluida',attendance:'presente',value:VALOR_PADRAO,paid:true,paymentMethod:'Pix',paymentDate:addDays(t,-4),createdAt:addDays(t,-5)});
+  return {slots,clients,bookings:bk};
+}
+
+let state = load();
+function load(){
+  try{const r=localStorage.getItem(STORE_KEY);if(r)return JSON.parse(r);}catch(e){}
+  const s=seed();localStorage.setItem(STORE_KEY,JSON.stringify(s));return s;
+}
+function save(s){state=s||state;localStorage.setItem(STORE_KEY,JSON.stringify(state));}
+
+/* =================== APP =================== */
+const App = {
+  view:'dashboard',
+  switchToCliente(){document.getElementById('adminApp').classList.add('hidden');document.getElementById('clienteApp').classList.remove('hidden');Cliente.start();},
+  switchToAdmin(){document.getElementById('clienteApp').classList.add('hidden');document.getElementById('adminApp').classList.remove('hidden');render();},
+  resetData(){if(confirm('Restaurar os dados de exemplo? Isso apaga as alterações feitas neste navegador.')){localStorage.removeItem(STORE_KEY);state=load();render();}},
+  go(v){this.view=v;document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===v));document.getElementById('sidebar').classList.remove('open');render();}
+};
+document.querySelectorAll('.nav-item').forEach(b=>b.onclick=()=>App.go(b.dataset.view));
+
+/* =================== HELPERS =================== */
+function bookingsActive(){return state.bookings.filter(b=>b.status!=='cancelada');}
+function slotBooking(slotId){return state.bookings.find(b=>b.slotId===slotId&&b.status!=='cancelada');}
+function slotBookingsAll(slotId){return state.bookings.filter(b=>b.slotId===slotId&&b.status!=='cancelada').sort((a,b)=>a.time.localeCompare(b.time));}
+function slotCapacity(s){return s.capacity||1;}
+function slotOccupancy(slotId){return slotBookingsAll(slotId).length;}
+function slotIsFull(s){return slotOccupancy(s.id)>=slotCapacity(s);}
+function slotWaitlist(s){return s.waitlist||(s.waitlist=[]);}
+function clientAttendance(name){const done=bookingsActive().filter(b=>b.clientName===name);return{pres:done.filter(b=>b.attendance==='presente').length,falt:done.filter(b=>b.attendance==='falta').length};}
+function statusBadge(st){const s=STATUS[st];return `<span class="badge ${s.badge}"><span class="dot" style="background:${s.dot}"></span>${s.label}</span>`;}
+
+/* =================== VIEWS =================== */
+function render(){
+  const titles={dashboard:['Painel','Visão geral da operação'],agenda:['Agenda','Horários e ocupação por unidade'],marcacoes:['Marcações','Solicitações, confirmações e remarcações'],clientes:['Clientes','CRM com etiquetas e contato direto'],recebimentos:['Recebimentos','Controle de pagamentos das reservas']};
+  document.getElementById('viewTitle').textContent=titles[App.view][0];
+  document.getElementById('viewSub').textContent=titles[App.view][1];
+  const acts={dashboard:'',agenda:`<button class="btn" onclick="openSlotModal()">＋ Novo horário</button>`,marcacoes:`<button class="btn" onclick="openBookingModal()">＋ Nova marcação</button>`,clientes:`<button class="btn" onclick="openClientModal()">＋ Novo cliente</button>`,recebimentos:`<button class="btn" onclick="openPaymentModal()">＋ Registrar recebimento</button>`};
+  document.getElementById('topActions').innerHTML=acts[App.view]||'';
+  document.getElementById('content').innerHTML = ({dashboard:viewDashboard,agenda:viewAgenda,marcacoes:viewMarcacoes,clientes:viewClientes,recebimentos:viewRecebimentos})[App.view]();
+}
+
+function viewDashboard(){
+  const t=todayISO();
+  const hoje=bookingsActive().filter(b=>b.date===t);
+  const aguardando=state.bookings.filter(b=>b.status==='aguardando');
+  const month=new Date().toISOString().slice(0,7);
+  const recebido=state.bookings.filter(b=>b.paid&&(b.paymentDate||'').slice(0,7)===month).reduce((a,b)=>a+b.value,0);
+  const pendente=aguardando.reduce((a,b)=>a+b.value,0);
+  const prox=bookingsActive().filter(b=>b.date>=t).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).slice(0,6);
+  return `
+  <div class="grid stats" style="margin-bottom:1.2rem">
+    <div class="card stat"><div class="lbl">📅 Aulas hoje</div><div class="val">${hoje.length}</div><div class="foot">${hoje.filter(b=>b.status==='confirmada').length} confirmadas</div></div>
+    <div class="card stat"><div class="lbl">⏳ Aguardando pagamento</div><div class="val warn">${aguardando.length}</div><div class="foot">${money(pendente)} a receber</div></div>
+    <div class="card stat"><div class="lbl">💰 Recebido no mês</div><div class="val">${money(recebido)}</div><div class="foot">reservas pagas</div></div>
+    <div class="card stat"><div class="lbl">👩 Clientes</div><div class="val terra">${state.clients.length}</div><div class="foot">${state.clients.filter(c=>c.tags.includes('Aluna ativa')).length} alunas ativas</div></div>
+  </div>
+  <div class="panel">
+    <div class="panel-h"><h2>⏳ Pendências — confirmar pagamento</h2><button class="btn sec sm" onclick="App.go('marcacoes')">Ver todas</button></div>
+    ${aguardando.length?`<table><thead><tr><th>Cliente</th><th>Unidade</th><th>Dia / Hora</th><th>Valor</th><th></th></tr></thead><tbody>
+      ${aguardando.map(b=>`<tr><td><span class="cli-name">${b.clientName}</span></td><td><span class="chip">${b.unit}</span></td><td>${fmtDate(b.date)} · ${b.time}</td><td><b>${money(b.value)}</b></td>
+      <td style="text-align:right"><button class="btn wa sm" onclick="event.stopPropagation();window.open('${waLink(b.phone,'Olá '+b.clientName+'! Para confirmar sua aula de '+fmtDate(b.date)+' às '+b.time+', a reserva é de '+money(b.value)+'. Pode me enviar o comprovante? 💚')}','_blank')">Cobrar</button>
+      <button class="btn sm" onclick="confirmPayment('${b.id}')">✓ Confirmar pago</button></td></tr>`).join('')}
+    </tbody></table>`:`<div class="empty"><div class="ic">✅</div><p>Nenhuma pendência. Tudo em dia!</p></div>`}
+  </div>
+  <div class="panel">
+    <div class="panel-h"><h2>📅 Próximas aulas</h2><button class="btn sec sm" onclick="App.go('agenda')">Abrir agenda</button></div>
+    ${prox.length?`<table><thead><tr><th>Dia</th><th>Hora</th><th>Cliente</th><th>Unidade</th><th>Status</th></tr></thead><tbody>
+      ${prox.map(b=>`<tr onclick="openManageBooking('${b.id}')" style="cursor:pointer"><td>${fmtDateLong(b.date)}</td><td><b>${b.time}</b></td><td>${b.clientName}</td><td><span class="chip">${b.unit}</span></td><td>${statusBadge(b.status)}</td></tr>`).join('')}
+    </tbody></table>`:`<div class="empty"><div class="ic">🧶</div><p>Sem aulas agendadas.</p></div>`}
+  </div>`;
+}
+
+/* cor fixa por unidade — facilita bater o olho na agenda */
+const UNIT_META = {
+  'Ipatinga': {color:'#B85C36', soft:'rgba(184,92,54,.20)'},
+  'Timóteo':  {color:'#3E6FA0', soft:'rgba(62,111,160,.20)'},
+};
+function unitColor(u){return (UNIT_META[u]||{}).color || 'var(--muted)';}
+function unitSoft(u){return (UNIT_META[u]||{}).soft || 'rgba(0,0,0,.04)';}
+
+let agendaView='month', agendaUnit='Todas', agendaRef=todayISO();
+
+function weekStart(iso){const d=new Date(iso+'T00:00');const dow=(d.getDay()+6)%7;return addDays(iso,-dow);}
+function agSlots(date){return state.slots.filter(s=>s.date===date&&(agendaUnit==='Todas'||s.unit===agendaUnit)).sort((a,b)=>a.time.localeCompare(b.time));}
+function agNav(dir){
+  if(agendaView==='month'){const d=new Date(agendaRef+'T00:00');d.setDate(1);d.setMonth(d.getMonth()+dir);agendaRef=d.toISOString().slice(0,10);}
+  else if(agendaView==='week') agendaRef=addDays(agendaRef,7*dir);
+  else if(agendaView==='day')  agendaRef=addDays(agendaRef,dir);
+  render();
+}
+function agSetView(v){agendaView=v;render();}
+function agSetUnit(u){agendaUnit=u;render();}
+function agToday(){agendaRef=todayISO();render();}
+function agPeriodLabel(){
+  const d=new Date(agendaRef+'T00:00');
+  if(agendaView==='month')return d.toLocaleDateString('pt-BR',{month:'long',year:'numeric'});
+  if(agendaView==='day')  return d.toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'short'});
+  if(agendaView==='week'){const s=weekStart(agendaRef);return fmtDate(s)+' – '+fmtDate(addDays(s,6));}
+  return 'Próximas aulas';
+}
+
+/* cartão de horário (turma) reutilizado em semana/dia */
+function slotCardHTML(s,showUnit){
+  const uc=unitColor(s.unit), cap=slotCapacity(s), bks=slotBookingsAll(s.id), occ=bks.length, full=occ>=cap, wlc=slotWaitlist(s).length;
+  const cls = occ===0?'free':(full?'full':'partial');
+  const pct = Math.round(occ/cap*100);
+  const occBadge = `<span class="occ ${full?'is-full':occ>0?'is-part':''}">${occ}/${cap}</span>`;
+  const names = occ ? bks.map(b=>b.clientName.split(' ')[0]).join(', ') : 'Livre';
+  return `<div class="slot ${cls}" style="--uc:${uc};${occ?'background:'+unitSoft(s.unit):''}" onclick="openSlotDetail('${s.id}')">
+    <div class="slot-top"><span class="t" style="${occ?'color:'+uc:''}">${s.time}</span>${occBadge}</div>
+    <div class="n">${showUnit?'<b style="color:'+uc+'">'+s.unit+'</b> · ':''}${names}</div>
+    <div class="occbar"><span style="width:${pct}%;background:${full?'var(--danger)':uc}"></span></div>
+    ${wlc?`<div class="wl-badge">⏰ ${wlc} na espera</div>`:''}
+  </div>`;
+}
+
+function viewAgenda(){
+  const views=[['month','🗓 Mês'],['week','📆 Semana'],['list','📋 Lista']];
+  const viewBtns=views.map(v=>`<button class="${agendaView===v[0]?'on':''}" onclick="agSetView('${v[0]}')">${v[1]}</button>`).join('');
+  const units=['Todas',...UNITS];
+  const unitChips=units.map(u=>{
+    const sw=u==='Todas'?`<span class="sw" style="background:linear-gradient(135deg,${unitColor(UNITS[0])} 50%,${unitColor(UNITS[1])} 50%)"></span>`:`<span class="sw" style="background:${unitColor(u)}"></span>`;
+    return `<button class="unit-chip ${agendaUnit===u?'on':''}" style="${agendaUnit===u&&u!=='Todas'?'color:'+unitColor(u):''}" onclick="agSetUnit('${u}')">${sw}${u}</button>`;
+  }).join('');
+  const legend=Object.keys(STATUS).map(k=>`<span class="lg"><span class="lgdot" style="background:${STATUS[k].dot}"></span>${STATUS[k].label}</span>`).join('');
+  const showNav=agendaView!=='list';
+  const body=({month:agViewMonth,week:agViewWeek,list:agViewList})[agendaView]();
+  return `
+  <div class="panel">
+    <div class="ag-toolbar">
+      <div class="ag-views">${viewBtns}</div>
+      ${showNav?`<div class="ag-nav">
+        <button class="navbtn" onclick="agNav(-1)" title="Anterior">←</button>
+        <span class="ag-period">${agPeriodLabel()}</span>
+        <button class="navbtn" onclick="agNav(1)" title="Próximo">→</button>
+        <button class="btn ghost sm" onclick="agToday()">Hoje</button>
+      </div>`:`<div class="ag-nav"><span class="ag-period">${agPeriodLabel()}</span></div>`}
+    </div>
+    <div class="ag-filters">
+      <div class="ag-units"><span style="font-size:.76rem;color:var(--muted);font-weight:700;margin-right:.2rem">Unidade:</span>${unitChips}</div>
+      <div class="ag-legend">${legend}</div>
+    </div>
+    ${body}
+  </div>`;
+}
+
+function agViewMonth(){
+  const ref=new Date(agendaRef+'T00:00'), y=ref.getFullYear(), m=ref.getMonth(), t=todayISO();
+  const firstISO=new Date(y,m,1).toISOString().slice(0,10);
+  const startDow=(new Date(firstISO+'T00:00').getDay()+6)%7;
+  const gridStart=addDays(firstISO,-startDow);
+  const dows=['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'];
+  let cells='';
+  for(let i=0;i<42;i++){
+    const date=addDays(gridStart,i), dd=new Date(date+'T00:00'), out=dd.getMonth()!==m;
+    const slots=agSlots(date);
+    const evs=slots.slice(0,3).map(s=>{
+      const uc=unitColor(s.unit), cap=slotCapacity(s), occ=slotOccupancy(s.id), full=occ>=cap;
+      const txt = occ? `${s.time} · ${occ}/${cap}` : `${s.time} Livre`;
+      return `<div class="m-ev ${occ?'':'free'} ${full?'full':''}" style="--uc:${uc};${occ?'background:'+unitSoft(s.unit)+';color:'+uc:''}">${txt}</div>`;
+    }).join('');
+    const dots=slots.slice(0,8).map(s=>`<span class="m-dot" style="background:${slotOccupancy(s.id)?unitColor(s.unit):'var(--line)'};width:7px;height:7px;border-radius:50%"></span>`).join('');
+    const more=slots.length>3?`<div class="m-more">+${slots.length-3} mais</div>`:'';
+    cells+=`<div class="m-cell ${out?'out':''} ${date===t?'today':''}" onclick="openDayModal('${date}')">
+      <span class="dn">${dd.getDate()}</span>${evs}${more}<div class="m-dots">${dots}</div></div>`;
+  }
+  return `<div class="month-grid">${dows.map(d=>`<div class="month-dow">${d}</div>`).join('')}${cells}</div>`;
+}
+
+function agViewWeek(){
+  const start=weekStart(agendaRef), t=todayISO();
+  const cols=Array.from({length:7},(_,i)=>addDays(start,i)).map(date=>{
+    const slots=agSlots(date);
+    const cells=slots.map(s=>slotCardHTML(s,agendaUnit==='Todas')).join('')||`<div class="day-empty">—</div>`;
+    return `<div class="day-col"><div class="day-h ${date===t?'today':''}"><b>${fmtDate(date)}</b><span>${weekdayShort(date)}</span></div>${cells}</div>`;
+  }).join('');
+  return `<div class="agenda" style="--cols:7">${cols}</div>`;
+}
+
+/* ao clicar num dia no calendário do mês, abre os horários daquele dia num modal */
+function openDayModal(date){
+  const d=new Date(date+'T00:00');
+  let title=d.toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'long'});
+  title=title.charAt(0).toUpperCase()+title.slice(1);
+  const slots=agSlots(date);
+  const body = slots.length
+    ? `<div class="day-view" style="max-width:none">${slots.map(s=>slotCardHTML(s,true)).join('')}</div>`
+    : `<div class="empty"><div class="ic">🧶</div><p>Nenhum horário cadastrado neste dia.</p></div>`;
+  openModal(title, body, `<button class="btn ghost" onclick="closeModal()">Fechar</button><button class="btn" onclick="closeModal();openSlotModal('${date}')">＋ Novo horário</button>`);
+}
+
+function agViewList(){
+  const t=todayISO();
+  const list=bookingsActive().filter(b=>b.date>=t&&(agendaUnit==='Todas'||b.unit===agendaUnit)).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+  if(!list.length)return `<div class="empty"><div class="ic">📋</div><p>Sem aulas agendadas a partir de hoje.</p></div>`;
+  const byDay={};list.forEach(b=>{(byDay[b.date]=byDay[b.date]||[]).push(b);});
+  return Object.keys(byDay).sort().map(day=>`
+    <div class="list-day">
+      <div class="list-day-h">${fmtDateLong(day)}</div>
+      ${byDay[day].map(b=>{const st=STATUS[b.status];return `
+        <div class="list-row" style="--uc:${unitColor(b.unit)}" onclick="openManageBooking('${b.id}')">
+          <span class="lr-time">${b.time}</span>
+          <div class="lr-main"><b>${b.clientName}</b><span>${b.unit}</span></div>
+          <span class="badge ${st.badge}"><span class="dot" style="background:${st.dot}"></span>${st.label}</span>
+        </div>`;}).join('')}
+    </div>`).join('');
+}
+
+/* ===== detalhe da turma (horário) — lista quem reservou, vagas e capacidade ===== */
+function openSlotDetail(slotId){
+  const s=state.slots.find(x=>x.id===slotId); if(!s)return;
+  const cap=slotCapacity(s), bks=slotBookingsAll(slotId), occ=bks.length, full=occ>=cap, uc=unitColor(s.unit);
+  const wl=slotWaitlist(s);
+  const people = bks.length
+    ? bks.map(b=>`<div class="roster-row">
+        <div class="rr-info"><b>${b.clientName}</b><div class="cli-sub">${b.phone||'sem telefone'} · ${STATUS[b.status].label}</div></div>
+        <div class="att" title="Marcar presença">
+          <button class="att-btn ${b.attendance==='presente'?'on-pres':''}" onclick="markAttendance('${b.id}','presente')" title="Presente">✓</button>
+          <button class="att-btn ${b.attendance==='falta'?'on-falt':''}" onclick="markAttendance('${b.id}','falta')" title="Faltou">✕</button>
+        </div>
+        <button class="btn sec sm" onclick="closeModal();openManageBooking('${b.id}')">Gerir</button>
+      </div>`).join('')
+    : `<div class="empty" style="padding:1.2rem"><div class="ic">🪑</div><p>Nenhuma reserva nesta turma ainda.</p></div>`;
+  const waitHTML = wl.length ? `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:1.3rem 0 .4rem">
+      <b style="color:var(--brown)">⏰ Lista de espera · ${wl.length}</b>
+    </div>
+    ${wl.map(w=>`<div class="roster-row">
+      <div class="rr-info"><b>${w.name}</b><div class="cli-sub">${w.phone||'sem telefone'}</div></div>
+      <button class="btn wa sm" title="Avisar no WhatsApp" onclick="window.open('${waLink(w.phone,'Olá '+w.name+'! Abriu uma vaga na turma de '+fmtDate(s.date)+' às '+s.time+' em '+s.unit+'. Quer garantir? 💚')}','_blank')">Avisar</button>
+      ${!full?`<button class="btn sm" onclick="promoteWaitlist('${slotId}','${w.id}')">Promover</button>`:''}
+      <button class="btn ghost sm" onclick="removeWaitlist('${slotId}','${w.id}')" title="Remover">✕</button>
+    </div>`).join('')}` : '';
+  openModal('Turma — '+s.time, `
+    <div class="info-line"><b>Unidade</b><span><span class="chip" style="border-color:${uc};color:${uc}">${s.unit}</span></span></div>
+    <div class="info-line"><b>Data / hora</b><span>${fmtDateLong(s.date)} · ${s.time}</span></div>
+    <div class="info-line"><b>Profissional</b><span>${s.prof||'—'}</span></div>
+    <div class="field" style="margin-top:1rem">
+      <label>Capacidade da turma — máx. de pessoas por aula</label>
+      <input type="number" min="1" id="capInput" value="${cap}"/>
+      <div class="help" style="margin-top:.5rem">Esse é o limite de vagas. Quando lotar, o horário some das opções do cliente e (futuramente) o WhatsApp não oferece mais essa vaga.</div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:1rem 0 .3rem">
+      <b style="color:var(--brown)">Reservas · ${occ}/${cap}</b>
+      ${full?`<span class="badge b-danger">Turma lotada</span>`:`<span class="badge b-ok">${cap-occ} vaga(s) livre(s)</span>`}
+    </div>
+    ${people}
+    ${waitHTML}
+  `, `
+    <button class="btn ghost" onclick="openDayModal('${s.date}')">← Voltar ao dia</button>
+    <div style="flex:1"></div>
+    <button class="btn sec" onclick="saveSlotCapacity('${slotId}')">Salvar capacidade</button>
+    ${full
+      ? `<button class="btn terra" onclick="openWaitlistModal('${slotId}')">⏰ Lista de espera</button>`
+      : `<button class="btn" onclick="closeModal();openBookingModal('${slotId}')">＋ Adicionar pessoa</button>`}
+  `);
+}
+function saveSlotCapacity(slotId){
+  const s=state.slots.find(x=>x.id===slotId); if(!s)return;
+  const v=parseInt(document.getElementById('capInput').value,10)||1;
+  const occ=slotOccupancy(slotId);
+  if(v<occ){alert('A capacidade ('+v+') não pode ser menor que as '+occ+' reservas já feitas.');return;}
+  s.capacity=Math.max(1,v); save(); openSlotDetail(slotId);
+}
+function markAttendance(bookingId,val){
+  const b=state.bookings.find(x=>x.id===bookingId); if(!b)return;
+  b.attendance = b.attendance===val ? '' : val; // alterna
+  if(b.attendance==='presente'&&b.status!=='cancelada') b.status='concluida';
+  save(); openSlotDetail(b.slotId);
+}
+function openWaitlistModal(slotId){
+  const s=state.slots.find(x=>x.id===slotId); if(!s)return;
+  openModal('Entrar na lista de espera',`
+    <div class="help" style="margin-bottom:1rem">A turma de <b>${fmtDate(s.date)} às ${s.time}</b> (${s.unit}) está lotada. A pessoa entra na fila e você é avisada para chamá-la quando abrir vaga.</div>
+    <div class="field"><label>Nome</label><input id="wlName" placeholder="Nome da pessoa"/></div>
+    <div class="field"><label>WhatsApp (com DDD)</label><input id="wlPhone" placeholder="31988880000"/></div>
+  `,`<button class="btn ghost" onclick="openSlotDetail('${slotId}')">← Voltar</button><div style="flex:1"></div><button class="btn" onclick="saveWaitlist('${slotId}')">Adicionar à fila</button>`);
+}
+function saveWaitlist(slotId){
+  const s=state.slots.find(x=>x.id===slotId); if(!s)return;
+  const name=document.getElementById('wlName').value.trim(); if(!name){alert('Informe o nome.');return;}
+  slotWaitlist(s).push({id:uid(),name,phone:document.getElementById('wlPhone').value.trim(),createdAt:todayISO()});
+  save(); openSlotDetail(slotId);
+}
+function promoteWaitlist(slotId,wid){
+  const s=state.slots.find(x=>x.id===slotId); if(!s)return;
+  if(slotIsFull(s)){alert('Sem vaga no momento — a turma continua lotada.');return;}
+  const w=slotWaitlist(s).find(x=>x.id===wid); if(!w)return;
+  state.bookings.push({id:uid(),clientName:w.name,phone:w.phone,unit:s.unit,date:s.date,time:s.time,prof:s.prof,slotId:s.id,status:'aguardando',value:VALOR_PADRAO,paid:false,paymentMethod:'',paymentDate:'',createdAt:todayISO(),attendance:''});
+  if(!state.clients.find(c=>c.name===w.name))state.clients.push({id:uid(),name:w.name,phone:w.phone,unit:s.unit,tags:['Em marcação'],notes:'Veio da lista de espera.'});
+  s.waitlist=slotWaitlist(s).filter(x=>x.id!==wid);
+  save(); openSlotDetail(slotId);
+}
+function removeWaitlist(slotId,wid){
+  const s=state.slots.find(x=>x.id===slotId); if(!s)return;
+  s.waitlist=slotWaitlist(s).filter(x=>x.id!==wid); save(); openSlotDetail(slotId);
+}
+
+let mFilter='todas', mSearch='';
+function viewMarcacoes(){
+  const segs=[['todas','Todas'],['aguardando','Aguardando'],['confirmada','Confirmadas'],['concluida','Concluídas'],['cancelada','Canceladas']];
+  let list=[...state.bookings].sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
+  if(mFilter!=='todas')list=list.filter(b=>b.status===mFilter);
+  if(mSearch)list=list.filter(b=>b.clientName.toLowerCase().includes(mSearch.toLowerCase()));
+  return `
+  <div class="panel">
+    <div class="filters">
+      <div class="seg">${segs.map(s=>`<button class="${mFilter===s[0]?'on':''}" onclick="mFilter='${s[0]}';render()">${s[1]}</button>`).join('')}</div>
+      <input placeholder="🔍 Buscar cliente..." value="${mSearch}" oninput="mSearch=this.value;render()" style="flex:1;min-width:160px" />
+    </div>
+    ${list.length?`<table><thead><tr><th>Cliente</th><th>Unidade</th><th>Dia / Hora</th><th>Valor</th><th>Pagamento</th><th>Status</th><th></th></tr></thead><tbody>
+      ${list.map(b=>`<tr>
+        <td><span class="cli-name">${b.clientName}</span><div class="cli-sub">${b.phone}</div></td>
+        <td><span class="chip">${b.unit}</span></td>
+        <td>${fmtDate(b.date)} · <b>${b.time}</b></td>
+        <td>${money(b.value)}</td>
+        <td>${b.paid?`<span class="badge b-ok">Pago · ${b.paymentMethod}</span>`:`<span class="badge b-warn">Pendente</span>`}</td>
+        <td>${statusBadge(b.status)}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn wa sm" title="WhatsApp" onclick="window.open('${waLink(b.phone,'Olá '+b.clientName+'! 💚')}','_blank')">💬</button>
+          <button class="btn sec sm" onclick="openManageBooking('${b.id}')">Gerir</button>
+        </td></tr>`).join('')}
+    </tbody></table>`:`<div class="empty"><div class="ic">📝</div><p>Nenhuma marcação nesse filtro.</p></div>`}
+  </div>`;
+}
+
+let cSearch='';
+function viewClientes(){
+  let list=state.clients.filter(c=>!cSearch||c.name.toLowerCase().includes(cSearch.toLowerCase()));
+  return `
+  <div class="panel">
+    <div class="filters">
+      <input placeholder="🔍 Buscar cliente..." value="${cSearch}" oninput="cSearch=this.value;render()" style="flex:1;min-width:160px"/>
+    </div>
+    ${list.length?`<table><thead><tr><th>Cliente</th><th>Unidade</th><th>Etiquetas</th><th>Aulas</th><th>Presença</th><th></th></tr></thead><tbody>
+      ${list.map(c=>{const cnt=bookingsActive().filter(b=>b.clientName===c.name).length;const at=clientAttendance(c.name);return `<tr>
+        <td><span class="cli-name">${c.name}</span><div class="cli-sub">${c.phone}${c.notes?' · '+c.notes.slice(0,40)+(c.notes.length>40?'…':''):''}</div></td>
+        <td><span class="chip">${c.unit}</span></td>
+        <td><div class="tags">${c.tags.map(t=>`<span class="chip">${t}</span>`).join('')||'<span class="cli-sub">—</span>'}</div></td>
+        <td>${cnt}</td>
+        <td><span class="badge b-ok" title="Presenças">✓ ${at.pres}</span> ${at.falt?`<span class="badge b-danger" title="Faltas">✕ ${at.falt}</span>`:''}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn wa sm" onclick="window.open('${waLink(c.phone,'Olá '+c.name+'! 💚')}','_blank')">💬</button>
+          <button class="btn sec sm" onclick="openClientModal('${c.id}')">Editar</button>
+        </td></tr>`;}).join('')}
+    </tbody></table>`:`<div class="empty"><div class="ic">👩</div><p>Nenhum cliente encontrado.</p></div>`}
+  </div>`;
+}
+
+function viewRecebimentos(){
+  const month=new Date().toISOString().slice(0,7);
+  const pagos=state.bookings.filter(b=>b.paid).sort((a,b)=>(b.paymentDate||'').localeCompare(a.paymentDate||''));
+  const pend=state.bookings.filter(b=>b.status==='aguardando');
+  const recMes=pagos.filter(b=>(b.paymentDate||'').slice(0,7)===month).reduce((a,b)=>a+b.value,0);
+  const totalPend=pend.reduce((a,b)=>a+b.value,0);
+  const recTotal=pagos.reduce((a,b)=>a+b.value,0);
+  return `
+  <div class="grid stats" style="margin-bottom:1.2rem;grid-template-columns:repeat(3,1fr)">
+    <div class="card stat"><div class="lbl">💰 Recebido no mês</div><div class="val">${money(recMes)}</div></div>
+    <div class="card stat"><div class="lbl">⏳ A receber</div><div class="val warn">${money(totalPend)}</div><div class="foot">${pend.length} reservas</div></div>
+    <div class="card stat"><div class="lbl">📈 Recebido total</div><div class="val terra">${money(recTotal)}</div></div>
+  </div>
+  <div class="panel">
+    <div class="panel-h"><h2>⏳ Aguardando pagamento</h2></div>
+    ${pend.length?`<table><thead><tr><th>Cliente</th><th>Unidade</th><th>Dia</th><th>Valor</th><th></th></tr></thead><tbody>
+      ${pend.map(b=>`<tr><td class="cli-name">${b.clientName}</td><td><span class="chip">${b.unit}</span></td><td>${fmtDate(b.date)} · ${b.time}</td><td><b>${money(b.value)}</b></td>
+      <td style="text-align:right"><button class="btn wa sm" onclick="window.open('${waLink(b.phone,'Olá '+b.clientName+'! Segue a chave Pix para reservar sua aula de '+fmtDate(b.date)+'. Valor: '+money(b.value)+'. 💚')}','_blank')">Cobrar Pix</button>
+      <button class="btn sm" onclick="confirmPayment('${b.id}')">✓ Confirmar pago</button></td></tr>`).join('')}
+    </tbody></table>`:`<div class="empty"><div class="ic">✅</div><p>Sem pagamentos pendentes.</p></div>`}
+  </div>
+  <div class="panel">
+    <div class="panel-h"><h2>✅ Recebimentos confirmados</h2></div>
+    ${pagos.length?`<table><thead><tr><th>Cliente</th><th>Unidade</th><th>Aula</th><th>Forma</th><th>Data pgto.</th><th>Valor</th></tr></thead><tbody>
+      ${pagos.map(b=>`<tr><td class="cli-name">${b.clientName}</td><td><span class="chip">${b.unit}</span></td><td>${fmtDate(b.date)} · ${b.time}</td><td><span class="badge b-sage">${b.paymentMethod||'—'}</span></td><td>${b.paymentDate?fmtDate(b.paymentDate):'—'}</td><td><b>${money(b.value)}</b></td></tr>`).join('')}
+    </tbody></table>`:`<div class="empty"><div class="ic">💰</div><p>Nenhum recebimento ainda.</p></div>`}
+  </div>`;
+}
+
+/* =================== AÇÕES =================== */
+function confirmPayment(id){
+  const b=state.bookings.find(x=>x.id===id);if(!b)return;
+  openModal('Confirmar pagamento',`
+    <div class="help">Ao confirmar o pagamento, a aula passa a <b>Confirmada</b> e aparece reservada na agenda.</div>
+    <div class="field" style="margin-top:1rem"><label>Forma de pagamento</label><select id="pm"><option>Pix</option><option>Dinheiro</option><option>Cartão</option><option>Transferência</option></select></div>
+    <div class="field"><label>Data do pagamento</label><input type="date" id="pd" value="${todayISO()}"/></div>
+    <div class="field"><label>Valor</label><input type="number" id="pv" value="${b.value}"/></div>
+  `,`<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn" onclick="doConfirmPayment('${id}')">✓ Confirmar</button>`);
+}
+function doConfirmPayment(id){
+  const b=state.bookings.find(x=>x.id===id);
+  b.paid=true;b.paymentMethod=document.getElementById('pm').value;b.paymentDate=document.getElementById('pd').value;b.value=Number(document.getElementById('pv').value)||b.value;b.status='confirmada';
+  save();closeModal();render();
+}
+
+function openManageBooking(id){
+  const b=state.bookings.find(x=>x.id===id);if(!b)return;
+  openModal('Gerir marcação',`
+    <div class="info-line"><b>Cliente</b><span>${b.clientName}</span></div>
+    <div class="info-line"><b>Telefone</b><span>${b.phone||'—'}</span></div>
+    <div class="info-line"><b>Unidade</b><span>${b.unit}</span></div>
+    <div class="info-line"><b>Aula</b><span>${fmtDateLong(b.date)} · ${b.time}</span></div>
+    <div class="info-line"><b>Valor</b><span>${money(b.value)}</span></div>
+    <div class="info-line"><b>Pagamento</b><span>${b.paid?'Pago ('+b.paymentMethod+')':'Pendente'}</span></div>
+    <div class="info-line"><b>Status</b><span>${STATUS[b.status].label}</span></div>
+    <div class="row2">
+      <div class="field"><label>Alterar status</label>
+        <select id="bs">${Object.keys(STATUS).map(k=>`<option value="${k}" ${b.status===k?'selected':''}>${STATUS[k].label}</option>`).join('')}</select></div>
+      <div class="field"><label>Presença</label>
+        <select id="batt">${[['','— não marcado'],['presente','✓ Presente'],['falta','✕ Faltou']].map(o=>`<option value="${o[0]}" ${(b.attendance||'')===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Remarcar — data</label><input type="date" id="bd" value="${b.date}"/></div>
+      <div class="field"><label>Hora</label><input id="bt" value="${b.time}"/></div>
+    </div>
+  `,`
+    ${state.slots.find(s=>s.id===b.slotId)?`<button class="btn ghost" onclick="openSlotDetail('${b.slotId}')">← Voltar à turma</button>`:`<button class="btn ghost" onclick="closeModal()">Fechar</button>`}
+    <div style="flex:1"></div>
+    <button class="btn wa" onclick="window.open('${waLink(b.phone,'Olá '+b.clientName+'! 💚')}','_blank')">💬 WhatsApp</button>
+    ${!b.paid?`<button class="btn terra" onclick="closeModal();confirmPayment('${id}')">Confirmar pagamento</button>`:''}
+    <button class="btn" onclick="saveManageBooking('${id}')">Salvar</button>
+  `);
+}
+function saveManageBooking(id){
+  const b=state.bookings.find(x=>x.id===id);
+  b.status=document.getElementById('bs').value;b.date=document.getElementById('bd').value;b.time=document.getElementById('bt').value;
+  b.attendance=document.getElementById('batt').value;
+  if(b.attendance==='presente'&&b.status!=='cancelada')b.status='concluida';
+  if(b.status==='confirmada'&&!b.paid){b.paid=true;b.paymentMethod=b.paymentMethod||'Pix';b.paymentDate=b.paymentDate||todayISO();}
+  save();closeModal();render();
+}
+
+function openBookingModal(slotId){
+  const slot=slotId?state.slots.find(s=>s.id===slotId):null;
+  const clientOpts=state.clients.map(c=>`<option value="${c.name}|${c.phone}">${c.name} (${c.unit})</option>`).join('');
+  openModal('Nova marcação',`
+    <div class="field"><label>Cliente existente</label><select id="bkClient" onchange="fillClient()"><option value="">— Novo / digitar —</option>${clientOpts}</select></div>
+    <div class="row2">
+      <div class="field"><label>Nome</label><input id="bkName" value="${slot?'':''}"/></div>
+      <div class="field"><label>Telefone (DDD)</label><input id="bkPhone" placeholder="31988880000"/></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Unidade</label><select id="bkUnit">${UNITS.map(u=>`<option ${slot&&slot.unit===u?'selected':''}>${u}</option>`).join('')}</select></div>
+      <div class="field"><label>Valor (R$)</label><input type="number" id="bkValue" value="${VALOR_PADRAO}"/></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Data</label><input type="date" id="bkDate" value="${slot?slot.date:todayISO()}"/></div>
+      <div class="field"><label>Hora</label><input id="bkTime" value="${slot?slot.time:'09:00'}"/></div>
+    </div>
+    <div class="help">A marcação entra como <b>Aguardando pagamento</b>. Após confirmar o pagamento, ela vira <b>Confirmada</b> na agenda.</div>
+  `,`<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn" onclick="saveBooking('${slotId||''}')">Salvar marcação</button>`);
+}
+function fillClient(){const v=document.getElementById('bkClient').value;if(!v)return;const[n,p]=v.split('|');document.getElementById('bkName').value=n;document.getElementById('bkPhone').value=p;const c=state.clients.find(c=>c.name===n);if(c)document.getElementById('bkUnit').value=c.unit;}
+function saveBooking(slotId){
+  const name=document.getElementById('bkName').value.trim();if(!name){alert('Informe o nome.');return;}
+  const unit=document.getElementById('bkUnit').value,date=document.getElementById('bkDate').value,time=document.getElementById('bkTime').value;
+  let slot=slotId?state.slots.find(s=>s.id===slotId):state.slots.find(s=>s.date===date&&s.time===time&&s.unit===unit);
+  if(slot&&slotIsFull(slot)){alert('Esta turma já está lotada ('+slotOccupancy(slot.id)+'/'+slotCapacity(slot)+' vagas). Aumente a capacidade no horário ou escolha outro.');return;}
+  if(!slot){slot={id:uid(),date,time,unit,prof:unit==='Ipatinga'?'Inêz':'Equipe FQC',capacity:CAPACITY_PADRAO};state.slots.push(slot);}
+  state.bookings.push({id:uid(),clientName:name,phone:document.getElementById('bkPhone').value.trim(),unit,date,time,prof:slot.prof,slotId:slot.id,status:'aguardando',value:Number(document.getElementById('bkValue').value)||VALOR_PADRAO,paid:false,paymentMethod:'',paymentDate:'',createdAt:todayISO()});
+  // cria cliente se novo
+  if(!state.clients.find(c=>c.name===name)){state.clients.push({id:uid(),name,phone:document.getElementById('bkPhone').value.trim(),unit,tags:['Em marcação'],notes:''});}
+  save();closeModal();render();
+}
+
+function openSlotModal(presetDate){
+  openModal('Novo horário na agenda',`
+    <div class="row2">
+      <div class="field"><label>Unidade</label><select id="slUnit">${UNITS.map(u=>`<option>${u}</option>`).join('')}</select></div>
+      <div class="field"><label>Profissional</label><select id="slProf">${PROFS.map(p=>`<option>${p}</option>`).join('')}</select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Data</label><input type="date" id="slDate" value="${presetDate||todayISO()}"/></div>
+      <div class="field"><label>Hora</label><input id="slTime" value="09:00"/></div>
+    </div>
+    <div class="field"><label>Capacidade da turma (vagas)</label><input type="number" min="1" id="slCap" value="${CAPACITY_PADRAO}"/></div>
+    <div class="field"><label>Repetir semanalmente</label>
+      <div class="row2">
+        <select id="slRepeat" onchange="document.getElementById('slWeeksWrap').style.display=this.value==='1'?'none':'block'">
+          <option value="1">Não repetir (só este dia)</option>
+          <option value="2">Por 2 semanas</option>
+          <option value="4">Por 4 semanas</option>
+          <option value="8">Por 8 semanas</option>
+          <option value="12">Por 12 semanas</option>
+        </select>
+        <div id="slWeeksWrap" style="display:none"></div>
+      </div>
+      <div class="help" style="margin-top:.5rem">Cria o mesmo horário (mesmo dia da semana) repetido. Ex.: toda terça às 14h por 8 semanas. Horários já existentes são ignorados.</div>
+    </div>
+  `,`<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn" onclick="saveSlot()">Adicionar</button>`);
+}
+function saveSlot(){
+  const unit=document.getElementById('slUnit').value, prof=document.getElementById('slProf').value;
+  const date=document.getElementById('slDate').value, time=document.getElementById('slTime').value;
+  const cap=Math.max(1,parseInt(document.getElementById('slCap').value,10)||CAPACITY_PADRAO);
+  const weeks=Math.max(1,parseInt(document.getElementById('slRepeat').value,10)||1);
+  let criados=0;
+  for(let i=0;i<weeks;i++){
+    const d=addDays(date,i*7);
+    if(state.slots.find(s=>s.date===d&&s.time===time&&s.unit===unit)) continue; // evita duplicado
+    state.slots.push({id:uid(),unit,prof,date:d,time,capacity:cap,waitlist:[]});
+    criados++;
+  }
+  save();closeModal();render();
+  if(weeks>1) setTimeout(()=>alert(criados+' horário(s) criado(s).'),50);
+}
+
+function openClientModal(id){
+  const c=id?state.clients.find(x=>x.id===id):null;
+  const tags=c?c.tags:[];
+  openModal(c?'Editar cliente':'Novo cliente',`
+    <div class="row2">
+      <div class="field"><label>Nome</label><input id="clName" value="${c?c.name:''}"/></div>
+      <div class="field"><label>Telefone</label><input id="clPhone" value="${c?c.phone:''}" placeholder="31988880000"/></div>
+    </div>
+    <div class="field"><label>Unidade</label><select id="clUnit">${UNITS.map(u=>`<option ${c&&c.unit===u?'selected':''}>${u}</option>`).join('')}</select></div>
+    <div class="field"><label>Etiquetas</label><div class="tags" id="tagBox">${TAG_OPTIONS.map(t=>`<label class="chip" style="cursor:pointer"><input type="checkbox" value="${t}" ${tags.includes(t)?'checked':''} style="margin-right:.3rem"/>${t}</label>`).join('')}</div></div>
+    <div class="field"><label>Observações</label><textarea id="clNotes">${c?c.notes:''}</textarea></div>
+  `,`${c?`<button class="btn danger" onclick="delClient('${c.id}')">Excluir</button>`:''}<div style="flex:1"></div><button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn" onclick="saveClient('${id||''}')">Salvar</button>`);
+}
+function saveClient(id){
+  const name=document.getElementById('clName').value.trim();if(!name){alert('Informe o nome.');return;}
+  const tags=[...document.querySelectorAll('#tagBox input:checked')].map(i=>i.value);
+  const data={name,phone:document.getElementById('clPhone').value.trim(),unit:document.getElementById('clUnit').value,tags,notes:document.getElementById('clNotes').value.trim()};
+  if(id){Object.assign(state.clients.find(c=>c.id===id),data);}else{state.clients.push({id:uid(),...data});}
+  save();closeModal();render();
+}
+function delClient(id){if(confirm('Excluir este cliente?')){state.clients=state.clients.filter(c=>c.id!==id);save();closeModal();render();}}
+
+function openPaymentModal(){
+  const pend=state.bookings.filter(b=>b.status==='aguardando');
+  openModal('Registrar recebimento',`
+    <div class="field"><label>Marcação aguardando pagamento</label>
+      <select id="pyBk">${pend.length?pend.map(b=>`<option value="${b.id}">${b.clientName} · ${fmtDate(b.date)} ${b.time} · ${money(b.value)}</option>`).join(''):'<option value="">Nenhuma pendente</option>'}</select></div>
+    <div class="row2">
+      <div class="field"><label>Forma</label><select id="pyM"><option>Pix</option><option>Dinheiro</option><option>Cartão</option><option>Transferência</option></select></div>
+      <div class="field"><label>Data</label><input type="date" id="pyD" value="${todayISO()}"/></div>
+    </div>
+    <div class="help">Confirmar aqui marca a reserva como paga e confirma a aula na agenda.</div>
+  `,`<button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn" onclick="savePayment()">Registrar</button>`);
+}
+function savePayment(){
+  const id=document.getElementById('pyBk').value;if(!id){closeModal();return;}
+  const b=state.bookings.find(x=>x.id===id);b.paid=true;b.paymentMethod=document.getElementById('pyM').value;b.paymentDate=document.getElementById('pyD').value;b.status='confirmada';
+  save();closeModal();render();
+}
+
+/* =================== MODAL =================== */
+function openModal(title,body,footer){
+  document.getElementById('modalRoot').innerHTML=`<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-h"><h3>${title}</h3><button onclick="closeModal()">×</button></div><div class="modal-b">${body}</div><div class="modal-f">${footer}</div></div></div>`;
+}
+function closeModal(){document.getElementById('modalRoot').innerHTML='';}
+
+/* =================== CLIENTE =================== */
+const Cliente={
+  unit:null,slot:null,waitSlot:null,
+  start(){this.unit=null;this.slot=null;this.waitSlot=null;this.render();},
+  render(){
+    const c=document.getElementById('cliContent');
+    const step=this.slot?3:this.unit?2:1;
+    const head=`<div class="cli-head"><img src="logo-1.PNG"/><h1>Marque sua aula de crochê</h1><p>Escolha a unidade e o melhor horário. A vaga é confirmada após o pagamento da reserva.</p>
+      <div class="steps">
+        <div class="step ${step>=1?'on':''}"><span class="num">1</span>Unidade</div>
+        <div class="step ${step>=2?'on':''}"><span class="num">2</span>Horário</div>
+        <div class="step ${step>=3?'on':''}"><span class="num">3</span>Seus dados</div>
+      </div></div>`;
+    let body='';
+    if(!this.unit){
+      body=`<div class="unit-pick">${UNITS.map(u=>`<div class="unit-card" onclick="Cliente.pickUnit('${u}')"><div class="ic">📍</div><b>${u}</b><span>Aulas presenciais</span></div>`).join('')}</div>`;
+    } else if(!this.slot){
+      const t=todayISO();
+      const free=state.slots.filter(s=>s.unit===this.unit&&s.date>=t).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).slice(0,24);
+      const byDay={};free.forEach(s=>{(byDay[s.date]=byDay[s.date]||[]).push(s);});
+      body=`<button class="btn ghost sm" onclick="Cliente.unit=null;Cliente.render()" style="margin-bottom:1rem">← Trocar unidade (${this.unit})</button>`;
+      body+=Object.keys(byDay).length?Object.keys(byDay).map(d=>`<div class="panel"><h3 style="color:var(--green-deep);font-size:1rem;margin-bottom:.7rem;text-transform:capitalize">${fmtDateLong(d)}</h3><div class="slot-list">${byDay[d].map(s=>{const vagas=slotCapacity(s)-slotOccupancy(s.id);
+        return vagas>0
+          ? `<button class="slot-btn" onclick="Cliente.pickSlot('${s.id}')"><b>${s.time}</b><span>com ${s.prof}</span><span class="vagas ${vagas<=1?'few':''}">${vagas} vaga${vagas===1?'':'s'} restante${vagas===1?'':'s'}</span></button>`
+          : `<button class="slot-btn lotada" onclick="Cliente.joinWait('${s.id}')"><b>${s.time}</b><span>com ${s.prof}</span><span class="vagas few">Lotada · entrar na espera</span></button>`;
+      }).join('')}</div></div>`).join(''):`<div class="empty"><div class="ic">🧶</div><p>Sem horários no momento. Fale com a Inêz no WhatsApp.</p></div>`;
+    } else if(this.waitSlot){
+      const s=state.slots.find(x=>x.id===this.waitSlot);
+      body=`<div class="panel">
+        <button class="btn ghost sm" onclick="Cliente.waitSlot=null;Cliente.render()" style="margin-bottom:1rem">← Voltar aos horários</button>
+        <div class="help" style="margin-bottom:1rem">⏰ A turma de <b>${fmtDateLong(s.date)} às ${s.time}</b> (${s.unit}) está lotada. Entre na lista de espera e avisamos no WhatsApp se abrir vaga.</div>
+        <div class="field"><label>Seu nome</label><input id="wName" placeholder="Como podemos te chamar?"/></div>
+        <div class="field"><label>WhatsApp (com DDD)</label><input id="wPhone" placeholder="31988880000"/></div>
+        <button class="btn terra" style="width:100%;justify-content:center;margin-top:.5rem" onclick="Cliente.submitWait()">Entrar na lista de espera</button>
+      </div>`;
+    } else {
+      const s=state.slots.find(x=>x.id===this.slot);
+      body=`<div class="panel">
+        <button class="btn ghost sm" onclick="Cliente.slot=null;Cliente.render()" style="margin-bottom:1rem">← Trocar horário</button>
+        <div class="help" style="margin-bottom:1rem">📍 <b>${s.unit}</b> · ${fmtDateLong(s.date)} · <b>${s.time}</b> · com ${s.prof}</div>
+        <div class="field"><label>Seu nome</label><input id="cName" placeholder="Como podemos te chamar?"/></div>
+        <div class="field"><label>WhatsApp (com DDD)</label><input id="cPhone" placeholder="31988880000"/></div>
+        <button class="btn terra" style="width:100%;justify-content:center;margin-top:.5rem" onclick="Cliente.submit()">Solicitar reserva</button>
+        <p style="font-size:.8rem;color:var(--muted);text-align:center;margin-top:.8rem">A reserva (${money(VALOR_PADRAO)}) garante sua vaga. Você receberá os dados de pagamento no WhatsApp e a aula é confirmada após o pagamento.</p>
+      </div>`;
+    }
+    c.innerHTML=head+body;
+  },
+  pickUnit(u){this.unit=u;this.render();},
+  pickSlot(id){this.slot=id;this.render();},
+  joinWait(id){this.waitSlot=id;this.render();},
+  submitWait(){
+    const name=document.getElementById('wName').value.trim();const phone=document.getElementById('wPhone').value.trim();
+    if(!name||!phone){alert('Preencha nome e WhatsApp.');return;}
+    const s=state.slots.find(x=>x.id===this.waitSlot);
+    slotWaitlist(s).push({id:uid(),name,phone,createdAt:todayISO()});
+    if(!state.clients.find(c=>c.name===name)){state.clients.push({id:uid(),name,phone,unit:s.unit,tags:['Lista de espera','Lead'],notes:'Entrou na lista de espera pela página de marcação.'});}
+    save();
+    document.getElementById('cliContent').innerHTML=`<div class="cli-head"><img src="logo-1.PNG"/></div>
+      <div class="panel" style="text-align:center">
+        <div style="font-size:3rem">⏰</div>
+        <h1 style="color:var(--green-deep);margin:.5rem 0">Você está na lista de espera!</h1>
+        <p style="color:var(--muted);max-width:42ch;margin:0 auto 1rem">Olá, <b>${name}</b>! Avisaremos no WhatsApp se abrir vaga na turma de <b>${fmtDateLong(s.date)} às ${s.time}</b> em <b>${s.unit}</b>. 💚</p>
+        <button class="btn ghost sm" onclick="Cliente.start()">Ver outros horários</button>
+      </div>`;
+  },
+  submit(){
+    const name=document.getElementById('cName').value.trim();const phone=document.getElementById('cPhone').value.trim();
+    if(!name||!phone){alert('Preencha nome e WhatsApp.');return;}
+    const s=state.slots.find(x=>x.id===this.slot);
+    if(slotIsFull(s)){alert('Que pena! Esta turma acabou de lotar. Por favor escolha outro horário.');this.slot=null;this.render();return;}
+    state.bookings.push({id:uid(),clientName:name,phone,unit:s.unit,date:s.date,time:s.time,prof:s.prof,slotId:s.id,status:'aguardando',value:VALOR_PADRAO,paid:false,paymentMethod:'',paymentDate:'',createdAt:todayISO()});
+    if(!state.clients.find(c=>c.name===name)){state.clients.push({id:uid(),name,phone,unit:s.unit,tags:['Em marcação','Lead'],notes:'Marcou pela página de marcação.'});}
+    save();
+    const c=document.getElementById('cliContent');
+    c.innerHTML=`<div class="cli-head"><img src="logo-1.PNG"/></div>
+      <div class="panel" style="text-align:center">
+        <div style="font-size:3rem">💚</div>
+        <h1 style="color:var(--green-deep);margin:.5rem 0">Reserva solicitada!</h1>
+        <p style="color:var(--muted);max-width:42ch;margin:0 auto 1rem">Olá, <b>${name}</b>! Sua aula de <b>${fmtDateLong(s.date)} às ${s.time}</b> em <b>${s.unit}</b> está reservada como <b>aguardando pagamento</b>.</p>
+        <div class="help" style="text-align:left;max-width:420px;margin:0 auto 1.2rem">Próximo passo: realize o pagamento da reserva (${money(VALOR_PADRAO)}) e envie o comprovante no WhatsApp. Assim que confirmarmos, sua vaga estará garantida. 💚</div>
+        <a class="btn wa" style="justify-content:center" href="${waLink('31988880000','Olá Inêz! Acabei de solicitar a reserva da aula de '+fmtDate(s.date)+' às '+s.time+' em '+s.unit+'. Meu nome é '+name+'.')}" target="_blank">💬 Enviar comprovante no WhatsApp</a>
+        <div style="margin-top:1rem"><button class="btn ghost sm" onclick="Cliente.start()">Marcar outra aula</button></div>
+      </div>`;
+  }
+};
+
+render();
+</script>
+</body>
+</html>

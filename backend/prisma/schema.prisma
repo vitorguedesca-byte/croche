@@ -1,0 +1,86 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Client {
+  id        Int      @id @default(autoincrement())
+  name      String
+  phone     String?
+  cpf       String?  @db.VarChar(14) // login do aluno(a)
+  unit      String?
+  tags      String   @default("[]") @db.VarChar(1000) // JSON array de etiquetas
+  notes     String?  @db.Text
+  pin       String?  @db.VarChar(255) // bcrypt hash do PIN de 4 dígitos; null = sem PIN cadastrado
+  birthday  String?  @db.VarChar(10) // 'YYYY-MM-DD'
+  level     String?  @db.VarChar(20) // Iniciante | Intermediário | Avançado
+  firstClass Boolean @default(false) // aluna nova / ainda na primeira aula
+  createdAt DateTime @default(now())
+}
+
+model Slot {
+  id        Int        @id @default(autoincrement())
+  date      String // 'YYYY-MM-DD'
+  time      String // 'HH:MM'
+  unit      String
+  prof      String?
+  capacity  Int        @default(4)
+  createdAt DateTime   @default(now())
+  bookings  Booking[]
+  waitlist  Waitlist[]
+
+  @@index([date])
+  @@index([unit])
+}
+
+model Booking {
+  id            Int      @id @default(autoincrement())
+  clientName    String
+  phone         String?
+  unit          String
+  date          String
+  time          String
+  prof          String?
+  slotId        Int
+  slot          Slot     @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  status        String   @default("aguardando") // aguardando | confirmada | concluida | cancelada
+  attendance    String   @default("") // '' | presente | falta
+  absenceReason String   @default("") @db.VarChar(500) // motivo informado pelo aluno
+  value         Float    @default(80)
+  paid          Boolean  @default(false)
+  paymentMethod String?
+  paymentDate   String?
+  coraInvoiceId String?  @db.VarChar(80) // id da cobrança na Cora
+  pixCode       String?  @db.Text // Pix copia-e-cola (EMV) devolvido pela Cora
+  boletoUrl     String?  @db.VarChar(500) // link do boleto/fatura na Cora
+  createdAt     DateTime @default(now())
+
+  @@index([slotId])
+  @@index([date])
+}
+
+model Waitlist {
+  id        Int      @id @default(autoincrement())
+  slotId    Int
+  slot      Slot     @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  name      String
+  phone     String?
+  createdAt DateTime @default(now())
+
+  @@index([slotId])
+}
+
+model Settings {
+  id               Int    @id @default(1)
+  valorPadrao      Float  @default(80)
+  capacidadePadrao Int    @default(4)
+  units            String @default("[\"Ipatinga\",\"Timóteo\"]") @db.VarChar(1000) // JSON
+  profs            String @default("[\"Inêz\",\"Equipe FQC\"]") @db.VarChar(1000) // JSON
+  horarioFunc      String @default("Seg a Sáb, 09h às 17h") @db.VarChar(255)
+  pixKey           String @default("") @db.VarChar(255)
+  pixName          String @default("") @db.VarChar(255)
+}

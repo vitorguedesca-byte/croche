@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fios que Curam — por Inêz Pimentel | Aulas de Crochê em Ipatinga e Timóteo</title>
+<meta name="description" content="Muito além do crochê: desacelere, aprenda e transforme fios em cuidado. Aulas de crochê com propósito em Ipatinga e Timóteo. +1000 vidas transformadas." />
+<meta name="theme-color" content="#1C5E33" />
+<link rel="icon" href="logo-1.PNG" />
+<link rel="apple-touch-icon" href="logo-1.PNG" />
+<!-- Open Graph / preview ao compartilhar (WhatsApp, Instagram, Facebook) -->
+<!-- Em produção, troque as URLs de imagem por absolutas (ex.: https://seudominio.com/bolsa2.jpeg) para o preview funcionar em todos os apps. -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Fios que Curam" />
+<meta property="og:title" content="Fios que Curam — Aulas de Crochê em Ipatinga e Timóteo" />
+<meta property="og:description" content="Aprenda crochê com propósito: desacelere, crie peças lindas e transforme sua habilidade em renda. Turmas pequenas e acolhedoras. +1000 alunas." />
+<meta property="og:image" content="bolsa2.jpeg" />
+<meta property="og:image:alt" content="Bolsa de crochê feita à mão — peça de aluna da Fios que Curam" />
+<meta property="og:locale" content="pt_BR" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Fios que Curam — Aulas de Crochê em Ipatinga e Timóteo" />
+<meta name="twitter:description" content="Aprenda crochê com propósito: desacelere, crie peças lindas e transforme sua habilidade em renda. +1000 alunas." />
+<meta name="twitter:image" content="bolsa2.jpeg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,300;1,9..144,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --offwhite:#FBF8F2; --cream:#F4ECDF; --sand:#E9DCC6; --beige:#DCCBAB;
+    --terracota:#B85C36; --terracota-soft:#CE7A53; --sage:#8C9A78; --sage-deep:#6E7C5A;
+    --green-deep:#1C5E33; --green-mid:#3FA34D; --green-light:#7FC241;
+    --brown:#5E4A38; --ink:#2C2620; --muted:#857A6B;
+    --line:rgba(44,38,32,.13); --line-soft:rgba(44,38,32,.07);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{font-family:'Inter',sans-serif;color:var(--ink);background:var(--offwhite);line-height:1.7;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+  h1,h2,h3{font-family:'Fraunces',serif;font-weight:400;line-height:1.06;letter-spacing:-.015em}
+  a{color:inherit;text-decoration:none}
+  img{max-width:100%;display:block}
+  .wrap{width:min(1200px,90vw);margin:0 auto}
+
+  /* labels editoriais */
+  .label{font-size:.72rem;letter-spacing:.24em;text-transform:uppercase;color:var(--terracota);font-weight:600;display:inline-flex;align-items:center;gap:.6rem}
+  .label::before{content:"";width:26px;height:1px;background:var(--terracota);display:inline-block}
+  .label.center{justify-content:center}
+  .idx{font-family:'Fraunces',serif;font-style:italic;font-weight:300;color:var(--muted);font-size:.95rem}
+
+  /* botões */
+  .btn{display:inline-flex;align-items:center;gap:.6rem;background:var(--green-deep);color:var(--offwhite);font-weight:500;font-size:.92rem;padding:.95rem 1.7rem;border-radius:999px;transition:transform .25s ease,background .25s,opacity .25s;border:none;cursor:pointer;letter-spacing:.01em}
+  .btn:hover{transform:translateY(-2px);background:var(--green-mid)}
+  .btn-terra{background:var(--terracota)}.btn-terra:hover{background:var(--terracota-soft)}
+  .btn-ghost{background:transparent;color:var(--green-deep);border:1px solid var(--green-deep)}
+  .btn-ghost:hover{background:var(--green-deep);color:var(--offwhite);border-color:var(--green-deep)}
+  .link-arrow{display:inline-flex;align-items:center;gap:.5rem;font-weight:600;font-size:.92rem;color:var(--green-deep);border-bottom:1px solid transparent;transition:.2s;padding-bottom:2px}
+  .link-arrow:hover{gap:.8rem;border-color:var(--green-deep)}
+
+  /* ===== Header — menu em cápsula ===== */
+  header{position:sticky;top:0;z-index:50;background:rgba(251,248,242,.72);backdrop-filter:blur(16px);border-bottom:1px solid var(--line-soft)}
+  .nav{display:flex;align-items:center;justify-content:space-between;padding:.7rem 0;gap:1rem}
+  .nav .logo img{height:60px}
+  .nav-right{display:flex;align-items:center;gap:.7rem}
+  .nav-pill{display:flex;align-items:center;gap:.2rem;background:rgba(255,255,255,.65);border:1px solid var(--line);border-radius:999px;padding:.3rem;box-shadow:0 10px 30px -22px rgba(44,38,32,.6)}
+  .nav-pill a{font-size:.88rem;font-weight:500;color:var(--ink);opacity:.85;padding:.5rem 1.1rem;border-radius:999px;transition:background .2s,opacity .2s,color .2s}
+  .nav-pill a:hover{opacity:1;background:var(--cream);color:var(--green-deep)}
+  .mob-only{display:none}
+  .nav-cta{padding:.62rem 1.3rem;font-size:.86rem}
+  .nav-conectar{padding:.6rem 1.15rem;font-size:.86rem}
+  .wa-icon{width:44px;height:44px;border-radius:50%;background:#25D366;display:flex;align-items:center;justify-content:center;flex:none;transition:transform .2s,box-shadow .2s;box-shadow:0 10px 24px -14px rgba(37,211,102,.8)}
+  .wa-icon:hover{transform:translateY(-2px)}
+  .wa-icon svg{width:22px;height:22px;fill:#fff}
+  .menu-toggle{display:none;background:rgba(255,255,255,.65);border:1px solid var(--line);border-radius:12px;width:44px;height:44px;font-size:1.3rem;color:var(--ink);cursor:pointer}
+
+  /* ===== Hero ===== */
+  .hero{padding:clamp(3rem,7vw,6.5rem) 0 clamp(3.5rem,7vw,6rem);position:relative;overflow:hidden}
+  .hero::before{content:"";position:absolute;inset:0;z-index:-1;background:radial-gradient(80% 60% at 88% 0%,rgba(127,194,65,.10),transparent 60%),radial-gradient(70% 60% at 0% 100%,rgba(184,92,54,.08),transparent 55%)}
+  .hero-grid{display:grid;grid-template-columns:1.08fr .92fr;gap:clamp(2rem,5vw,4.5rem);align-items:center}
+  .hero h1{font-size:clamp(2.7rem,6vw,5rem);color:var(--green-deep);margin:1.6rem 0}
+  .hero h1 em{font-style:italic;font-weight:300;color:var(--terracota)}
+  .hero .lead{font-size:clamp(1.05rem,1.4vw,1.2rem);color:var(--muted);max-width:38ch;margin-bottom:2.4rem}
+  .hero-cta{display:flex;gap:1.4rem;align-items:center;flex-wrap:wrap}
+  .hero-stats{display:flex;gap:clamp(1.4rem,4vw,3rem);margin-top:clamp(2.6rem,5vw,3.6rem);padding-top:1.8rem;border-top:1px solid var(--line)}
+  .stat .n{font-family:'Fraunces',serif;font-weight:400;font-size:clamp(1.7rem,3vw,2.3rem);color:var(--green-deep);line-height:1}
+  .stat .l{font-size:.78rem;color:var(--muted);margin-top:.3rem;line-height:1.4}
+
+  /* moldura editorial da imagem */
+  .frame{position:relative}
+  .frame .ph{aspect-ratio:4/4.7;border-radius:4px;overflow:hidden;border:1px solid var(--line);background:linear-gradient(150deg,rgba(28,94,51,.08),rgba(184,92,54,.10)),repeating-linear-gradient(45deg,var(--sand) 0 16px,var(--beige) 16px 32px);display:flex;align-items:center;justify-content:center;position:relative}
+  .frame .ph .mark{display:flex;flex-direction:column;align-items:center;gap:1rem;color:var(--brown);text-align:center;padding:2rem}
+  .frame .ph .mark svg{width:90px;height:90px;opacity:.55}
+  .frame .ph .mark span{font-size:.74rem;opacity:.7;max-width:26ch;background:rgba(251,248,242,.78);padding:.35rem .85rem;border-radius:999px}
+  .frame .cap{position:absolute;top:1rem;left:1rem;font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ink);background:rgba(251,248,242,.9);padding:.3rem .7rem;border-radius:999px;border:1px solid var(--line-soft)}
+  .float{position:absolute;bottom:-20px;left:-20px;background:var(--offwhite);border:1px solid var(--line);padding:.85rem 1.1rem;border-radius:14px;display:flex;align-items:center;gap:.7rem;max-width:240px;box-shadow:0 20px 50px -30px rgba(44,38,32,.5)}
+  .float .ic{width:42px;height:42px;border-radius:10px;background:var(--cream);display:flex;align-items:center;justify-content:center;font-size:1.3rem}
+  .float b{font-size:.88rem;color:var(--green-deep);display:block}
+  .float span{font-size:.76rem;color:var(--muted)}
+
+  /* faixa de credibilidade */
+  .strip{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:1.3rem 0}
+  .strip .wrap{display:flex;justify-content:space-between;align-items:center;gap:1.5rem;flex-wrap:wrap}
+  .strip .item{font-size:.84rem;color:var(--muted);display:flex;align-items:center;gap:.6rem}
+  .strip .item b{font-family:'Fraunces',serif;color:var(--ink);font-weight:400}
+
+  /* ===== seções ===== */
+  section.block{padding:clamp(4.5rem,9vw,8rem) 0}
+  .sec-head{display:grid;grid-template-columns:auto 1fr;gap:1.2rem;align-items:start;margin-bottom:clamp(2.5rem,5vw,4rem)}
+  .sec-head.center{grid-template-columns:1fr;text-align:center;max-width:64ch;margin-left:auto;margin-right:auto}
+  .sec-head h2{font-size:clamp(2rem,4vw,3.2rem);color:var(--green-deep);margin-top:.8rem}
+  .sec-head .sub{color:var(--muted);margin-top:1.1rem;font-size:1.05rem;max-width:54ch}
+  .sec-head.center .sub{margin-left:auto;margin-right:auto}
+
+  /* Sobre */
+  .sobre{background:linear-gradient(180deg,var(--offwhite),var(--cream))}
+  .sobre-grid{display:grid;grid-template-columns:.82fr 1.18fr;gap:clamp(2.5rem,6vw,5rem);align-items:center}
+  .sobre-grid .ph{aspect-ratio:1/1.18}
+  .sobre h2{font-size:clamp(2rem,3.8vw,2.9rem);color:var(--green-deep);margin-bottom:1.4rem}
+  .sobre p{color:var(--ink);opacity:.86;margin-bottom:1.1rem;max-width:56ch}
+  .sig{font-family:'Fraunces',serif;font-style:italic;font-weight:300;font-size:1.35rem;color:var(--terracota);margin-top:1rem}
+
+  /* Manifesto — faixa verde */
+  .manifesto{background:var(--ink);color:var(--cream);position:relative;overflow:hidden}
+  /* colagem de fotos como fundo da seção (preenche 100%) */
+  .manifesto-bg{position:absolute;inset:0;z-index:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));grid-auto-rows:120px;gap:2px;overflow:hidden}
+  .manifesto-bg img{width:100%;height:100%;object-fit:cover;display:block}
+  /* camada escura sutil só para legibilidade do texto (mais escura embaixo) */
+  .manifesto::before{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;background:radial-gradient(85% 62% at 50% 42%,rgba(8,12,9,.7) 0%,rgba(8,12,9,.42) 40%,rgba(8,12,9,.14) 72%,rgba(8,12,9,.04) 100%),linear-gradient(180deg,rgba(8,12,9,.1) 0%,rgba(8,12,9,0) 40%,rgba(8,12,9,.42) 100%)}
+  .manifesto .wrap{text-shadow:0 2px 16px rgba(0,0,0,.55)}
+  .manifesto .wrap{position:relative;z-index:2}
+  .manifesto .label{color:var(--green-light)}.manifesto .label::before{background:var(--green-light)}
+  @media(max-width:760px){.manifesto-bg{grid-template-columns:repeat(auto-fill,minmax(90px,1fr));grid-auto-rows:90px}}
+  .manifesto .idx{color:rgba(244,236,223,.75)}
+  /* compactar a seção Manifesto (ocupava muito espaço) */
+  .manifesto.block{padding:clamp(3rem,5vw,4.5rem) 0}
+  .manifesto .sec-head{margin-bottom:clamp(1.4rem,3vw,2.2rem)}
+  .manifesto .quote{margin:0 auto clamp(1.6rem,3vw,2.4rem);max-width:26ch}
+  .manifesto .quote p{font-size:clamp(1.4rem,2.8vw,2rem)}
+  .manifesto .quote .mk{margin-bottom:.6rem;font-size:2.2rem}
+  .manifesto .pilar{padding:1.5rem 1.4rem}
+  .manifesto .sec-head h2{color:#fff}
+  .manifesto .sec-head .sub{color:rgba(244,236,223,.85)}
+  .quote{text-align:center;max-width:24ch;margin:0 auto clamp(3rem,6vw,4.5rem)}
+  .quote p{font-family:'Fraunces',serif;font-weight:300;font-size:clamp(1.8rem,4vw,2.9rem);font-style:italic;line-height:1.22;color:#fff}
+  .quote .mk{font-family:'Fraunces',serif;font-size:3rem;color:var(--green-light);line-height:0;display:block;margin-bottom:1.4rem;opacity:.7}
+  .pilares{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border-top:1px solid rgba(255,255,255,.18)}
+  .pilar{padding:2.4rem 1.8rem;border-bottom:1px solid rgba(255,255,255,.18)}
+  .pilar:not(:last-child){border-right:1px solid rgba(255,255,255,.18)}
+  .pilar .pn{font-family:'Fraunces',serif;font-style:italic;font-weight:300;color:var(--green-light);font-size:1rem;margin-bottom:1rem}
+  .pilar h3{font-size:1.35rem;color:#fff;margin-bottom:.7rem}
+  .pilar p{color:rgba(244,236,223,.82);font-size:.96rem}
+
+  /* Aulas */
+  .aulas-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1.4rem}
+  .card-aula{background:var(--offwhite);border:1px solid var(--line);border-radius:6px;padding:2.2rem 2rem;transition:transform .3s ease,border-color .3s,box-shadow .3s;display:flex;flex-direction:column}
+  .card-aula:hover{transform:translateY(-5px);border-color:var(--beige);box-shadow:0 26px 60px -40px rgba(44,38,32,.5)}
+  .card-aula .tnum{font-family:'Fraunces',serif;font-style:italic;font-weight:300;color:var(--muted);font-size:1.1rem;margin-bottom:1.4rem}
+  .card-aula .tag{font-size:.68rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--terracota);margin-bottom:.6rem}
+  .card-aula h3{font-size:1.45rem;color:var(--green-deep);margin-bottom:.7rem}
+  .card-aula>p{color:var(--muted);font-size:.96rem;margin-bottom:1.4rem}
+  .card-aula ul{list-style:none;display:flex;flex-direction:column;gap:.7rem;margin-bottom:1.6rem}
+  .card-aula li{font-size:.92rem;color:var(--ink);opacity:.85;display:flex;gap:.6rem;align-items:flex-start;padding-bottom:.7rem;border-bottom:1px solid var(--line-soft)}
+  .card-aula li::before{content:"—";color:var(--terracota);font-weight:700}
+  .card-aula .foot{margin-top:auto}
+  /* ===== O MÉTODO (reformulado) ===== */
+  .metodo{background:linear-gradient(180deg,var(--offwhite),var(--cream))}
+  .metodo-wrap{display:grid;grid-template-columns:.6fr 1.4fr;gap:clamp(2.5rem,5vw,4.5rem);align-items:stretch}
+  .metodo-media{display:flex;flex-direction:column;gap:.9rem}
+  .metodo-media figure{margin:0;position:relative;border-radius:14px;overflow:hidden;border:1px solid var(--line);box-shadow:0 26px 60px -36px rgba(58,50,40,.6);flex:1;min-height:0}
+  .metodo-media img{display:block;width:100%;height:100%;object-fit:cover}
+  .metodo-media .cap{position:absolute;z-index:2;top:.85rem;left:.85rem;font-size:.64rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink);background:rgba(251,248,242,.94);padding:.32rem .7rem;border-radius:999px;border:1px solid var(--line-soft)}
+  .metodo-body{max-width:64ch}
+  .metodo-body .label{margin-bottom:1rem}
+  .metodo-body h2{font-family:'Fraunces',serif;font-weight:400;font-size:clamp(1.9rem,3.3vw,2.85rem);line-height:1.1;letter-spacing:-.015em;color:var(--green-deep);margin-bottom:1.1rem}
+  .metodo-body h2 em{font-style:italic;font-weight:300;color:var(--terracota)}
+  .metodo-body .lead{font-size:1.18rem;color:var(--brown);line-height:1.6;margin-bottom:1.7rem}
+  .metodo-body p{color:var(--ink);opacity:.9;margin-bottom:1.2rem;font-size:1.05rem;line-height:1.85}
+  .metodo-highlight{background:#fff;border-left:4px solid var(--terracota);border-radius:0 14px 14px 0;padding:1.25rem 1.6rem;margin:1.7rem 0;color:var(--ink);font-size:1.05rem;line-height:1.7;box-shadow:0 18px 44px -34px rgba(58,50,40,.55)}
+  .metodo-call{font-family:'Fraunces',serif;font-style:italic;font-weight:400;font-size:1.4rem;color:var(--green-deep);line-height:1.5;margin:2.4rem 0 1.9rem;max-width:50ch}
+  .metodo-foot{display:flex;align-items:center;gap:1.2rem;flex-wrap:wrap}
+  .btn-lg{padding:1.15rem 2.3rem;font-size:1.05rem}
+  .metodo-note{font-size:.86rem;color:var(--muted);font-weight:600}
+
+  /* Mural de fotos (seção Manifesto) */
+  .mural{margin-top:clamp(3rem,6vw,4.5rem)}
+  .mural-cap{text-align:center;color:rgba(244,236,223,.78);font-size:.92rem;letter-spacing:.04em;margin-bottom:1.4rem}
+  .mural-grid{column-count:5;column-gap:.7rem}
+  .mural-grid figure{break-inside:avoid;margin:0 0 .7rem;border-radius:10px;overflow:hidden;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center}
+  .mural-grid img{width:100%;display:block;transition:transform .4s ease}
+  .mural-grid figure:hover img{transform:scale(1.06)}
+  .mural-grid .ph span{color:rgba(255,255,255,.45);font-size:1.7rem}
+  @media(max-width:1000px){.mural-grid{column-count:4}}
+  @media(max-width:760px){.mural-grid{column-count:3}}
+  @media(max-width:480px){.mural-grid{column-count:2}}
+
+  /* Depoimentos */
+  .prova{background:linear-gradient(180deg,var(--cream),var(--offwhite))}
+  .depo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1.4rem}
+  .depo{background:var(--offwhite);border:1px solid var(--line);border-radius:6px;padding:2rem 1.9rem;display:flex;flex-direction:column}
+  .depo .stars{color:var(--terracota);margin-bottom:1rem;letter-spacing:.18em;font-size:.85rem}
+  .depo p{font-family:'Fraunces',serif;font-style:italic;font-weight:300;font-size:1.2rem;line-height:1.45;color:var(--ink);margin-bottom:1.6rem}
+  .depo .who{display:flex;align-items:center;gap:.8rem;margin-top:auto;padding-top:1.2rem;border-top:1px solid var(--line-soft)}
+  .depo .av{width:42px;height:42px;border-radius:50%;background:var(--sage);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-family:'Fraunces',serif}
+  .depo .who b{font-size:.92rem;color:var(--ink);display:block;font-weight:600}
+  .depo .who span{font-size:.78rem;color:var(--muted)}
+
+  /* Perguntas frequentes (sanfona editorial) */
+  .faq-list{max-width:780px;margin:0 auto;border-top:1px solid var(--line)}
+  .faq-list details{border-bottom:1px solid var(--line)}
+  .faq-list summary{list-style:none;cursor:pointer;padding:1.35rem .2rem;font-family:'Fraunces',serif;font-weight:400;font-size:clamp(1.1rem,2vw,1.35rem);color:var(--ink);display:flex;justify-content:space-between;align-items:center;gap:1.2rem;transition:color .2s}
+  .faq-list summary::-webkit-details-marker{display:none}
+  .faq-list summary:hover{color:var(--green-deep)}
+  .faq-list summary .pm{color:var(--terracota);font-size:1.5rem;flex:none;transition:transform .25s;line-height:1}
+  .faq-list details[open] summary .pm{transform:rotate(45deg)}
+  .faq-list .faq-body{padding:0 .2rem 1.5rem;color:var(--muted);max-width:66ch;line-height:1.75;font-size:1.02rem}
+
+  /* Contato (CTA final escuro/elegante) */
+  .contato{background:var(--green-deep);color:var(--offwhite);position:relative;overflow:hidden}
+  .contato::after{content:"";position:absolute;right:-10%;top:-30%;width:60%;height:160%;background:radial-gradient(circle,rgba(127,194,65,.16),transparent 60%);pointer-events:none}
+  .contato .wrap{display:grid;grid-template-columns:1.1fr .9fr;gap:clamp(2.5rem,6vw,5rem);align-items:center;position:relative}
+  .contato .label{color:var(--green-light)}.contato .label::before{background:var(--green-light)}
+  .contato h2{font-size:clamp(2.1rem,4vw,3.2rem);color:#fff;margin:1rem 0 1.2rem}
+  .contato p.t{color:rgba(244,236,223,.85);margin-bottom:1.8rem;font-size:1.08rem;max-width:46ch}
+  .units{display:flex;gap:1rem;flex-wrap:wrap}
+  .unit{display:block;text-decoration:none;color:inherit;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.16);border-radius:12px;padding:1rem 1.3rem;flex:1;min-width:170px;transition:background .2s,transform .2s,border-color .2s}
+  .unit:hover{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.4);transform:translateY(-2px)}
+  .unit b{display:block;font-family:'Fraunces',serif;font-weight:400;font-size:1.2rem}
+  .unit span{font-size:.86rem;color:rgba(244,236,223,.75)}
+  .unit .mapa{display:inline-flex;align-items:center;gap:.25rem;margin-top:.5rem;font-size:.78rem;font-weight:700;color:var(--green-light)}
+  .contato-card{background:var(--offwhite);color:var(--ink);border-radius:10px;padding:2.4rem}
+  .contato-card h3{color:var(--ink);font-size:1.5rem;margin-bottom:.4rem}
+  .contato-card>p{color:var(--muted);margin-bottom:1.8rem}
+  .contato-card .btn{width:100%;justify-content:center;margin-bottom:.8rem}
+
+  /* Footer */
+  footer{background:var(--ink);color:rgba(251,248,242,.65);padding:3rem 0}
+  .foot{display:flex;justify-content:space-between;align-items:center;gap:1.5rem;flex-wrap:wrap}
+  .foot img{height:58px;filter:brightness(0) invert(1);opacity:.9}
+  .foot-links{display:flex;gap:1.6rem;font-size:.9rem}
+  .foot-links a{opacity:.8;transition:opacity .2s}.foot-links a:hover{opacity:1}
+  .foot small{font-size:.8rem;opacity:.6}
+
+  /* WhatsApp flutuante */
+  .wa-float{position:fixed;bottom:24px;right:24px;z-index:60;width:56px;height:56px;border-radius:50%;background:#25D366;display:flex;align-items:center;justify-content:center;box-shadow:0 14px 34px -10px rgba(37,211,102,.6);transition:transform .25s}
+  .wa-float:hover{transform:scale(1.08)}
+  .wa-float svg{width:30px;height:30px;fill:#fff}
+
+  /* reveal on scroll */
+  .reveal{opacity:0;transform:translateY(22px);transition:opacity .7s ease,transform .7s ease}
+  .reveal.in{opacity:1;transform:none}
+  @media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}}
+
+  @media(max-width:880px){
+    .nav-pill{display:none}
+    .menu-toggle{display:flex;align-items:center;justify-content:center}
+    .nav-cta,.nav-conectar{display:none}
+    .nav-pill.open{display:flex;position:absolute;top:100%;left:0;right:0;flex-direction:column;align-items:stretch;background:var(--offwhite);padding:1rem 5vw 1.4rem;gap:.3rem;border-radius:0;border:none;border-bottom:1px solid var(--line);box-shadow:0 20px 40px -30px rgba(44,38,32,.5)}
+    .nav-pill.open a{padding:.8rem .4rem;font-size:1rem}
+    .nav-pill.open .mob-only{display:block;color:var(--green-deep);font-weight:700}
+    .hero-grid,.sobre-grid,.contato .wrap,.metodo-wrap{grid-template-columns:1fr}
+    .frame{order:-1;max-width:440px;margin:0 auto}
+    .metodo-media{order:-1;max-width:480px;margin:0 auto;position:static;flex-direction:row;gap:.6rem}
+    .metodo-media figure{flex:1}
+    .metodo-media .mm-main,.metodo-media .mm-sec{aspect-ratio:3/3.7}
+    .metodo-call{max-width:none}
+    .sec-head{grid-template-columns:1fr}
+    .pilares,.aulas-grid,.depo-grid{grid-template-columns:1fr}
+    .pilar:not(:last-child){border-right:none}
+    .float{left:0}
+    .strip .wrap{justify-content:flex-start;gap:1rem 2rem}
+  }
+  /* Modal de acesso (já é aluna?) */
+  .access-overlay{position:fixed;inset:0;background:rgba(28,38,32,.55);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:200;padding:1.2rem}
+  .access-overlay.open{display:flex}
+  .access-modal{background:var(--offwhite);border-radius:18px;max-width:470px;width:100%;padding:2.4rem 2rem 2rem;text-align:center;box-shadow:0 30px 80px -20px rgba(0,0,0,.5);position:relative}
+  .access-modal img{height:54px;margin:0 auto .8rem}
+  .access-modal h3{font-family:'Fraunces',serif;font-weight:500;color:var(--green-deep);font-size:1.7rem;margin-bottom:.4rem}
+  .access-modal>p{color:var(--muted);margin-bottom:1.7rem;font-size:1.02rem}
+  .access-modal .close{position:absolute;top:.8rem;right:1.1rem;background:none;border:none;font-size:1.7rem;color:var(--muted);cursor:pointer;line-height:1}
+  .access-opt{display:block;width:100%;padding:1.05rem 1.1rem;border-radius:14px;font-weight:700;font-size:1.05rem;margin-bottom:.7rem;border:none;cursor:pointer;text-decoration:none;transition:.15s}
+  .access-opt small{display:block;font-weight:500;font-size:.84rem;opacity:.85;margin-top:.2rem}
+  .access-opt.primary{background:var(--terracota);color:#fff}.access-opt.primary:hover{background:var(--terracota-soft);transform:translateY(-2px)}
+  .access-opt.ghost{background:#fff;color:var(--green-deep);border:1.6px solid var(--green-deep)}.access-opt.ghost:hover{background:var(--green-deep);color:#fff}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a href="#inicio" class="logo"><img src="logo-1.PNG" alt="Fios que Curam — por Inêz Pimentel" /></a>
+    <div class="nav-right">
+      <nav class="nav-pill" id="navLinks">
+        <a href="#sobre">A Inêz</a>
+        <a href="#aulas">O Método</a>
+        <a href="#contato">Unidades</a>
+        <a class="mob-only" href="/#agendar">Agendar aula →</a>
+        <a class="mob-only" href="/#portal">👤 Acesso Aluno →</a>
+      </nav>
+      <a class="btn nav-cta" href="/#agendar">Agendar aula</a>
+      <a class="btn btn-ghost nav-conectar" href="/#portal">👤 Acesso Aluno</a>
+      <button class="menu-toggle" onclick="document.getElementById('navLinks').classList.toggle('open')" aria-label="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<!-- HERO -->
+<section class="hero" id="inicio">
+  <div class="wrap hero-grid">
+    <div class="reveal">
+      <span class="label">Artesanato com propósito</span>
+      <h1>Muito além do crochê: <em>desacelere, aprenda</em> e transforme fios em cuidado.</h1>
+      <p class="lead">Aulas em Ipatinga e Timóteo, onde a técnica vira renda, o tempo vira presença e cada ponto é um respiro para a mente.</p>
+      <div class="hero-cta">
+        <a class="btn btn-terra" href="/#agendar">Quero minha aula experimental</a>
+        <a class="link-arrow" href="#aulas">Como funciona <span>→</span></a>
+      </div>
+      <div class="hero-stats">
+        <div class="stat"><div class="n">+1000</div><div class="l">vidas<br>transformadas</div></div>
+        <div class="stat"><div class="n">2</div><div class="l">unidades:<br>Ipatinga e Timóteo</div></div>
+        <div class="stat"><div class="n">+6</div><div class="l">anos de<br>método próprio</div></div>
+      </div>
+    </div>
+    <div class="frame reveal">
+      <div class="ph" style="padding:0;overflow:hidden">
+        <span class="cap" style="z-index:2">Fios que Curam</span>
+        <iframe id="heroVideo" src="https://www.youtube-nocookie.com/embed/lGSPrSDcK08?autoplay=1&mute=1&controls=0&modestbranding=1&showinfo=0&rel=0&iv_load_policy=3&disablekb=1&fs=0&playsinline=1&enablejsapi=1"
+          title="Fios que Curam" loading="lazy"
+          style="position:absolute;top:50%;left:50%;width:100%;height:152%;transform:translate(-50%,-50%);border:0;pointer-events:none"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"></iframe>
+        <div style="position:absolute;bottom:1rem;right:1rem;z-index:3;display:flex;gap:.5rem">
+          <button id="playBtn" onclick="toggleHeroPlay()" aria-label="Pausar"
+            style="width:44px;height:44px;border-radius:999px;border:1px solid rgba(255,255,255,.6);background:rgba(20,30,22,.55);backdrop-filter:blur(6px);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s">
+            <svg id="playIcon" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" stroke="none"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+          </button>
+          <button id="soundBtn" onclick="toggleHeroSound()" aria-label="Ativar som"
+            style="width:44px;height:44px;border-radius:999px;border:1px solid rgba(255,255,255,.6);background:rgba(20,30,22,.55);backdrop-filter:blur(6px);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s">
+            <svg id="soundIcon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="float">
+        <div class="ic">🧶</div>
+        <div><b>Alívio para a mente</b><span>+ renda com o que você cria</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STRIP -->
+<div class="strip reveal">
+  <div class="wrap">
+    <div class="item"><b>+1000</b> alunas acolhidas</div>
+    <div class="item"><b>2</b> unidades presenciais</div>
+    <div class="item"><b>Do 1º ponto</b> à peça que vira renda</div>
+    <div class="item"><b>Turmas pequenas</b> e atenção real</div>
+  </div>
+</div>
+
+<!-- SOBRE -->
+<section class="block sobre" id="sobre">
+  <div class="wrap sobre-grid">
+    <div class="frame reveal">
+      <div class="ph" style="padding:0">
+        <span class="cap">Inêz Pimentel</span>
+        <img src="inez.jpg" alt="Inêz Pimentel, fundadora da Fios que Curam" style="width:100%;height:100%;object-fit:cover;display:block" />
+      </div>
+    </div>
+    <div class="reveal">
+      <span class="label"><span class="idx">01</span> &nbsp;Sobre a Inêz</span>
+      <h2 style="margin-top:1rem">Uma jornada de superação, fé e fios que conectam.</h2>
+      <p style="margin-top:1.4rem">Desde os primeiros passos até aqui, o Fios que Curam nasceu de batalhas vencidas e do cuidado de Deus em cada etapa. O que começou como um refúgio pessoal se tornou um chamado: ensinar, acolher e abrir caminhos para outras pessoas.</p>
+      <p>Inêz transformou o crochê em uma ponte — entre quem ela foi e quem se tornou, e entre mulheres que buscam um tempo para si, uma comunidade e uma nova fonte de renda. Aqui, cada aluna é recebida pelo nome, com paciência e propósito.</p>
+      <p>Mais do que técnica, ela ensina um jeito mais leve de viver. E ainda há muito por vir.</p>
+      <div class="sig">— com carinho, Inêz Pimentel</div>
+    </div>
+  </div>
+</section>
+
+<!-- MANIFESTO -->
+<section class="block manifesto" id="manifesto">
+  <!-- MURAL — fotos da pasta fotos_quadro (frontend/public/mural/) -->
+  <div class="manifesto-bg" aria-hidden="true">
+    <img src="mural/q1.jpg" alt="" loading="lazy" />
+    <img src="mural/q14.jpg" alt="" loading="lazy" />
+    <img src="mural/q7.jpg" alt="" loading="lazy" />
+    <img src="mural/q18.jpg" alt="" loading="lazy" />
+    <img src="mural/q3.jpg" alt="" loading="lazy" />
+    <img src="mural/q11.jpg" alt="" loading="lazy" />
+    <img src="mural/q20.jpg" alt="" loading="lazy" />
+    <img src="mural/q5.jpg" alt="" loading="lazy" />
+    <img src="mural/q16.jpg" alt="" loading="lazy" />
+    <img src="mural/q9.jpg" alt="" loading="lazy" />
+    <img src="mural/q12.jpg" alt="" loading="lazy" />
+    <img src="mural/q2.jpg" alt="" loading="lazy" />
+    <img src="mural/q19.jpg" alt="" loading="lazy" />
+    <img src="mural/q6.jpg" alt="" loading="lazy" />
+    <img src="mural/q15.jpg" alt="" loading="lazy" />
+    <img src="mural/q21.jpg" alt="" loading="lazy" />
+    <img src="mural/q4.jpg" alt="" loading="lazy" />
+    <img src="mural/q13.jpg" alt="" loading="lazy" />
+    <img src="mural/q8.jpg" alt="" loading="lazy" />
+    <img src="mural/q17.jpg" alt="" loading="lazy" />
+    <img src="mural/q10.jpg" alt="" loading="lazy" />
+    <img src="mural/q5.jpg" alt="" loading="lazy" />
+    <img src="mural/q20.jpg" alt="" loading="lazy" />
+    <img src="mural/q11.jpg" alt="" loading="lazy" />
+    <img src="mural/q2.jpg" alt="" loading="lazy" />
+    <img src="mural/q17.jpg" alt="" loading="lazy" />
+    <img src="mural/q8.jpg" alt="" loading="lazy" />
+    <img src="mural/q14.jpg" alt="" loading="lazy" />
+    <img src="mural/q1.jpg" alt="" loading="lazy" />
+    <img src="mural/q19.jpg" alt="" loading="lazy" />
+    <img src="mural/q10.jpg" alt="" loading="lazy" />
+    <img src="mural/q3.jpg" alt="" loading="lazy" />
+    <img src="mural/q16.jpg" alt="" loading="lazy" />
+    <img src="mural/q7.jpg" alt="" loading="lazy" />
+    <img src="mural/q21.jpg" alt="" loading="lazy" />
+    <img src="mural/q12.jpg" alt="" loading="lazy" />
+    <img src="mural/q6.jpg" alt="" loading="lazy" />
+    <img src="mural/q18.jpg" alt="" loading="lazy" />
+    <img src="mural/q4.jpg" alt="" loading="lazy" />
+    <img src="mural/q15.jpg" alt="" loading="lazy" />
+    <img src="mural/q9.jpg" alt="" loading="lazy" />
+    <img src="mural/q13.jpg" alt="" loading="lazy" />
+    <img src="mural/q13.jpg" alt="" loading="lazy" />
+    <img src="mural/q6.jpg" alt="" loading="lazy" />
+    <img src="mural/q21.jpg" alt="" loading="lazy" />
+    <img src="mural/q9.jpg" alt="" loading="lazy" />
+    <img src="mural/q4.jpg" alt="" loading="lazy" />
+    <img src="mural/q17.jpg" alt="" loading="lazy" />
+    <img src="mural/q2.jpg" alt="" loading="lazy" />
+    <img src="mural/q15.jpg" alt="" loading="lazy" />
+    <img src="mural/q10.jpg" alt="" loading="lazy" />
+    <img src="mural/q18.jpg" alt="" loading="lazy" />
+    <img src="mural/q5.jpg" alt="" loading="lazy" />
+    <img src="mural/q12.jpg" alt="" loading="lazy" />
+    <img src="mural/q20.jpg" alt="" loading="lazy" />
+    <img src="mural/q7.jpg" alt="" loading="lazy" />
+    <img src="mural/q1.jpg" alt="" loading="lazy" />
+    <img src="mural/q16.jpg" alt="" loading="lazy" />
+    <img src="mural/q8.jpg" alt="" loading="lazy" />
+    <img src="mural/q19.jpg" alt="" loading="lazy" />
+    <img src="mural/q3.jpg" alt="" loading="lazy" />
+    <img src="mural/q14.jpg" alt="" loading="lazy" />
+    <img src="mural/q11.jpg" alt="" loading="lazy" />
+  </div>
+  <div class="wrap">
+    <div class="sec-head center reveal">
+      <span class="label center"><span class="idx">02</span> &nbsp;Manifesto</span>
+      <h2>Por que os fios curam</h2>
+      <p class="sub">O crochê é o meio, não o fim. Por trás de cada peça existe um processo de desaceleração, autoconhecimento e reconstrução.</p>
+    </div>
+    <div class="quote reveal">
+      <span class="mk">&ldquo;</span>
+      <p>Quando as mãos se ocupam com cuidado, a mente encontra descanso.</p>
+    </div>
+    <div class="pilares reveal">
+      <div class="pilar">
+        <div class="pn">i.</div>
+        <h3>Cuidado emocional</h3>
+        <p>O artesanato como ferramenta de desaceleração, foco e bem-estar mental. Um respiro no meio da correria.</p>
+      </div>
+      <div class="pilar">
+        <div class="pn">ii.</div>
+        <h3>Transformação e renda</h3>
+        <p>Capacitação técnica que gera autonomia financeira, novas oportunidades e orgulho do próprio trabalho.</p>
+      </div>
+      <div class="pilar">
+        <div class="pn">iii.</div>
+        <h3>Comunidade</h3>
+        <p>Um espaço de pertencimento e conexão, especialmente para mulheres que querem crescer juntas.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- O MÉTODO -->
+<section class="block metodo" id="aulas">
+  <div class="wrap metodo-wrap">
+    <div class="metodo-media reveal">
+      <figure class="mm-main">
+        <span class="cap">A primeira peça do aluno(a)</span>
+        <img src="bolsa2.jpeg" alt="Bolsa de crochê em fio de malha lilás, primeira peça finalizada pela aluna, ao lado de um arranjo de rosas" loading="lazy" />
+      </figure>
+      <figure class="mm-sec">
+        <span class="cap">A segunda peça do aluno(a)</span>
+        <img src="bolsa3.jpeg" alt="Bolsa de crochê em fio de malha amarela e creme, com alças de couro caramelo — segunda peça finalizada pela aluna" loading="lazy" />
+      </figure>
+    </div>
+    <div class="metodo-body reveal">
+      <span class="label"><span class="idx">03</span> &nbsp;O Método</span>
+      <h2>Uma metodologia que já transformou <em>mais de 1.000 vidas</em></h2>
+      <p class="lead">Talvez você se pergunte: <em>“será que eu consigo aprender crochê?”</em> A resposta é simples — <strong>sim, você consegue.</strong></p>
+      <p>Há mais de <strong>6 anos</strong> aperfeiçoamos um método próprio, pensado para ensinar de um jeito simples, acolhedor e prático — mesmo para quem nunca segurou uma agulha. Mais de <strong>1.000 alunas</strong> já descobriram aqui uma nova habilidade, um tempo de autocuidado, novas amizades e, para muitas, uma nova fonte de renda.</p>
+      <div class="metodo-highlight">A bolsa desta foto é a <strong>primeira peça que toda aluna finaliza — já na segunda aula.</strong> É o momento em que cada uma percebe, com as próprias mãos, que é capaz de criar algo lindo.</div>
+      <p>Você aprende no seu ritmo, com acompanhamento próximo e em um ambiente acolhedor, onde cada aula é uma experiência de aprendizado, bem-estar e transformação. As <strong>vagas são limitadas</strong>, justamente para garantir a atenção e o cuidado que cada aluna merece.</p>
+      <p class="metodo-call">Se você sente que é hora de fazer algo por você, venha transformar fios em conquistas e descobrir tudo o que também é capaz de criar.</p>
+      <div class="metodo-foot">
+        <button class="btn btn-terra btn-lg" onclick="openAccess()">Quero garantir minha vaga</button>
+        <span class="metodo-note">Vagas limitadas · turmas pequenas</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DEPOIMENTOS -->
+<section class="block prova" id="depoimentos">
+  <div class="wrap">
+    <div class="sec-head center reveal">
+      <span class="label center"><span class="idx">04</span> &nbsp;Prova social</span>
+      <h2>+1000 vidas transformadas</h2>
+      <p class="sub">Histórias reais de quem encontrou no crochê um novo respiro — e, para muitas, uma nova renda.</p>
+    </div>
+    <div class="depo-grid">
+      <div class="depo reveal">
+        <div class="stars">★★★★★</div>
+        <p>Cheguei sem saber nada e hoje vendo minhas peças. As aulas da Inêz me deram técnica e confiança.</p>
+        <div class="who"><div class="av">M</div><div><b>Maria</b><span>Aluna · Ipatinga</span></div></div>
+      </div>
+      <div class="depo reveal">
+        <div class="stars">★★★★★</div>
+        <p>Mais que crochê, encontrei um lugar de paz. Saio de cada aula mais leve e acolhida.</p>
+        <div class="who"><div class="av">A</div><div><b>Ana</b><span>Aluna · Timóteo</span></div></div>
+      </div>
+      <div class="depo reveal">
+        <div class="stars">★★★★★</div>
+        <p>A Inêz tem uma paciência linda para ensinar. Recomendo de olhos fechados para qualquer iniciante.</p>
+        <div class="who"><div class="av">R</div><div><b>Rosa</b><span>Aluna · Bairro Iguaçu</span></div></div>
+      </div>
+    </div>
+    <p style="text-align:center;margin-top:1.8rem;color:var(--muted);font-size:.86rem">Depoimentos ilustrativos — substituir pelos relatos e fotos reais das alunas.</p>
+  </div>
+</section>
+
+<!-- PERGUNTAS FREQUENTES -->
+<section class="block faq-section" id="faq">
+  <div class="wrap">
+    <div class="sec-head center reveal">
+      <span class="label center"><span class="idx">05</span> &nbsp;Perguntas frequentes</span>
+      <h2>Ainda com dúvidas? A gente responde</h2>
+    </div>
+    <div class="faq-list reveal">
+      <details>
+        <summary>Preciso ter experiência com crochê?<span class="pm">+</span></summary>
+        <div class="faq-body">Não! Este curso é para você que <b>nunca pegou na agulha</b>, para quem já faz alguma coisa ou até mesmo para quem vem do crochê tradicional.</div>
+      </details>
+      <details>
+        <summary>Preciso levar algum material?<span class="pm">+</span></summary>
+        <div class="faq-body">Se você já faz crochê e tem algum material, pode levar. Mas se for iniciante, indicamos começar com o <b>fio de malha de 35 mm e agulha número 8</b>; a segunda opção é o <b>fio de malha de 25 mm e agulha número 7</b>. Fica bem em conta, fique tranquilo(a). 💚<br /><br />Até mesmo para você que vem do crochê tradicional, fazemos as mesmas indicações para treinar as técnicas iniciais do crochê moderno.</div>
+      </details>
+      <details>
+        <summary>Onde acontecem as aulas?<span class="pm">+</span></summary>
+        <div class="faq-body">As aulas são presenciais em duas unidades: <b>Ipatinga</b> (Bairro Iguaçu) e <b>Timóteo</b> (Centro). Você escolhe a mais perto de você na hora de marcar.</div>
+      </details>
+      <details>
+        <summary>Como funciona o pagamento?<span class="pm">+</span></summary>
+        <div class="faq-body">A <b>matrícula é feita via Pix</b> para agendar a sua aula experimental.<br /><br />A sua <b>primeira aula oficial</b> é agendada junto com você no final da aula experimental — e nesse dia você paga a primeira mensalidade do jeito que for melhor: à vista, no Pix, dinheiro ou cartão.<br /><br />As <b>mensalidades seguintes</b> são pagas por boletos bancários enviados mensalmente a cada aluna.</div>
+      </details>
+      <details>
+        <summary>Posso remarcar ou cancelar?<span class="pm">+</span></summary>
+        <div class="faq-body">As aulas (experimental ou não) precisam ser remarcadas com <b>no mínimo 6 horas de antecedência</b>. O limite é de <b>2 aulas por mês</b> para cada aluno(a).<br /><br /><i>Obs.: desde que haja vaga na agenda — não é uma obrigatoriedade do curso.</i></div>
+      </details>
+      <details>
+        <summary>As aulas são em grupo ou individuais?<span class="pm">+</span></summary>
+        <div class="faq-body">São <b>turmas pequenas, com 8 vagas</b> — assim cada aluna recebe atenção de verdade, no seu ritmo. A partir da <b>3ª peça</b>, cada aluna faz aquilo que desejar — não é modelo de workshop.</div>
+      </details>
+      <details>
+        <summary>Dá para transformar o crochê em renda?<span class="pm">+</span></summary>
+        <div class="faq-body">Com certeza! Além das técnicas do crochê, aqui você também aprende a parte do negócio: <b>o que produzir</b>, <b>como precificar</b>, <b>embalagem</b>, <b>imagem</b>, <b>posicionamento de vendas</b> e a <b>criar a sua marca</b>.</div>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- CONTATO -->
+<section class="block contato" id="contato">
+  <div class="wrap">
+    <div class="reveal">
+      <span class="label"><span class="idx" style="color:rgba(244,236,223,.7)">06</span> &nbsp;Localização e contato</span>
+      <h2>Venha tecer com a gente</h2>
+      <p class="t">Atendemos presencialmente na região de Ipatinga e Timóteo. <a href="/#agendar" style="color:#fff;font-weight:700;text-decoration:underline;text-underline-offset:3px;">Clique aqui para marcar sua aula experimental.</a></p>
+      <div class="units">
+        <a class="unit" href="https://www.google.com/maps/search/?api=1&query=Bairro%20Igua%C3%A7u%2C%20Ipatinga%20-%20MG" target="_blank" rel="noopener"><b>Ipatinga</b><span>Bairro Iguaçu e região</span><span class="mapa">📍 Ver no mapa →</span></a>
+        <a class="unit" href="https://www.google.com/maps/search/?api=1&query=Centro%2C%20Tim%C3%B3teo%20-%20MG" target="_blank" rel="noopener"><b>Timóteo</b><span>Centro e região</span><span class="mapa">📍 Ver no mapa →</span></a>
+      </div>
+    </div>
+    <div class="contato-card reveal">
+      <h3>Fale com a Inêz</h3>
+      <p>Tire dúvidas, conheça os horários e reserve sua vaga.</p>
+      <a class="btn btn-terra" href="https://wa.me/5531986531024?text=Ol%C3%A1%20In%C3%AAz!%20Quero%20marcar%20uma%20aula%20de%20croch%C3%AA." target="_blank" rel="noopener">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M.057 24l1.687-6.163a11.867 11.867 0 0 1-1.587-5.946C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 0 1 8.413 3.488 11.824 11.824 0 0 1 3.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 0 1-5.688-1.448L.057 24zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884a9.86 9.86 0 0 0 1.512 5.26l-.999 3.648 3.476-.911zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/></svg>
+        Falar com a Inêz no WhatsApp
+      </a>
+      <a class="btn btn-ghost" href="https://www.instagram.com/fiosquecuram_inezpimentel/" target="_blank" rel="noopener">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+        Seguir no Instagram
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <img src="logo-1.PNG" alt="Fios que Curam" />
+    <nav class="foot-links">
+      <a href="#sobre">Sobre</a>
+      <a href="#aulas">O Método</a>
+      <a href="#faq">Dúvidas</a>
+      <a href="#contato">Contato</a>
+      <a href="https://www.instagram.com/fiosquecuram_inezpimentel/" target="_blank" rel="noopener">Instagram</a>
+    </nav>
+    <small>© 2026 Fios que Curam · por Inêz Pimentel · Ipatinga / Timóteo</small>
+  </div>
+</footer>
+
+<a class="wa-float" href="https://wa.me/5531986531024?text=Ol%C3%A1%20In%C3%AAz!" target="_blank" rel="noopener" aria-label="WhatsApp">
+  <svg viewBox="0 0 24 24"><path d="M.057 24l1.687-6.163a11.867 11.867 0 0 1-1.587-5.946C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 0 1 8.413 3.488 11.824 11.824 0 0 1 3.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 0 1-5.688-1.448L.057 24zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884a9.86 9.86 0 0 0 1.512 5.26l-.999 3.648 3.476-.911zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/></svg>
+</a>
+
+<!-- MODAL: já é aluna? -->
+<div class="access-overlay" id="accessModal" onclick="if(event.target===this)closeAccess()">
+  <div class="access-modal">
+    <button class="close" onclick="closeAccess()" aria-label="Fechar">×</button>
+    <img src="logo-1.PNG" alt="Fios que Curam" />
+    <h3>Vamos começar! 💚</h3>
+    <p>Você já é aluna da Fios que Curam?</p>
+    <a class="access-opt primary" href="/#agendar">Ainda não — é minha primeira vez<small>Escolher unidade, horário e marcar a 1ª aula</small></a>
+    <a class="access-opt ghost" href="/#portal">Sim, já sou aluno(a)<small>Entrar no portal do aluno(a)</small></a>
+  </div>
+</div>
+
+<script>
+  function openAccess(){ document.getElementById('accessModal').classList.add('open'); }
+  function closeAccess(){ document.getElementById('accessModal').classList.remove('open'); }
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAccess(); });
+
+  // reveal on scroll
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+  // fecha menu mobile ao clicar num link
+  document.querySelectorAll('#navLinks a').forEach((a) => a.addEventListener('click', () => document.getElementById('navLinks').classList.remove('open')));
+
+  // ===== Vídeo do hero: botão de som (API do YouTube) =====
+  var heroPlayer = null, heroMuted = true;
+  var iconMuted = '<path d="M11 5 6 9H2v6h4l5 4z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>';
+  var iconOn = '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>';
+  window.onYouTubeIframeAPIReady = function () {
+    heroPlayer = new YT.Player('heroVideo', {
+      events: {
+        onStateChange: function (e) {
+          // loop manual: quando termina (0), volta ao início e toca de novo
+          if (e.data === YT.PlayerState.ENDED) { heroPlayer.seekTo(0); heroPlayer.playVideo(); }
+        }
+      }
+    });
+  };
+  var heroPlaying = true;
+  var iconPause = '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>';
+  var iconPlay = '<path d="M7 4l13 8-13 8z"/>';
+  window.toggleHeroPlay = function () {
+    if (!heroPlayer || !heroPlayer.playVideo) return;
+    var icon = document.getElementById('playIcon'), btn = document.getElementById('playBtn');
+    if (heroPlaying) { heroPlayer.pauseVideo(); heroPlaying = false; icon.innerHTML = iconPlay; btn.setAttribute('aria-label','Reproduzir'); }
+    else { heroPlayer.playVideo(); heroPlaying = true; icon.innerHTML = iconPause; btn.setAttribute('aria-label','Pausar'); }
+  };
+  window.toggleHeroSound = function () {
+    if (!heroPlayer || !heroPlayer.unMute) return;
+    var icon = document.getElementById('soundIcon'), btn = document.getElementById('soundBtn');
+    if (heroMuted) { heroPlayer.unMute(); heroPlayer.setVolume(100); heroPlayer.playVideo(); heroMuted = false;
+      icon.innerHTML = iconOn; btn.setAttribute('aria-label','Desativar som'); btn.style.background='rgba(28,94,51,.75)'; }
+    else { heroPlayer.mute(); heroMuted = true;
+      icon.innerHTML = iconMuted; btn.setAttribute('aria-label','Ativar som'); btn.style.background='rgba(20,30,22,.55)'; }
+  };
+  (function(){ var s = document.createElement('script'); s.src = 'https://www.youtube.com/iframe_api'; document.head.appendChild(s); })();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,153 @@
+Aqui vai a extração em formato de briefing de marca para site, com o que está publicamente visível e o que é inferência de posicionamento.
+
+**Identidade do projeto**
+- Nome público: `Fios que Curam / por Inêz Pimentel`
+- Handle: `@fiosquecuram_inezpimentel`
+- Autoria visível: **Inêz Pimentel**
+- Localidade visível: **Ipatinga / Timóteo**, com referência a **Bairro Iguaçu**
+- Categoria pública: **Empreendedor(a)** no Instagram e **Página · Site educacional** no Facebook
+
+**Quem é**
+- É uma marca/projeto de crochê e artesanato com face pessoal forte, assinada por Inêz Pimentel.
+- Não aparece como uma empresa “fria”; aparece como uma marca autoral, humana e comunitária.
+- O conteúdo sugere uma operação local com aulas, produtos, comunidade e acolhimento.
+
+**Por que existe**
+- A mensagem central do perfil é que o crochê é mais do que técnica.
+- O projeto existe para unir:
+- aprendizado
+- desaceleração
+- cuidado emocional
+- renda
+- transformação pessoal
+- comunidade
+
+**Para que existe**
+- Ensinar crochê e técnicas relacionadas
+- Ajudar pessoas a aprenderem e criarem
+- Oferecer produtos e possivelmente serviços/cursos
+- Criar um espaço de acolhimento e conexão
+- Posicionar o crochê como algo terapêutico e transformador
+
+**Mensagem principal**
+- O perfil repete claramente:
+- `Muito além do crochê`
+- `Desacelere e se priorize`
+- `Alívio para mente + renda`
+- `+1000 vidas transformadas`
+
+**Posicionamento**
+- Artesanato com propósito
+- Crochê moderno
+- Terapia manual / bem-estar
+- Formação e prática
+- Fé e gratidão como camada narrativa
+- Comunidade feminina/local com clima de pertencimento
+
+**Público-alvo provável**
+- Mulheres interessadas em crochê
+- Iniciantes que querem aprender
+- Pessoas buscando uma atividade terapêutica
+- Pessoas que querem renda com artesanato
+- Público local da região de Ipatinga e Timóteo
+- Alunas, clientes e pessoas que valorizam cuidado e relacionamento
+
+**Oferta pública identificável**
+- Aulas
+- Técnicas / crochê
+- Produtos
+- Depoimentos
+- Localização
+- Contato via WhatsApp
+- Página no Facebook
+
+**Arquitetura de prova social**
+- Destaques do Instagram:
+- `Técnicas/Crochê`
+- `Depoimento`
+- `Aulas`
+- `Quem somos`
+- `Produtos`
+- `Localização`
+- Isso mostra que o site deve repetir essas mesmas seções, porque já são os pilares da marca.
+
+**Narrativa de origem**
+- O destaque `Quem somos` aponta para uma história de construção:
+- “desde os primeiros passos até aqui”
+- cuidado de Deus
+- batalhas vencidas
+- avanço conquistado
+- ainda há mais por vir
+- Isso sugere que a página “Sobre” do site deve contar uma história de jornada, superação e propósito.
+
+**Tom de voz**
+- Acolhedor
+- Inspirador
+- Afetivo
+- Humano
+- Levemente espiritual
+- Didático
+- Comunitário
+
+**Identidade visual sugerida**
+- Paleta:
+- off-white
+- bege
+- areia
+- caramelo
+- marrom fio
+- verde sálvia
+- terracota suave
+- amarelo quente discreto
+- Direção estética:
+- artesanal
+- orgânica
+- aconchegante
+- textura de fio
+- curvas suaves
+- aparência manual, não corporativa
+- Fotografia:
+- mãos tricotando/crochê
+- fios, detalhes de peças, aulas, bastidores, alunas, ambiente real
+- luz natural e sensação de presença humana
+
+**O que o site precisa comunicar**
+- Quem é a marca
+- Quem é Inêz
+- O que o projeto oferece
+- Por que ele existe
+- Para quem é
+- Onde atende
+- Como entrar em contato
+- Prova social e autoridade
+- A experiência emocional, não só o produto
+
+**Estrutura ideal do site**
+- Hero com frase de impacto
+- Sobre / quem é Inêz
+- Manifesto / por que existe
+- Aulas
+- Produtos
+- Depoimentos
+- Localização
+- Contato WhatsApp
+- Instagram / Facebook
+- Chamada para ação principal: falar no WhatsApp ou conhecer as aulas
+
+**Sobre a data de criação**
+- **Não encontrei uma data pública exata de fundação/criação.**
+- O que dá para afirmar com segurança é que a marca já tem presença consolidada e conteúdo público com histórico de ao menos alguns meses.
+- Se você precisar da data oficial, isso precisa vir da própria Inêz ou de algum material interno.
+
+**O que eu recomendaria levar para o site como frase-síntese**
+- `Fios que Curam é um espaço onde crochê, aprendizado e acolhimento se encontram para transformar tempo em cuidado, técnica em renda e fio em conexão.`
+
+**Fontes públicas usadas**
+- [Instagram do projeto](https://www.instagram.com/fiosquecuram_inezpimentel/)
+- [Página pública do Facebook vinculada na bio](https://web.facebook.com/people/Mercado-Digital/61573655259964/?ref=PROFILE_EDIT_xav_ig_profile_page_web)
+
+Se você quiser, no próximo passo eu posso transformar isso em um material pronto para desenvolvimento do site:
+1. manifesto da marca
+2. texto da página `Sobre`
+3. estrutura completa da home
+4. guia de identidade visual com paleta, tipografia e estilo de imagem
