@@ -529,12 +529,12 @@
 (async () => {
   const grid = document.getElementById("depo-grid");
   try {
-    const list = await fetch("http://localhost:4000/api/testimonials").then(r => r.json());
+    const list = await fetch("/api/testimonials").then(r => r.json());
     const active = list.filter(t => t.active);
     if (!active.length) { grid.innerHTML = ""; return; }
     grid.innerHTML = active.map(t => {
       const av = t.photo
-        ? `<img src="http://localhost:4000/depoimentos/${encodeURIComponent(t.photo)}" alt="${t.name}" />`
+        ? `<img src="/depoimentos/${encodeURIComponent(t.photo)}" alt="${t.name}" />`
         : `<span>${t.name[0]}</span>`;
       return `
         <div class="depo reveal">
