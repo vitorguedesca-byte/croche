@@ -38,6 +38,20 @@ export const api = {
 
   resetPin: (clientId) => req("DELETE", `/api/clients/${clientId}/pin`),
 
+  testimonials: {
+    list:   ()         => req("GET",   "/api/testimonials"),
+    create: (data)     => req("POST",  "/api/testimonials", data),
+    update: (id, data) => req("PATCH", `/api/testimonials/${id}`, data),
+    remove: (id)       => req("DELETE",`/api/testimonials/${id}`),
+    uploadPhoto: async (id, file) => {
+      const fd = new FormData();
+      fd.append("photo", file);
+      const res = await fetch(`/api/testimonials/${id}/photo`, { method: "POST", body: fd });
+      if (!res.ok) { let msg = "Erro"; try { msg = (await res.json()).error || msg; } catch {} throw new Error(msg); }
+      return res.json();
+    },
+  },
+
   auth: {
     check:  (cpf)       => req("POST", "/api/auth/check",   { cpf }),
     setPin: (cpf, pin)  => req("POST", "/api/auth/set-pin", { cpf, pin }),

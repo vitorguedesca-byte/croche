@@ -74,6 +74,17 @@ model Waitlist {
   @@index([slotId])
 }
 
+model Testimonial {
+  id        Int      @id @default(autoincrement())
+  name      String
+  role      String   @default("") @db.VarChar(255) // ex: "@instagram · Ipatinga/MG"
+  text      String   @db.Text
+  photo     String?  @db.VarChar(255) // nome do arquivo em /depoimentos/
+  active    Boolean  @default(true)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
 model Settings {
   id               Int    @id @default(1)
   valorPadrao      Float  @default(80)

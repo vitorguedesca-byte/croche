@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useStore } from "./store.jsx";
 import { useModal, StatusBadge } from "./ui.jsx";
 import { api } from "./api.js";
@@ -539,6 +539,179 @@ export function Recebimentos() {
           ))}
         </tbody></table>
       ) : <div className="empty"><div className="ic">💰</div><p>Nenhum recebimento ainda.</p></div>}
+    </div>
+  </>);
+}
+
+/* ===================== DEPOIMENTOS ===================== */
+const EMPTY_FORM = { name: "", role: "", text: "", active: true, order: 0 };
+
+export function Depoimentos() {
+  const [list, setList]       = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null); // null | "new" | testimonial object
+  const [form, setForm]       = useState(EMPTY_FORM);
+  const [busy, setBusy]       = useState(false);
+  const [msg, setMsg]         = useState("");
+  const fileRef               = useRef();
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoPreview, setPhotoPreview] = useState(null);
+
+  const flash = (m) => { setMsg(m); setTimeout(() => setMsg(""), 3000); };
+
+  const load = async () => {
+    setLoading(true);
+    try { setList(await api.testimonials.list()); }
+    catch (e) { flash("Erro ao carregar: " + e.message); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const openNew = () => {
+    setForm(EMPTY_FORM);
+    setPhotoFile(null);
+    setPhotoPreview(null);
+    setEditing("new");
+  };
+
+  const openEdit = (t) => {
+    setForm({ name: t.name, role: t.role, text: t.text, active: t.active, order: t.order });
+    setPhotoFile(null);
+    setPhotoPreview(t.photo ? `/depoimentos/${t.photo}` : null);
+    setEditing(t);
+  };
+
+  const handlePhoto = (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    setPhotoFile(f);
+    setPhotoPreview(URL.createObjectURL(f));
+  };
+
+  const save = async () => {
+    if (!form.name.trim() || !form.text.trim()) { flash("Nome e depoimento são obrigatórios."); return; }
+    setBusy(true);
+    try {
+      let t;
+      if (editing === "new") {
+        t = await api.testimonials.create(form);
+      } else {
+        t = await api.testimonials.update(editing.id, form);
+      }
+      if (photoFile) {
+        t = await api.testimonials.uploadPhoto(t.id, photoFile);
+      }
+      flash(editing === "new" ? "Depoimento criado!" : "Salvo!");
+      setEditing(null);
+      load();
+    } catch (e) { flash("Erro: " + e.message); }
+    finally { setBusy(false); }
+  };
+
+  const remove = async (t) => {
+    if (!confirm(`Excluir depoimento de ${t.name}?`)) return;
+    try { await api.testimonials.remove(t.id); load(); }
+    catch (e) { flash("Erro: " + e.message); }
+  };
+
+  const toggleActive = async (t) => {
+    try { await api.testimonials.update(t.id, { active: !t.active }); load(); }
+    catch (e) { flash("Erro: " + e.message); }
+  };
+
+  if (editing) return (
+    <div className="panel" style={{ maxWidth: 640 }}>
+      <div className="panel-h">
+        <h2>{editing === "new" ? "Novo depoimento" : `Editando — ${editing.name}`}</h2>
+        <button className="btn-ghost" onClick={() => setEditing(null)}>✕ Cancelar</button>
+      </div>
+      {msg && <div className="toast-inline">{msg}</div>}
+
+      {/* Foto */}
+      <div style={{ display: "flex", alignItems: "center", gap: "1.2rem", marginBottom: "1.4rem" }}>
+        <div style={{ width: 72, height: 72, borderRadius: "50%", overflow: "hidden", background: "var(--sage)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: "1.6rem" }}>
+          {photoPreview
+            ? <img src={photoPreview} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            : "📷"}
+        </div>
+        <div>
+          <button className="btn" onClick={() => fileRef.current.click()}>📷 Escolher foto</button>
+          <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handlePhoto} />
+          <p style={{ fontSize: ".8rem", color: "var(--muted)", marginTop: ".3rem" }}>JPG, PNG ou WebP · máx 5 MB</p>
+        </div>
+      </div>
+
+      <label className="form-label">Nome</label>
+      <input className="form-input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Ex: Ana Paula Tavares" />
+
+      <label className="form-label" style={{ marginTop: ".9rem" }}>Identificação <span style={{ color: "var(--muted)", fontWeight: 400 }}>(opcional)</span></label>
+      <input className="form-input" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))} placeholder="@instagram · Cidade/UF" />
+
+      <label className="form-label" style={{ marginTop: ".9rem" }}>Depoimento</label>
+      <textarea className="form-input" rows={5} value={form.text} onChange={e => setForm(f => ({ ...f, text: e.target.value }))} placeholder="Escreva o relato da aluna…" style={{ resize: "vertical" }} />
+
+      <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginTop: ".9rem" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: ".5rem", cursor: "pointer", fontSize: ".9rem" }}>
+          <input type="checkbox" checked={form.active} onChange={e => setForm(f => ({ ...f, active: e.target.checked }))} />
+          Visível no site
+        </label>
+        <div style={{ display: "flex", alignItems: "center", gap: ".5rem", fontSize: ".9rem" }}>
+          <span style={{ color: "var(--muted)" }}>Ordem:</span>
+          <input type="number" className="form-input" style={{ width: 64, padding: ".3rem .5rem" }} value={form.order} onChange={e => setForm(f => ({ ...f, order: Number(e.target.value) }))} />
+        </div>
+      </div>
+
+      <button className="btn" style={{ marginTop: "1.4rem" }} onClick={save} disabled={busy}>
+        {busy ? "Salvando…" : "💾 Salvar depoimento"}
+      </button>
+    </div>
+  );
+
+  return (<>
+    {msg && <div className="toast-inline">{msg}</div>}
+    <div className="panel">
+      <div className="panel-h">
+        <h2>⭐ Depoimentos <span className="cli-sub">{list.length} no total</span></h2>
+        <button className="btn" onClick={openNew}>＋ Novo depoimento</button>
+      </div>
+
+      {loading ? <div className="empty"><div className="ic">⭐</div><p>Carregando…</p></div>
+        : list.length === 0 ? <div className="empty"><div className="ic">💬</div><p>Nenhum depoimento ainda.<br />Clique em <b>＋ Novo</b> para adicionar.</p></div>
+        : (
+          <div style={{ display: "grid", gap: ".9rem" }}>
+            {list.map(t => (
+              <div key={t.id} style={{ display: "flex", alignItems: "flex-start", gap: "1rem", padding: "1rem 1.2rem", background: t.active ? "var(--offwhite)" : "var(--cream)", border: "1px solid var(--line)", borderRadius: 8, opacity: t.active ? 1 : .6 }}>
+                {/* Avatar */}
+                <div style={{ width: 52, height: 52, borderRadius: "50%", overflow: "hidden", background: "var(--sage)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: "1.1rem" }}>
+                  {t.photo
+                    ? <img src={`/depoimentos/${t.photo}`} alt={t.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    : t.name[0]}
+                </div>
+                {/* Texto */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: ".6rem", flexWrap: "wrap" }}>
+                    <b style={{ fontSize: ".95rem" }}>{t.name}</b>
+                    {t.role && <span style={{ fontSize: ".78rem", color: "var(--muted)" }}>{t.role}</span>}
+                    {!t.active && <span className="badge" style={{ background: "var(--line)", color: "var(--muted)" }}>oculto</span>}
+                    <span style={{ fontSize: ".75rem", color: "var(--muted)", marginLeft: "auto" }}>#{t.order}</span>
+                  </div>
+                  <p style={{ fontSize: ".88rem", color: "var(--muted)", marginTop: ".3rem", lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                    "{t.text}"
+                  </p>
+                </div>
+                {/* Ações */}
+                <div style={{ display: "flex", flexDirection: "column", gap: ".4rem", flexShrink: 0 }}>
+                  <button className="btn" style={{ fontSize: ".78rem", padding: ".3rem .7rem" }} onClick={() => openEdit(t)}>✏️ Editar</button>
+                  <button className="btn-ghost" style={{ fontSize: ".78rem", padding: ".3rem .7rem" }} onClick={() => toggleActive(t)}>
+                    {t.active ? "🙈 Ocultar" : "👁 Mostrar"}
+                  </button>
+                  <button className="btn-ghost" style={{ fontSize: ".78rem", padding: ".3rem .7rem", color: "var(--terracota)" }} onClick={() => remove(t)}>🗑 Excluir</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
     </div>
   </>);
 }

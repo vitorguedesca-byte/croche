@@ -1,6 +1,10 @@
 import express from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
+import multer from "multer";
+import { fileURLToPath } from "url";
+import { dirname, join, extname } from "path";
+import { mkdirSync } from "fs";
 import {
   prisma,
   UNITS,
@@ -9,6 +13,25 @@ import {
   CAPACITY_PADRAO,
   profFor,
 } from "./prismaClient.js";
+
+// pasta de fotos de depoimentos (servida estaticamente pelo Vite via frontend/public)
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DEPO_DIR = join(__dirname, "../../frontend/public/depoimentos");
+mkdirSync(DEPO_DIR, { recursive: true });
+
+const depoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, DEPO_DIR),
+    filename: (_req, file, cb) => {
+      const safe = Date.now() + extname(file.originalname).toLowerCase();
+      cb(null, safe);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  fileFilter: (_req, file, cb) => {
+    cb(null, /^image\/(jpeg|png|webp|gif)$/.test(file.mimetype));
+  },
+});
 
 const app = express();
 app.use(cors());
@@ -468,6 +491,51 @@ app.post("/api/auth/login", wrap(async (req, res) => {
 app.delete("/api/clients/:id/pin", wrap(async (req, res) => {
   await prisma.client.update({ where: { id: Number(req.params.id) }, data: { pin: null } });
   res.json({ ok: true });
+}));
+
+/* ===================== DEPOIMENTOS ===================== */
+
+// Servir fotos de depoimentos (fallback caso Vite não esteja rodando)
+app.use("/depoimentos", express.static(DEPO_DIR));
+
+// Listar depoimentos (público — usado pela landing page)
+app.get("/api/testimonials", wrap(async (_req, res) => {
+  const list = await prisma.testimonial.findMany({ orderBy: [{ order: "asc" }, { createdAt: "asc" }] });
+  res.json(list);
+}));
+
+// Criar depoimento
+app.post("/api/testimonials", wrap(async (req, res) => {
+  const { name, role = "", text, active = true, order = 0 } = req.body;
+  if (!name || !text) return res.status(400).json({ error: "name e text são obrigatórios." });
+  const t = await prisma.testimonial.create({ data: { name, role, text, active, order } });
+  res.status(201).json(t);
+}));
+
+// Atualizar depoimento
+app.patch("/api/testimonials/:id", wrap(async (req, res) => {
+  const { name, role, text, active, order } = req.body;
+  const t = await prisma.testimonial.update({
+    where: { id: Number(req.params.id) },
+    data: { ...(name !== undefined && { name }), ...(role !== undefined && { role }), ...(text !== undefined && { text }), ...(active !== undefined && { active }), ...(order !== undefined && { order }) },
+  });
+  res.json(t);
+}));
+
+// Upload de foto
+app.post("/api/testimonials/:id/photo", depoUpload.single("photo"), wrap(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "Nenhuma imagem enviada." });
+  const t = await prisma.testimonial.update({
+    where: { id: Number(req.params.id) },
+    data: { photo: req.file.filename },
+  });
+  res.json(t);
+}));
+
+// Excluir depoimento
+app.delete("/api/testimonials/:id", wrap(async (req, res) => {
+  await prisma.testimonial.delete({ where: { id: Number(req.params.id) } });
+  res.status(204).end();
 }));
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));

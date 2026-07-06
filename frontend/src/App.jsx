@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useStore } from "./store.jsx";
 import { useModal } from "./ui.jsx";
-import { Dashboard, Agenda, Marcacoes, Clientes, Recebimentos } from "./views.jsx";
+import { Dashboard, Agenda, Marcacoes, Clientes, Recebimentos, Depoimentos } from "./views.jsx";
 import { SlotForm, BookingForm, ClientForm } from "./modals.jsx";
 import ClienteApp from "./ClienteApp.jsx";
 import Config from "./Config.jsx";
@@ -17,16 +17,19 @@ const NAV = [
   { sep: "Relacionamento" },
   { view: "clientes", ic: "👩", label: "Clientes" },
   { view: "recebimentos", ic: "💰", label: "Recebimentos" },
+  { sep: "Site" },
+  { view: "depoimentos", ic: "⭐", label: "Depoimentos" },
   { sep: "Sistema" },
   { view: "config", ic: "⚙️", label: "Configurações" },
 ];
 const TITLES = {
-  dashboard: ["Painel", "Visão geral da operação"],
-  agenda: ["Agenda", "Horários e ocupação por unidade"],
-  marcacoes: ["Marcações", "Novos e alunas com acesso — confirmações e remarcações"],
-  clientes: ["Clientes", "Clientes, leads e novatos — CRM e contato direto"],
-  recebimentos: ["Recebimentos", "Visão de receita por dia, semana e mês"],
-  config: ["Configurações", "Padrões do sistema, unidades e profissionais"],
+  dashboard:    ["Painel",        "Visão geral da operação"],
+  agenda:       ["Agenda",        "Horários e ocupação por unidade"],
+  marcacoes:    ["Marcações",     "Novos e alunas com acesso — confirmações e remarcações"],
+  clientes:     ["Clientes",      "Clientes, leads e novatos — CRM e contato direto"],
+  recebimentos: ["Recebimentos",  "Visão de receita por dia, semana e mês"],
+  depoimentos:  ["Depoimentos",   "Gerencie os depoimentos exibidos no site"],
+  config:       ["Configurações", "Padrões do sistema, unidades e profissionais"],
 };
 
 export default function App() {
@@ -58,7 +61,7 @@ export default function App() {
     marcacoes: <button className="btn" onClick={() => open(<BookingForm />)}>＋ Nova marcação</button>,
     clientes: <button className="btn" onClick={() => open(<ClientForm />)}>＋ Novo cliente</button>,
   };
-  const Body = { dashboard: Dashboard, agenda: Agenda, marcacoes: Marcacoes, clientes: Clientes, recebimentos: Recebimentos, config: Config }[view];
+  const Body = { dashboard: Dashboard, agenda: Agenda, marcacoes: Marcacoes, clientes: Clientes, recebimentos: Recebimentos, depoimentos: Depoimentos, config: Config }[view];
 
   return (
     <div className="app">

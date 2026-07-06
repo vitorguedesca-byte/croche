@@ -117,27 +117,54 @@
   .sobre p{color:var(--ink);opacity:.86;margin-bottom:1.1rem;max-width:56ch}
   .sig{font-family:'Fraunces',serif;font-style:italic;font-weight:300;font-size:1.35rem;color:var(--terracota);margin-top:1rem}
 
-  /* Manifesto — faixa verde */
+  /* Manifesto — seção com altura natural; mural centralizado com fotos de tamanho fixo */
   .manifesto{background:var(--ink);color:var(--cream);position:relative;overflow:hidden}
-  /* colagem de fotos como fundo da seção (preenche 100%) */
-  .manifesto-bg{position:absolute;inset:0;z-index:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));grid-auto-rows:120px;gap:2px;overflow:hidden}
-  .manifesto-bg img{width:100%;height:100%;object-fit:cover;display:block}
-  /* camada escura sutil só para legibilidade do texto (mais escura embaixo) */
-  .manifesto::before{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;background:radial-gradient(85% 62% at 50% 42%,rgba(8,12,9,.7) 0%,rgba(8,12,9,.42) 40%,rgba(8,12,9,.14) 72%,rgba(8,12,9,.04) 100%),linear-gradient(180deg,rgba(8,12,9,.1) 0%,rgba(8,12,9,0) 40%,rgba(8,12,9,.42) 100%)}
-  .manifesto .wrap{text-shadow:0 2px 16px rgba(0,0,0,.55)}
-  .manifesto .wrap{position:relative;z-index:2}
+  /* grade de fotos: cada linha = 10vw (fixo) — não estica com a seção */
+  .manifesto-bg{
+    position:absolute;
+    top:50%;left:0;right:0;
+    transform:translateY(-50%);
+    height:calc(4 * 10vw + 9px);
+    z-index:0;
+    display:grid;
+    grid-template-columns:repeat(11,1fr);
+    grid-template-rows:repeat(4,10vw);
+    gap:3px;
+    overflow:hidden;
+  }
+  .manifesto-bg img{
+    width:100%;height:100%;
+    object-fit:cover;display:block;
+    transition:transform .6s ease, filter .6s ease;
+    filter:brightness(.88) saturate(1.05);
+  }
+  .manifesto-bg img:hover{
+    transform:scale(1.08);
+    filter:brightness(1.05) saturate(1.15);
+    z-index:1;position:relative;
+  }
+  /* overlay: mais escuro no centro (onde fica o texto) e bordas mais abertas */
+  .manifesto::before{
+    content:"";position:absolute;inset:0;z-index:1;pointer-events:none;
+    background:
+      radial-gradient(70% 55% at 50% 45%, rgba(8,12,9,.78) 0%, rgba(8,12,9,.48) 40%, rgba(8,12,9,.12) 72%, transparent 100%),
+      linear-gradient(180deg, rgba(8,12,9,.18) 0%, rgba(8,12,9,0) 35%, rgba(8,12,9,0) 65%, rgba(8,12,9,.28) 100%);
+  }
+  .manifesto .wrap{text-shadow:0 2px 18px rgba(0,0,0,.65);position:relative;z-index:2}
   .manifesto .label{color:var(--green-light)}.manifesto .label::before{background:var(--green-light)}
-  @media(max-width:760px){.manifesto-bg{grid-template-columns:repeat(auto-fill,minmax(90px,1fr));grid-auto-rows:90px}}
+  @media(max-width:760px){.manifesto-bg{grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(11,8vw);height:calc(11 * 8vw + 30px)}}
   .manifesto .idx{color:rgba(244,236,223,.75)}
-  /* compactar a seção Manifesto (ocupava muito espaço) */
-  .manifesto.block{padding:clamp(3rem,5vw,4.5rem) 0}
-  .manifesto .sec-head{margin-bottom:clamp(1.4rem,3vw,2.2rem)}
-  .manifesto .quote{margin:0 auto clamp(1.6rem,3vw,2.4rem);max-width:26ch}
-  .manifesto .quote p{font-size:clamp(1.4rem,2.8vw,2rem)}
-  .manifesto .quote .mk{margin-bottom:.6rem;font-size:2.2rem}
-  .manifesto .pilar{padding:1.5rem 1.4rem}
-  .manifesto .sec-head h2{color:#fff}
-  .manifesto .sec-head .sub{color:rgba(244,236,223,.85)}
+  /* Manifesto: altura mínima = 4 linhas de foto + espaço para o texto */
+  .manifesto.block{padding:clamp(2rem,5vw,4rem) 0;min-height:calc(4 * 10vw + 9px);display:flex;align-items:center}
+  .manifesto .wrap{padding:clamp(.4rem,1.2vw,.7rem) 0}
+  .manifesto .sec-head{margin-bottom:.4rem}
+  .manifesto .sec-head h2{color:#fff;font-size:clamp(1.4rem,2.4vw,1.9rem)}
+  .manifesto .sec-head .sub{color:rgba(244,236,223,.85);font-size:clamp(.78rem,1.3vw,.95rem)}
+  .manifesto .quote{margin:0 auto .4rem;max-width:44ch}
+  .manifesto .quote p{font-size:clamp(.95rem,1.7vw,1.25rem)}
+  .manifesto .quote .mk{margin-bottom:.12rem;font-size:1.3rem}
+  .manifesto .pilar{padding:.45rem .9rem}
+  .manifesto .pilar p{font-size:.82rem}
   .quote{text-align:center;max-width:24ch;margin:0 auto clamp(3rem,6vw,4.5rem)}
   .quote p{font-family:'Fraunces',serif;font-weight:300;font-size:clamp(1.8rem,4vw,2.9rem);font-style:italic;line-height:1.22;color:#fff}
   .quote .mk{font-family:'Fraunces',serif;font-size:3rem;color:var(--green-light);line-height:0;display:block;margin-bottom:1.4rem;opacity:.7}
@@ -198,7 +225,8 @@
   .depo .stars{color:var(--terracota);margin-bottom:1rem;letter-spacing:.18em;font-size:.85rem}
   .depo p{font-family:'Fraunces',serif;font-style:italic;font-weight:300;font-size:1.2rem;line-height:1.45;color:var(--ink);margin-bottom:1.6rem}
   .depo .who{display:flex;align-items:center;gap:.8rem;margin-top:auto;padding-top:1.2rem;border-top:1px solid var(--line-soft)}
-  .depo .av{width:42px;height:42px;border-radius:50%;background:var(--sage);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-family:'Fraunces',serif}
+  .depo .av{width:52px;height:52px;border-radius:50%;background:var(--sage);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-family:'Fraunces',serif;overflow:hidden;flex-shrink:0}
+  .depo .av img{width:100%;height:100%;object-fit:cover;object-position:top}
   .depo .who b{font-size:.92rem;color:var(--ink);display:block;font-weight:600}
   .depo .who span{font-size:.78rem;color:var(--muted)}
 
@@ -376,71 +404,52 @@
 
 <!-- MANIFESTO -->
 <section class="block manifesto" id="manifesto">
-  <!-- MURAL — fotos da pasta fotos_quadro (frontend/public/mural/) -->
+  <!-- MURAL 4×11 — fotos da pasta fotos_quadro (44 fotos, q1-q44) -->
   <div class="manifesto-bg" aria-hidden="true">
-    <img src="mural/q1.jpg" alt="" loading="lazy" />
-    <img src="mural/q14.jpg" alt="" loading="lazy" />
-    <img src="mural/q7.jpg" alt="" loading="lazy" />
-    <img src="mural/q18.jpg" alt="" loading="lazy" />
-    <img src="mural/q3.jpg" alt="" loading="lazy" />
-    <img src="mural/q11.jpg" alt="" loading="lazy" />
-    <img src="mural/q20.jpg" alt="" loading="lazy" />
-    <img src="mural/q5.jpg" alt="" loading="lazy" />
-    <img src="mural/q16.jpg" alt="" loading="lazy" />
-    <img src="mural/q9.jpg" alt="" loading="lazy" />
-    <img src="mural/q12.jpg" alt="" loading="lazy" />
-    <img src="mural/q2.jpg" alt="" loading="lazy" />
-    <img src="mural/q19.jpg" alt="" loading="lazy" />
-    <img src="mural/q6.jpg" alt="" loading="lazy" />
-    <img src="mural/q15.jpg" alt="" loading="lazy" />
-    <img src="mural/q21.jpg" alt="" loading="lazy" />
-    <img src="mural/q4.jpg" alt="" loading="lazy" />
-    <img src="mural/q13.jpg" alt="" loading="lazy" />
-    <img src="mural/q8.jpg" alt="" loading="lazy" />
-    <img src="mural/q17.jpg" alt="" loading="lazy" />
     <img src="mural/q10.jpg" alt="" loading="lazy" />
-    <img src="mural/q5.jpg" alt="" loading="lazy" />
-    <img src="mural/q20.jpg" alt="" loading="lazy" />
+    <img src="mural/q4.jpg"  alt="" loading="lazy" />
     <img src="mural/q11.jpg" alt="" loading="lazy" />
-    <img src="mural/q2.jpg" alt="" loading="lazy" />
-    <img src="mural/q17.jpg" alt="" loading="lazy" />
-    <img src="mural/q8.jpg" alt="" loading="lazy" />
-    <img src="mural/q14.jpg" alt="" loading="lazy" />
-    <img src="mural/q1.jpg" alt="" loading="lazy" />
+    <img src="mural/q34.jpg" alt="" loading="lazy" />
+    <img src="mural/q40.jpg" alt="" loading="lazy" />
     <img src="mural/q19.jpg" alt="" loading="lazy" />
-    <img src="mural/q10.jpg" alt="" loading="lazy" />
-    <img src="mural/q3.jpg" alt="" loading="lazy" />
-    <img src="mural/q16.jpg" alt="" loading="lazy" />
-    <img src="mural/q7.jpg" alt="" loading="lazy" />
-    <img src="mural/q21.jpg" alt="" loading="lazy" />
+    <img src="mural/q32.jpg" alt="" loading="lazy" />
+    <img src="mural/q27.jpg" alt="" loading="lazy" />
+    <img src="mural/q5.jpg"  alt="" loading="lazy" />
+    <img src="mural/q36.jpg" alt="" loading="lazy" />
+    <img src="mural/q24.jpg" alt="" loading="lazy" />
     <img src="mural/q12.jpg" alt="" loading="lazy" />
-    <img src="mural/q6.jpg" alt="" loading="lazy" />
-    <img src="mural/q18.jpg" alt="" loading="lazy" />
-    <img src="mural/q4.jpg" alt="" loading="lazy" />
-    <img src="mural/q15.jpg" alt="" loading="lazy" />
-    <img src="mural/q9.jpg" alt="" loading="lazy" />
+    <img src="mural/q31.jpg" alt="" loading="lazy" />
+    <img src="mural/q22.jpg" alt="" loading="lazy" />
     <img src="mural/q13.jpg" alt="" loading="lazy" />
-    <img src="mural/q13.jpg" alt="" loading="lazy" />
-    <img src="mural/q6.jpg" alt="" loading="lazy" />
+    <img src="mural/q26.jpg" alt="" loading="lazy" />
+    <img src="mural/q38.jpg" alt="" loading="lazy" />
+    <img src="mural/q39.jpg" alt="" loading="lazy" />
+    <img src="mural/q29.jpg" alt="" loading="lazy" />
+    <img src="mural/q14.jpg" alt="" loading="lazy" />
+    <img src="mural/q25.jpg" alt="" loading="lazy" />
     <img src="mural/q21.jpg" alt="" loading="lazy" />
-    <img src="mural/q9.jpg" alt="" loading="lazy" />
-    <img src="mural/q4.jpg" alt="" loading="lazy" />
-    <img src="mural/q17.jpg" alt="" loading="lazy" />
-    <img src="mural/q2.jpg" alt="" loading="lazy" />
-    <img src="mural/q15.jpg" alt="" loading="lazy" />
-    <img src="mural/q10.jpg" alt="" loading="lazy" />
-    <img src="mural/q18.jpg" alt="" loading="lazy" />
-    <img src="mural/q5.jpg" alt="" loading="lazy" />
-    <img src="mural/q12.jpg" alt="" loading="lazy" />
+    <img src="mural/q23.jpg" alt="" loading="lazy" />
+    <img src="mural/q30.jpg" alt="" loading="lazy" />
+    <img src="mural/q44.jpg" alt="" loading="lazy" />
+    <img src="mural/q1.jpg"  alt="" loading="lazy" />
     <img src="mural/q20.jpg" alt="" loading="lazy" />
-    <img src="mural/q7.jpg" alt="" loading="lazy" />
-    <img src="mural/q1.jpg" alt="" loading="lazy" />
+    <img src="mural/q17.jpg" alt="" loading="lazy" />
+    <img src="mural/q43.jpg" alt="" loading="lazy" />
+    <img src="mural/q37.jpg" alt="" loading="lazy" />
+    <img src="mural/q33.jpg" alt="" loading="lazy" />
+    <img src="mural/q42.jpg" alt="" loading="lazy" />
+    <img src="mural/q3.jpg"  alt="" loading="lazy" />
+    <img src="mural/q28.jpg" alt="" loading="lazy" />
+    <img src="mural/q6.jpg"  alt="" loading="lazy" />
+    <img src="mural/q35.jpg" alt="" loading="lazy" />
+    <img src="mural/q7.jpg"  alt="" loading="lazy" />
+    <img src="mural/q9.jpg"  alt="" loading="lazy" />
+    <img src="mural/q15.jpg" alt="" loading="lazy" />
     <img src="mural/q16.jpg" alt="" loading="lazy" />
-    <img src="mural/q8.jpg" alt="" loading="lazy" />
-    <img src="mural/q19.jpg" alt="" loading="lazy" />
-    <img src="mural/q3.jpg" alt="" loading="lazy" />
-    <img src="mural/q14.jpg" alt="" loading="lazy" />
-    <img src="mural/q11.jpg" alt="" loading="lazy" />
+    <img src="mural/q18.jpg" alt="" loading="lazy" />
+    <img src="mural/q2.jpg"  alt="" loading="lazy" />
+    <img src="mural/q8.jpg"  alt="" loading="lazy" />
+    <img src="mural/q41.jpg" alt="" loading="lazy" />
   </div>
   <div class="wrap">
     <div class="sec-head center reveal">
@@ -509,26 +518,40 @@
       <h2>+1000 vidas transformadas</h2>
       <p class="sub">Histórias reais de quem encontrou no crochê um novo respiro — e, para muitas, uma nova renda.</p>
     </div>
-    <div class="depo-grid">
-      <div class="depo reveal">
-        <div class="stars">★★★★★</div>
-        <p>Cheguei sem saber nada e hoje vendo minhas peças. As aulas da Inêz me deram técnica e confiança.</p>
-        <div class="who"><div class="av">M</div><div><b>Maria</b><span>Aluna · Ipatinga</span></div></div>
-      </div>
-      <div class="depo reveal">
-        <div class="stars">★★★★★</div>
-        <p>Mais que crochê, encontrei um lugar de paz. Saio de cada aula mais leve e acolhida.</p>
-        <div class="who"><div class="av">A</div><div><b>Ana</b><span>Aluna · Timóteo</span></div></div>
-      </div>
-      <div class="depo reveal">
-        <div class="stars">★★★★★</div>
-        <p>A Inêz tem uma paciência linda para ensinar. Recomendo de olhos fechados para qualquer iniciante.</p>
-        <div class="who"><div class="av">R</div><div><b>Rosa</b><span>Aluna · Bairro Iguaçu</span></div></div>
-      </div>
+    <div class="depo-grid" id="depo-grid">
+      <!-- preenchido via JS pelo fetch abaixo -->
+      <div class="depo" style="grid-column:1/-1;text-align:center;color:var(--muted);padding:3rem 0">Carregando depoimentos…</div>
     </div>
-    <p style="text-align:center;margin-top:1.8rem;color:var(--muted);font-size:.86rem">Depoimentos ilustrativos — substituir pelos relatos e fotos reais das alunas.</p>
   </div>
 </section>
+
+<script>
+(async () => {
+  const grid = document.getElementById("depo-grid");
+  try {
+    const list = await fetch("http://localhost:4000/api/testimonials").then(r => r.json());
+    const active = list.filter(t => t.active);
+    if (!active.length) { grid.innerHTML = ""; return; }
+    grid.innerHTML = active.map(t => {
+      const av = t.photo
+        ? `<img src="http://localhost:4000/depoimentos/${encodeURIComponent(t.photo)}" alt="${t.name}" />`
+        : `<span>${t.name[0]}</span>`;
+      return `
+        <div class="depo reveal">
+          <div class="stars">★★★★★</div>
+          <p>"${t.text}"</p>
+          <div class="who">
+            <div class="av">${av}</div>
+            <div><b>${t.name}</b><span>${t.role || ""}</span></div>
+          </div>
+        </div>`;
+    }).join("");
+  } catch {
+    // fallback silencioso se backend não estiver online
+    grid.innerHTML = "";
+  }
+})();
+</script>
 
 <!-- PERGUNTAS FREQUENTES -->
 <section class="block faq-section" id="faq">
