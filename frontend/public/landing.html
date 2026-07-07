@@ -546,6 +546,9 @@
           </div>
         </div>`;
     }).join("");
+    // Os cards são injetados depois que o IntersectionObserver global já rodou,
+    // então não recebem a classe .in e ficariam invisíveis (opacity:0). Revela manualmente.
+    requestAnimationFrame(() => grid.querySelectorAll(".reveal").forEach((el) => el.classList.add("in")));
   } catch {
     // fallback silencioso se backend não estiver online
     grid.innerHTML = "";
