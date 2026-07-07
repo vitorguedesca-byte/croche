@@ -16,7 +16,7 @@ import {
 
 // pasta de fotos de depoimentos (servida estaticamente pelo Vite via frontend/public)
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEPO_DIR = join(__dirname, "../../frontend/public/depoimentos");
+const DEPO_DIR = process.env.DEPO_DIR || join(__dirname, "../../frontend/public/depoimentos");
 mkdirSync(DEPO_DIR, { recursive: true });
 
 const depoUpload = multer({
