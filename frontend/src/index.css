@@ -144,6 +144,24 @@
   .cfg-preview{margin-top:.9rem;font-size:.85rem;color:var(--ink);background:var(--cream);border-radius:10px;padding:.6rem .85rem}
   .cfg-warn{margin-top:.9rem;font-size:.85rem;color:var(--danger);background:rgba(194,84,63,.08);border-radius:10px;padding:.6rem .85rem}
   .cfg-save{display:flex;gap:.7rem;align-items:center;margin-top:.4rem}
+  /* Horário de funcionamento por dia */
+  .hf-list{display:flex;flex-direction:column;gap:.5rem}
+  .hf-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.55rem .8rem;border:1px solid var(--line);border-radius:10px;background:#fff}
+  .hf-row.off{background:var(--offwhite)}
+  .hf-toggle{display:flex;align-items:center;gap:.6rem;cursor:pointer;min-width:130px}
+  .hf-toggle input{width:18px;height:18px;accent-color:var(--green-deep);cursor:pointer}
+  .hf-day{font-weight:600;font-size:.9rem;color:var(--ink)}
+  .hf-row.off .hf-day{color:var(--muted)}
+  .hf-times{display:flex;align-items:center;gap:.5rem}
+  .hf-times input{padding:.4rem .55rem;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink)}
+  .hf-sep{font-size:.82rem;color:var(--muted)}
+  .hf-closed{font-size:.85rem;color:var(--muted);font-style:italic}
+  @media(max-width:520px){.hf-row{flex-direction:column;align-items:flex-start;gap:.5rem}}
+  /* Chips de dia da semana / tipo de repetição */
+  .wd-chips{display:flex;flex-wrap:wrap;gap:.4rem}
+  .wd-chip{padding:.4rem .8rem;border:1px solid var(--line);border-radius:999px;background:#fff;color:var(--ink);font-size:.85rem;font-weight:600;cursor:pointer;transition:.12s}
+  .wd-chip:hover{border-color:var(--green-deep)}
+  .wd-chip.on{background:var(--green-deep);color:#fff;border-color:var(--green-deep)}
 
   /* Agenda calendar */
   .agenda{display:grid;grid-template-columns:repeat(var(--cols,5),1fr);gap:.6rem}

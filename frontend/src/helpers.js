@@ -51,6 +51,69 @@ export function waLink(phone, msg) {
 }
 export const capitalize = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
+/* ---- dias da semana / horário de funcionamento ---- */
+// Segunda = 0 … Domingo = 6 (mesma ordem usada na agenda)
+export const WEEKDAYS_PT = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"];
+export const WEEKDAYS_SHORT = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+export const dowMon = (iso) => (new Date(iso + "T00:00").getDay() + 6) % 7;
+
+// horário de funcionamento: 7 posições (Seg..Dom), cada uma { open, from, to }
+export const DEFAULT_HORARIO = WEEKDAYS_PT.map((_, i) => ({ open: i < 6, from: "09:00", to: "17:00" }));
+// Formato compacto guardado no banco: array de 7 posições (Seg..Dom),
+// cada uma "HH:MM-HH:MM" (aberto) ou 0 (fechado). Ex.: ["09:00-17:00",...,0]
+export const serializeHorario = (days) =>
+  JSON.stringify(days.map((d) => (d.open ? `${d.from}-${d.to}` : 0)));
+export function parseHorario(raw) {
+  if (Array.isArray(raw)) return { legacy: "", days: normalizeHorario(raw) };
+  if (typeof raw === "string" && raw.trim().startsWith("[")) {
+    try { return { legacy: "", days: normalizeHorario(JSON.parse(raw)) }; } catch { /* legado */ }
+  }
+  return { legacy: typeof raw === "string" ? raw : "", days: DEFAULT_HORARIO.map((d) => ({ ...d })) };
+}
+function normalizeHorario(arr) {
+  return DEFAULT_HORARIO.map((def, i) => {
+    const d = arr[i];
+    if (typeof d === "string" && d.includes("-")) { const [from, to] = d.split("-"); return { open: true, from: from || "09:00", to: to || "17:00" }; }
+    if (d && typeof d === "object") return { open: d.open !== false, from: d.from || "09:00", to: d.to || "17:00" };
+    if (d === 0 || d === false || d == null) return { open: false, from: def.from, to: def.to };
+    return { ...def };
+  });
+}
+// texto amigável agrupando dias seguidos com o mesmo horário (ex.: "Seg a Sex 09:00–17:00")
+export function horarioToText(days) {
+  const parts = [];
+  let i = 0;
+  while (i < 7) {
+    if (!days[i].open) { i++; continue; }
+    let j = i;
+    while (j + 1 < 7 && days[j + 1].open && days[j + 1].from === days[i].from && days[j + 1].to === days[i].to) j++;
+    const range = i === j ? WEEKDAYS_SHORT[i] : `${WEEKDAYS_SHORT[i]} a ${WEEKDAYS_SHORT[j]}`;
+    parts.push(`${range} ${days[i].from}–${days[i].to}`);
+    i = j + 1;
+  }
+  return parts.join(" · ") || "Fechado";
+}
+
+/* ---- cálculo de datas para criação/replicação de horários ---- */
+// repetição semanal: próximas `count` semanas a partir de startISO (inclui a data base)
+export const datesWeekly = (startISO, count) =>
+  Array.from({ length: Math.max(1, count) }, (_, i) => addDays(startISO, i * 7));
+// repetição diária: `count` dias seguidos a partir de startISO (inclui a data base)
+export const datesDaily = (startISO, count) =>
+  Array.from({ length: Math.max(1, count) }, (_, i) => addDays(startISO, i));
+// dias específicos da semana por `weeks` semanas; `weekdays` = conjunto de índices Seg..Dom
+export function datesForWeekdays(startISO, weekdays, weeks) {
+  const ws = weekStart(startISO);
+  const out = [];
+  for (let w = 0; w < Math.max(1, weeks); w++) {
+    for (const wd of weekdays) {
+      const d = addDays(ws, w * 7 + wd);
+      if (d >= startISO) out.push(d); // não cria datas antes da base
+    }
+  }
+  return [...new Set(out)].sort();
+}
+
 /* ---- derivados do estado (data = {clients, slots, bookings}) ---- */
 export const bookingsActive = (data) => data.bookings.filter((b) => b.status !== "cancelada");
 export const slotById = (data, id) => data.slots.find((s) => s.id === id);

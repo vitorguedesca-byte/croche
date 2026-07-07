@@ -7,6 +7,7 @@ import {
   UNITS, PROFS, TAG_OPTIONS, STATUS, VALOR_PADRAO, CAPACITY_PADRAO,
   unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize,
   slotById, slotBookings, slotCapacity, slotWaitlist, clientAttendance,
+  WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays,
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
@@ -59,7 +60,7 @@ export function DayModal({ date }) {
 /* ======================= Detalhe da turma ======================= */
 export function SlotDetail({ slotId }) {
   const { data, run } = useStore();
-  const { open } = useModal();
+  const { open, close } = useModal();
   const slot = slotById(data, slotId);
   const [capInput, setCapInput] = useState(slot ? slotCapacity(slot) : CAPACITY_PADRAO);
   if (!slot) return <Modal title="Turma"><p>Horário não encontrado.</p></Modal>;
@@ -72,6 +73,14 @@ export function SlotDetail({ slotId }) {
   const saveCap = () => {
     if (capInput < occ) return alert(`A capacidade (${capInput}) não pode ser menor que as ${occ} reservas já feitas.`);
     run(api.updateSlotCapacity(slotId, capInput));
+  };
+  const del = async () => {
+    const msg = occ > 0
+      ? `Este horário tem ${occ} reserva(s). Excluir o horário também remove essas reservas. Continuar?`
+      : "Excluir este horário da agenda?";
+    if (!window.confirm(msg)) return;
+    await run(api.deleteSlot(slotId));
+    close();
   };
 
   return (
@@ -86,6 +95,10 @@ export function SlotDetail({ slotId }) {
       <div className="info-line"><b>Unidade</b><span><span className="chip" style={{ borderColor: uc, color: uc }}>{slot.unit}</span></span></div>
       <div className="info-line"><b>Data / hora</b><span>{fmtDateLong(slot.date)} · {slot.time}</span></div>
       <div className="info-line"><b>Profissional</b><span>{slot.prof || "—"}</span></div>
+      <div style={{ display: "flex", gap: ".5rem", marginTop: ".8rem" }}>
+        <button className="btn sec sm" onClick={() => open(<ReplicateSlotForm slot={slot} />)}>🔁 Replicar</button>
+        <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir horário</button>
+      </div>
       <div className="field" style={{ marginTop: "1rem" }}>
         <label>Capacidade da turma — máx. de pessoas por aula</label>
         <input type="number" min="1" value={capInput} onChange={(e) => setCapInput(parseInt(e.target.value, 10) || 1)} />
@@ -313,6 +326,17 @@ export function BookingForm({ slotId }) {
   );
 }
 
+/* ======================= Seletor de dias da semana ======================= */
+function WeekdayChips({ selected, onToggle }) {
+  return (
+    <div className="wd-chips">
+      {WEEKDAYS_SHORT.map((lbl, i) => (
+        <button key={lbl} type="button" className={`wd-chip ${selected.has(i) ? "on" : ""}`} onClick={() => onToggle(i)}>{lbl}</button>
+      ))}
+    </div>
+  );
+}
+
 /* ======================= Novo horário (com recorrência) ======================= */
 export function SlotForm({ presetDate }) {
   const { data, run } = useStore();
@@ -323,35 +347,102 @@ export function SlotForm({ presetDate }) {
   const [date, setDate] = useState(presetDate || todayISO());
   const [time, setTime] = useState("09:00");
   const [capacity, setCapacity] = useState(meta.capacidadePadrao);
-  const [weeks, setWeeks] = useState(1);
+  const [weekdays, setWeekdays] = useState(() => new Set());
+  const [weeks, setWeeks] = useState(4);
+  const toggleWd = (i) => setWeekdays((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
+
+  const dates = weekdays.size ? datesForWeekdays(date, [...weekdays], weeks) : [date];
   const save = async () => {
-    const r = await run(api.createSlot({ unit, prof, date, time, capacity, weeks }));
+    const r = await run(api.createSlot({ unit, prof, time, capacity, dates }));
     close();
-    if (weeks > 1 && r) setTimeout(() => alert(`${r.created.length} horário(s) criado(s).`), 50);
+    if (r && r.created.length !== 1) setTimeout(() => alert(`${r.created.length} horário(s) criado(s).`), 50);
   };
   return (
     <Modal title="Novo horário na agenda" footer={<>
       <button className="btn ghost" onClick={close}>Cancelar</button>
-      <button className="btn" onClick={save}>Adicionar</button>
+      <button className="btn" onClick={save} disabled={!dates.length}>Adicionar{dates.length > 1 ? ` (${dates.length})` : ""}</button>
     </>}>
       <div className="row2">
         <div className="field"><label>Unidade</label><select value={unit} onChange={(e) => setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
         <div className="field"><label>Profissional</label><select value={prof} onChange={(e) => setProf(e.target.value)}>{meta.profs.map((p) => <option key={p}>{p}</option>)}</select></div>
       </div>
       <div className="row2">
-        <div className="field"><label>Data</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
+        <div className="field"><label>{weekdays.size ? "Semana inicial (a partir de)" : "Data"}</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
         <div className="field"><label>Hora</label><input value={time} onChange={(e) => setTime(e.target.value)} /></div>
       </div>
       <div className="field"><label>Capacidade da turma (vagas)</label><input type="number" min="1" value={capacity} onChange={(e) => setCapacity(parseInt(e.target.value, 10) || 1)} /></div>
-      <div className="field"><label>Repetir semanalmente</label>
-        <select value={weeks} onChange={(e) => setWeeks(parseInt(e.target.value, 10))}>
-          <option value={1}>Não repetir (só este dia)</option>
-          <option value={2}>Por 2 semanas</option>
-          <option value={4}>Por 4 semanas</option>
-          <option value={8}>Por 8 semanas</option>
-          <option value={12}>Por 12 semanas</option>
-        </select>
-        <div className="help" style={{ marginTop: ".5rem" }}>Cria o mesmo horário (mesmo dia da semana) repetido. Ex.: toda terça às 14h por 8 semanas. Horários já existentes são ignorados.</div>
+      <div className="field">
+        <label>Repetir nos dias da semana <span className="help" style={{ fontWeight: 400 }}>(deixe em branco para criar só na data)</span></label>
+        <WeekdayChips selected={weekdays} onToggle={toggleWd} />
+        {weekdays.size > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: ".6rem", marginTop: ".7rem" }}>
+            <span style={{ fontSize: ".85rem", color: "var(--muted)" }}>por</span>
+            <input type="number" min="1" max="52" value={weeks} onChange={(e) => setWeeks(Math.max(1, parseInt(e.target.value, 10) || 1))} style={{ width: 70 }} />
+            <span style={{ fontSize: ".85rem", color: "var(--muted)" }}>semana(s)</span>
+          </div>
+        )}
+        <div className="help" style={{ marginTop: ".5rem" }}>
+          {weekdays.size
+            ? `Serão criados ${dates.length} horário(s) às ${time}. Horários já existentes são ignorados.`
+            : "Ex.: marque Seg e Qua por 4 semanas para criar 8 horários. Horários já existentes são ignorados."}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ======================= Replicar horário existente ======================= */
+export function ReplicateSlotForm({ slot }) {
+  const { run } = useStore();
+  const { open } = useModal();
+  const [mode, setMode] = useState("weekly"); // weekly | daily | weekdays
+  const [count, setCount] = useState(4);
+  const [weekdays, setWeekdays] = useState(() => new Set([dowMon(slot.date)]));
+  const toggleWd = (i) => setWeekdays((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
+
+  let dates = [];
+  if (mode === "weekly") dates = Array.from({ length: count }, (_, i) => addDays(slot.date, (i + 1) * 7));
+  else if (mode === "daily") dates = Array.from({ length: count }, (_, i) => addDays(slot.date, i + 1));
+  else dates = datesForWeekdays(slot.date, [...weekdays], count).filter((d) => d !== slot.date);
+
+  const save = async () => {
+    const r = await run(api.createSlot({ unit: slot.unit, prof: slot.prof, time: slot.time, capacity: slot.capacity, dates }));
+    open(<SlotDetail slotId={slot.id} />);
+    setTimeout(() => alert(`${r?.created?.length ?? 0} horário(s) criado(s).`), 50);
+  };
+
+  const modes = [["weekly", "Semanal"], ["daily", "Diária"], ["weekdays", "Dias específicos"]];
+  return (
+    <Modal title="Replicar horário" footer={<>
+      <button className="btn ghost" onClick={() => open(<SlotDetail slotId={slot.id} />)}>← Voltar</button>
+      <button className="btn" onClick={save} disabled={!dates.length}>Criar {dates.length} horário(s)</button>
+    </>}>
+      <div className="cfg-preview" style={{ marginTop: 0, marginBottom: "1rem" }}>
+        Replicando <b>{slot.unit}</b> · {fmtDateLong(slot.date)} · <b>{slot.time}</b> (capacidade {slot.capacity})
+      </div>
+      <div className="field">
+        <label>Tipo de repetição</label>
+        <div className="wd-chips">
+          {modes.map(([m, lbl]) => (
+            <button key={m} type="button" className={`wd-chip ${mode === m ? "on" : ""}`} onClick={() => setMode(m)}>{lbl}</button>
+          ))}
+        </div>
+      </div>
+      {mode === "weekdays" && (
+        <div className="field">
+          <label>Em quais dias da semana</label>
+          <WeekdayChips selected={weekdays} onToggle={toggleWd} />
+        </div>
+      )}
+      <div className="field">
+        <label>{mode === "weekly" ? "Por quantas semanas" : mode === "daily" ? "Por quantos dias" : "Por quantas semanas"}</label>
+        <input type="number" min="1" max="52" value={count} onChange={(e) => setCount(Math.max(1, parseInt(e.target.value, 10) || 1))} style={{ width: 90 }} />
+      </div>
+      <div className="help">
+        {mode === "weekly" && `Cria nas próximas ${count} semana(s), no mesmo dia e hora.`}
+        {mode === "daily" && `Cria nos próximos ${count} dia(s), no mesmo horário.`}
+        {mode === "weekdays" && `Cria nos dias marcados durante ${count} semana(s).`}
+        {" "}O horário original não é duplicado; horários já existentes são ignorados.
       </div>
     </Modal>
   );

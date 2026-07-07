@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { useStore } from "./store.jsx";
 import { api } from "./api.js";
+import { WEEKDAYS_PT, parseHorario, horarioToText, serializeHorario } from "./helpers.js";
 
 export default function Config() {
   const { data, run } = useStore();
   const m = data.meta;
   const [valor, setValor] = useState(m.valorPadrao);
   const [cap, setCap] = useState(m.capacidadePadrao);
-  const [horario, setHorario] = useState(m.horarioFunc || "");
+  const [hours, setHours] = useState(() => parseHorario(m.horarioFunc).days);
+  const setDay = (i, patch) => setHours((hs) => hs.map((d, j) => (j === i ? { ...d, ...patch } : d)));
   const [units, setUnits] = useState((m.units || []).join("\n"));
   const [profs, setProfs] = useState((m.profs || []).join("\n"));
   const [pixKey, setPixKey] = useState(m.pixKey || "");
@@ -18,7 +20,7 @@ export default function Config() {
     const payload = {
       valorPadrao: Number(valor) || m.valorPadrao,
       capacidadePadrao: Math.max(1, parseInt(cap, 10) || m.capacidadePadrao),
-      horarioFunc: horario,
+      horarioFunc: serializeHorario(hours),
       pixKey: pixKey.trim(),
       pixName: pixName.trim(),
       units: units.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
@@ -72,10 +74,27 @@ export default function Config() {
         </div>
       </div>
 
-      {/* HORÁRIO */}
+      {/* HORÁRIO POR DIA */}
       <div className="panel cfg-sec">
-        <div className="cfg-h"><span className="cfg-ic">🕒</span><div><h2>Horário de funcionamento</h2><p>Exibido para as alunas na página pública e no portal.</p></div></div>
-        <div className="field"><input value={horario} onChange={(e) => setHorario(e.target.value)} placeholder="Seg a Sáb, 09h às 17h" /></div>
+        <div className="cfg-h"><span className="cfg-ic">🕒</span><div><h2>Horário de funcionamento</h2><p>Defina o horário de cada dia da semana. Exibido para as alunas.</p></div></div>
+        <div className="hf-list">
+          {WEEKDAYS_PT.map((dia, i) => (
+            <div key={dia} className={`hf-row ${hours[i].open ? "" : "off"}`}>
+              <label className="hf-toggle">
+                <input type="checkbox" checked={hours[i].open} onChange={(e) => setDay(i, { open: e.target.checked })} />
+                <span className="hf-day">{dia}</span>
+              </label>
+              {hours[i].open ? (
+                <div className="hf-times">
+                  <input type="time" value={hours[i].from} onChange={(e) => setDay(i, { from: e.target.value })} />
+                  <span className="hf-sep">às</span>
+                  <input type="time" value={hours[i].to} onChange={(e) => setDay(i, { to: e.target.value })} />
+                </div>
+              ) : <span className="hf-closed">Fechado</span>}
+            </div>
+          ))}
+        </div>
+        <div className="cfg-preview" style={{ marginTop: ".9rem" }}>🕒 Alunas verão: <b>{horarioToText(hours)}</b></div>
       </div>
 
       <div className="cfg-save">

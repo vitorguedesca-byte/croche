@@ -105,13 +105,23 @@ app.get(
 app.post(
   "/api/slots",
   wrap(async (req, res) => {
-    const { unit, prof, date, time, capacity, weeks } = req.body;
-    if (!unit || !date || !time) return res.status(400).json({ error: "unit, date e time são obrigatórios" });
+    const { unit, prof, date, time, capacity, weeks, dates } = req.body;
+    if (!unit || !time) return res.status(400).json({ error: "unit e time são obrigatórios" });
     const cap = Math.max(1, parseInt(capacity, 10) || SETTINGS.capacidadePadrao);
-    const n = Math.max(1, parseInt(weeks, 10) || 1);
+    // O frontend pode mandar uma lista de datas já calculada (criação com dias
+    // da semana / replicação). Como fallback, usa date + weeks (repetição semanal).
+    let targets = [];
+    if (Array.isArray(dates) && dates.length) {
+      targets = dates;
+    } else {
+      if (!date) return res.status(400).json({ error: "date é obrigatório" });
+      const n = Math.max(1, parseInt(weeks, 10) || 1);
+      for (let i = 0; i < n; i++) targets.push(addDays(date, i * 7));
+    }
+    // normaliza: só 'YYYY-MM-DD' válidas, sem duplicatas, em ordem
+    targets = [...new Set(targets.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)))].sort();
     const created = [];
-    for (let i = 0; i < n; i++) {
-      const d = addDays(date, i * 7);
+    for (const d of targets) {
       const existing = await prisma.slot.findFirst({ where: { date: d, time, unit } });
       if (existing) continue; // evita duplicado
       const slot = await prisma.slot.create({

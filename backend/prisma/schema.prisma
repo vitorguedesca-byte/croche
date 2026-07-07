@@ -91,7 +91,7 @@ model Settings {
   capacidadePadrao Int    @default(4)
   units            String @default("[\"Ipatinga\",\"Timóteo\"]") @db.VarChar(1000) // JSON
   profs            String @default("[\"Inêz\",\"Equipe FQC\"]") @db.VarChar(1000) // JSON
-  horarioFunc      String @default("Seg a Sáb, 09h às 17h") @db.VarChar(255)
+  horarioFunc      String @default("Seg a Sáb, 09h às 17h") @db.VarChar(1000) // texto legado OU JSON com horário por dia da semana
   pixKey           String @default("") @db.VarChar(255)
   pixName          String @default("") @db.VarChar(255)
 }
