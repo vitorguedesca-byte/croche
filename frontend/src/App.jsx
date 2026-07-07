@@ -5,7 +5,7 @@ import { Dashboard, Agenda, Marcacoes, Clientes, Recebimentos, Depoimentos } fro
 import { SlotForm, BookingForm, ClientForm } from "./modals.jsx";
 import ClienteApp from "./ClienteApp.jsx";
 import Config from "./Config.jsx";
-import { exportBookingsCsv, downloadBackup } from "./exports.js";
+import { exportBookingsCsv } from "./exports.js";
 import ClientPortal from "./ClientPortal.jsx";
 import FirstClassBooking from "./FirstClassBooking.jsx";
 
@@ -78,7 +78,6 @@ export default function App() {
           Backend MySQL + Prisma · React
           <button onClick={() => setMode("cliente")}>👁 Ver como cliente</button>
           <button onClick={() => exportBookingsCsv(data)}>⬇ Exportar marcações (CSV)</button>
-          <button onClick={() => downloadBackup(data)}>💾 Backup completo (JSON)</button>
         </div>
       </aside>
 
