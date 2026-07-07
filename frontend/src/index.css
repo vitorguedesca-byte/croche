@@ -15,7 +15,8 @@
 
   /* App shell */
   .app{display:flex;min-height:100vh}
-  .sidebar{width:248px;background:var(--green-deep);color:#fff;padding:1.4rem 1rem;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto}
+  .sidebar{width:248px;background:var(--green-deep);color:#fff;padding:1.4rem 1rem;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}
+  .sidebar::-webkit-scrollbar{width:0;height:0;display:none}
   .sidebar .brand{display:flex;align-items:center;gap:.6rem;padding:.3rem .5rem 1.3rem}
   .sidebar .brand img{height:46px;background:#fff;border-radius:10px;padding:4px}
   .sidebar .brand b{font-family:'Fraunces',serif;font-size:1.05rem;line-height:1.1}
