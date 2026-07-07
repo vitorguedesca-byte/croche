@@ -45,6 +45,11 @@
   .btn.sm{padding:.4rem .7rem;font-size:.8rem;border-radius:8px}
   .btn.danger{background:var(--danger)}.btn.danger:hover{background:#a8412f}
   .btn.wa{background:#25D366}.btn.wa:hover{background:#1eb558}
+  /* Botão fantasma isolado (usado no gerenciador de depoimentos) */
+  .btn-ghost{display:inline-flex;align-items:center;gap:.5rem;background:transparent;color:var(--muted);font-weight:600;font-size:.9rem;padding:.5rem .9rem;border-radius:10px;border:1px solid var(--line);cursor:pointer;transition:.15s}
+  .btn-ghost:hover{background:#fff;color:var(--ink);border-color:var(--muted)}
+  /* Aviso de confirmação inline (ex.: "Salvo!") */
+  .toast-inline{background:rgba(63,163,77,.12);color:var(--green-deep);border:1px solid rgba(63,163,77,.35);border-radius:10px;padding:.6rem .9rem;font-size:.88rem;font-weight:600;margin-bottom:1rem}
 
   /* Cards / grid */
   .grid{display:grid;gap:1rem}
@@ -256,6 +261,10 @@
   .field label{display:block;font-size:.82rem;font-weight:700;color:var(--brown);margin-bottom:.35rem}
   .field input,.field select,.field textarea{width:100%;padding:.65rem .8rem;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
   .field textarea{resize:vertical;min-height:70px}
+  /* Formulário de depoimentos (labels em bloco + inputs de largura total) */
+  .form-label{display:block;font-size:.82rem;font-weight:700;color:var(--brown);margin-bottom:.35rem}
+  .form-input{width:100%;padding:.65rem .8rem;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
+  .form-input:focus{outline:none;border-color:var(--green-deep)}
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}
   .info-line{display:flex;justify-content:space-between;padding:.5rem 0;border-bottom:1px dashed var(--line);font-size:.92rem}
   .info-line b{color:var(--brown)}
