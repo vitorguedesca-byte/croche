@@ -14,7 +14,7 @@ import {
   profFor,
 } from "./prismaClient.js";
 import { coraConfigured, createInvoice, getInvoice } from "./cora.js";
-import { waConfigured, waVerify, sendWaText, parseIncoming } from "./wa.js";
+import { waConfigured, waVerify, sendWaText, parseIncoming, normalizePhone } from "./wa.js";
 
 // pasta de fotos de depoimentos (servida estaticamente pelo Vite via frontend/public)
 const __dirname = dirname(fileURLToPath(import.meta.url));
