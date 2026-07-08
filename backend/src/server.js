@@ -14,6 +14,7 @@ import {
   profFor,
 } from "./prismaClient.js";
 import { coraConfigured, createInvoice, getInvoice } from "./cora.js";
+import { waConfigured, waVerify, sendWaText, parseIncoming } from "./wa.js";
 
 // pasta de fotos de depoimentos (servida estaticamente pelo Vite via frontend/public)
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -351,6 +352,36 @@ app.post(
     res.json({ ok: true });
   })
 );
+
+/* ---------- WHATSAPP (Cloud API) ---------- */
+// Verificação do webhook (a Meta chama com GET ao registrar a URL)
+app.get("/api/wa/webhook", (req, res) => {
+  const challenge = waVerify(req.query["hub.mode"], req.query["hub.verify_token"], req.query["hub.challenge"]);
+  if (challenge) return res.status(200).send(challenge);
+  res.sendStatus(403);
+});
+
+// Recebe mensagens. Por enquanto responde com uma saudação (prova de ciclo).
+const waSeen = new Set(); // dedupe simples de message ids (a Meta reenvia)
+app.post("/api/wa/webhook", async (req, res) => {
+  res.sendStatus(200); // ACK imediato — a Meta exige resposta rápida
+  try {
+    const msg = parseIncoming(req.body);
+    if (!msg || waSeen.has(msg.id)) return;
+    waSeen.add(msg.id);
+    if (waSeen.size > 2000) waSeen.clear();
+    if (!waConfigured()) return;
+    const primeiro = msg.name ? " " + msg.name.split(" ")[0] : "";
+    await sendWaText(
+      msg.from,
+      `Olá${primeiro}! 💚 Aqui é o assistente da *Fios que Curam*. ` +
+        `Recebi sua mensagem: "${msg.text}". Em breve vou te ajudar a agendar sua aula por aqui!`
+    );
+    console.log(`[wa] respondido para ${msg.from}`);
+  } catch (e) {
+    console.error("[wa webhook]", e.message, e.body || "");
+  }
+});
 
 /* ---------- CLIENTS ---------- */
 app.post(
