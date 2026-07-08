@@ -46,11 +46,20 @@ function graph(method, path, body) {
   });
 }
 
+// Normaliza número brasileiro: a Meta às vezes entrega o wa_id SEM o 9º dígito
+// (ex.: 553199979436). Para enviar, o WhatsApp espera com o 9 (5531999979436).
+export function normalizePhone(to) {
+  const d = String(to || "").replace(/\D/g, "");
+  // 55 (país) + DDD (2) + 8 dígitos = falta o 9 do celular → insere
+  if (d.startsWith("55") && d.length === 12) return d.slice(0, 4) + "9" + d.slice(4);
+  return d;
+}
+
 // Envia uma mensagem de texto simples para um número (formato internacional, só dígitos).
 export function sendWaText(to, text) {
   return graph("POST", `/${PHONE_ID}/messages`, {
     messaging_product: "whatsapp",
-    to,
+    to: normalizePhone(to),
     type: "text",
     text: { body: text, preview_url: false },
   });

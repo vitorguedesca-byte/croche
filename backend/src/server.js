@@ -370,6 +370,7 @@ app.post("/api/wa/webhook", async (req, res) => {
     if (!msg || waSeen.has(msg.id)) return;
     waSeen.add(msg.id);
     if (waSeen.size > 2000) waSeen.clear();
+    console.log(`[wa] recebido de ${msg.from} (${msg.name}): "${msg.text}"`);
     if (!waConfigured()) return;
     const primeiro = msg.name ? " " + msg.name.split(" ")[0] : "";
     await sendWaText(
