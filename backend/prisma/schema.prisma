@@ -85,6 +85,16 @@ model Testimonial {
   createdAt DateTime @default(now())
 }
 
+model WaConversation {
+  phone     String   @id @db.VarChar(20) // wa_id normalizado
+  step      String   @default("start") @db.VarChar(20) // start|unit|slot|name|done
+  unit      String?  @db.VarChar(60)
+  slotId    Int? // horário escolhido (aguardando nome)
+  offered   String   @default("[]") @db.VarChar(500) // JSON dos slotIds oferecidos
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
 model Settings {
   id               Int    @id @default(1)
   valorPadrao      Float  @default(80)

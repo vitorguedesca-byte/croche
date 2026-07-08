@@ -361,7 +361,7 @@ app.get("/api/wa/webhook", (req, res) => {
   res.sendStatus(403);
 });
 
-// Recebe mensagens. Por enquanto responde com uma saudação (prova de ciclo).
+// Recebe mensagens e conduz o fluxo de agendamento.
 const waSeen = new Set(); // dedupe simples de message ids (a Meta reenvia)
 app.post("/api/wa/webhook", async (req, res) => {
   res.sendStatus(200); // ACK imediato — a Meta exige resposta rápida
@@ -372,17 +372,120 @@ app.post("/api/wa/webhook", async (req, res) => {
     if (waSeen.size > 2000) waSeen.clear();
     console.log(`[wa] recebido de ${msg.from} (${msg.name}): "${msg.text}"`);
     if (!waConfigured()) return;
-    const primeiro = msg.name ? " " + msg.name.split(" ")[0] : "";
-    await sendWaText(
-      msg.from,
-      `Olá${primeiro}! 💚 Aqui é o assistente da *Fios que Curam*. ` +
-        `Recebi sua mensagem: "${msg.text}". Em breve vou te ajudar a agendar sua aula por aqui!`
-    );
-    console.log(`[wa] respondido para ${msg.from}`);
+    await handleWaMessage(msg);
   } catch (e) {
     console.error("[wa webhook]", e.message, e.body || "");
   }
 });
+
+/* ---------- Fluxo de agendamento pelo WhatsApp ---------- */
+const DOW_PT = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+function fmtSlotBR(s) {
+  const d = new Date(s.date + "T00:00");
+  const [, m, day] = s.date.split("-");
+  return `${DOW_PT[d.getDay()]} ${day}/${m} às ${s.time}`;
+}
+async function waSend(to, text) {
+  try { await sendWaText(to, text); console.log(`[wa] respondido para ${to}`); }
+  catch (e) { console.error("[wa send]", e.message, e.body || ""); }
+}
+const unitsMenu = () => SETTINGS.units.map((u, i) => `${i + 1}️⃣ ${u}`).join("\n");
+function parseUnitChoice(body) {
+  const us = SETTINGS.units;
+  const n = parseInt(body, 10);
+  if (n >= 1 && n <= us.length) return us[n - 1];
+  const low = body.toLowerCase();
+  return us.find((u) => low.includes(u.toLowerCase())) || null;
+}
+async function waAvailableSlots(unit) {
+  const t = todayISO();
+  const [slots, bookings] = await Promise.all([
+    prisma.slot.findMany(),
+    prisma.booking.findMany({ where: { status: { not: "cancelada" } } }),
+  ]);
+  const occ = {};
+  bookings.forEach((b) => { occ[b.slotId] = (occ[b.slotId] || 0) + 1; });
+  return slots
+    .filter((s) => s.date >= t && s.unit === unit && (occ[s.id] || 0) < s.capacity)
+    .map((s) => ({ ...s, vagas: s.capacity - (occ[s.id] || 0) }))
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+}
+function bookingConfirmText(name, slot) {
+  return `Prontinho, ${name.split(" ")[0]}! 💚\n\nSua aula está *reservada*:\n📍 ${slot.unit}\n🗓️ ${fmtSlotBR(slot)}\n💰 R$ ${SETTINGS.valorPadrao}\n\nStatus: *aguardando pagamento*. Em breve enviaremos os detalhes para confirmar. Até logo! 🧶`;
+}
+async function createWaBooking(name, phone, slot) {
+  await prisma.booking.create({
+    data: {
+      clientName: name, phone: phone || "", unit: slot.unit,
+      date: slot.date, time: slot.time, prof: slot.prof, slotId: slot.id,
+      status: "aguardando", value: SETTINGS.valorPadrao,
+    },
+  });
+  await ensureClient(name, phone, slot.unit, ["Em marcação"], null);
+}
+
+async function handleWaMessage(msg) {
+  const phone = normalizePhone(msg.from);
+  const body = (msg.text || "").trim();
+  const low = body.toLowerCase();
+  let conv = await prisma.waConversation.findUnique({ where: { phone } });
+  if (!conv) conv = await prisma.waConversation.create({ data: { phone } });
+
+  const setConv = (data) => prisma.waConversation.update({ where: { phone }, data });
+  const start = async (prefix = "") => {
+    await setConv({ step: "unit", unit: null, slotId: null, offered: "[]" });
+    const nome = msg.name ? " " + msg.name.split(" ")[0] : "";
+    await waSend(msg.from, `${prefix}Olá${nome}! 💚 Sou o assistente da *Fios que Curam*. Vamos agendar sua aula?\n\nEscolha a unidade:\n${unitsMenu()}\n\n(responda com o número)`);
+  };
+
+  // Saudação / recomeço
+  if (["menu", "oi", "olá", "ola", "agendar", "começar", "comecar", "início", "inicio"].includes(low) || conv.step === "start" || conv.step === "done") {
+    return start();
+  }
+
+  if (conv.step === "unit") {
+    const unit = parseUnitChoice(body);
+    if (!unit) return waSend(msg.from, `Não entendi 🤔. Escolha a unidade pelo número:\n${unitsMenu()}`);
+    const slots = await waAvailableSlots(unit);
+    if (!slots.length) return waSend(msg.from, `No momento não há horários livres em *${unit}*. 😢\nQuer ver a outra unidade?\n${unitsMenu()}`);
+    const top = slots.slice(0, 8);
+    const list = top.map((s, i) => `*${i + 1})* ${fmtSlotBR(s)} — ${s.vagas} vaga(s)`).join("\n");
+    await setConv({ step: "slot", unit, offered: JSON.stringify(top.map((s) => s.id)) });
+    return waSend(msg.from, `📅 Horários livres em *${unit}*:\n\n${list}\n\nResponda com o *número* do horário que você quer.`);
+  }
+
+  if (conv.step === "slot") {
+    const offered = JSON.parse(conv.offered || "[]");
+    const n = parseInt(body, 10);
+    if (!n || n < 1 || n > offered.length) return waSend(msg.from, `Responda com o número do horário (1 a ${offered.length}), ou digite *menu* para recomeçar.`);
+    const slot = await prisma.slot.findUnique({ where: { id: offered[n - 1] } });
+    if (!slot) return start("Esse horário não está mais disponível. ");
+    const occ = await prisma.booking.count({ where: { slotId: slot.id, status: { not: "cancelada" } } });
+    if (occ >= slot.capacity) return waSend(msg.from, `Ops, esse horário acabou de lotar. 😔 Digite *menu* para escolher outro.`);
+    const client = await prisma.client.findFirst({ where: { phone } });
+    if (client && client.name) {
+      await createWaBooking(client.name, phone, slot);
+      await setConv({ step: "done", slotId: null });
+      return waSend(msg.from, bookingConfirmText(client.name, slot));
+    }
+    await setConv({ step: "name", slotId: slot.id });
+    return waSend(msg.from, `Perfeito! Para confirmar, me diz seu *nome completo*, por favor. 💚`);
+  }
+
+  if (conv.step === "name") {
+    const name = body.replace(/\s+/g, " ").trim();
+    if (name.length < 2) return waSend(msg.from, `Me diz seu nome completo, por favor. 💚`);
+    const slot = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
+    if (!slot) return start("Esse horário expirou. ");
+    const occ = await prisma.booking.count({ where: { slotId: slot.id, status: { not: "cancelada" } } });
+    if (occ >= slot.capacity) return start("Esse horário lotou enquanto conversávamos. Vamos de novo. ");
+    await createWaBooking(name, phone, slot);
+    await setConv({ step: "done", slotId: null });
+    return waSend(msg.from, bookingConfirmText(name, slot));
+  }
+
+  return start();
+}
 
 /* ---------- CLIENTS ---------- */
 app.post(
