@@ -169,10 +169,21 @@ export function ManageBooking({ booking }) {
   const [attendance, setAttendance] = useState(booking.attendance || "");
   const [date, setDate] = useState(booking.date);
   const [time, setTime] = useState(booking.time);
+  const [pix, setPix] = useState(booking.pixCode || "");
+  const [genBusy, setGenBusy] = useState(false);
   const slotExists = !!slotById(data, booking.slotId);
   const save = async () => {
     await run(api.updateBooking(booking.id, { status, attendance, date, time }));
     close();
+  };
+  const genInvoice = async () => {
+    setGenBusy(true);
+    try {
+      const r = await api.createInvoice(booking.id, {});
+      setPix(r.pixCode || "");
+      if (!r.pixCode) alert("Cobrança criada na Cora, mas o código Pix não veio no formato esperado — preciso ajustar o parser com o retorno real (teste em stage).");
+    } catch (e) { alert("Erro ao gerar cobrança: " + e.message); }
+    setGenBusy(false);
   };
   return (
     <Modal title="Gerir marcação" footer={<>
@@ -190,6 +201,25 @@ export function ManageBooking({ booking }) {
       <div className="info-line"><b>Aula</b><span>{fmtDateLong(booking.date)} · {booking.time}</span></div>
       <div className="info-line"><b>Valor</b><span>{money(booking.value)}</span></div>
       <div className="info-line"><b>Pagamento</b><span>{booking.paid ? `Pago (${booking.paymentMethod})` : "Pendente"}</span></div>
+
+      {!booking.paid && (
+        <div className="field" style={{ marginTop: ".9rem" }}>
+          {pix ? (
+            <>
+              <label>Pix da reserva (copia-e-cola)</label>
+              <textarea readOnly value={pix} rows={3} style={{ resize: "vertical", fontSize: ".8rem" }} onFocus={(e) => e.target.select()} />
+              <div style={{ display: "flex", gap: ".5rem", marginTop: ".5rem", flexWrap: "wrap" }}>
+                <button className="btn sec sm" onClick={() => navigator.clipboard?.writeText(pix)}>📋 Copiar Pix</button>
+                <button className="btn wa sm" onClick={() => openWa(booking.phone, `Olá ${booking.clientName}! 💚 Para confirmar sua reserva de ${fmtDate(booking.date)} às ${booking.time}, é só pagar o Pix abaixo:\n\n${pix}`)}><WaIcon /> Enviar no WhatsApp</button>
+              </div>
+              <div className="help" style={{ marginTop: ".4rem" }}>Quando a Cora confirmar o pagamento, a reserva vira <b>Confirmada</b> automaticamente.</div>
+            </>
+          ) : (
+            <button className="btn terra sm" onClick={genInvoice} disabled={genBusy}>{genBusy ? "Gerando…" : "💠 Gerar cobrança Pix (Cora)"}</button>
+          )}
+        </div>
+      )}
+
       <div className="row2" style={{ marginTop: "1rem" }}>
         <div className="field"><label>Alterar status</label>
           <select value={status} onChange={(e) => setStatus(e.target.value)}>

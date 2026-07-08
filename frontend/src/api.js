@@ -23,6 +23,7 @@ export const api = {
   createBooking: (data) => req("POST", "/api/bookings", data),
   updateBooking: (id, data) => req("PATCH", `/api/bookings/${id}`, data),
   payBooking: (id, data) => req("POST", `/api/bookings/${id}/pay`, data),
+  createInvoice: (id, data) => req("POST", `/api/bookings/${id}/invoice`, data),
 
   createClient: (data) => req("POST", "/api/clients", data),
   updateClient: (id, data) => req("PATCH", `/api/clients/${id}`, data),

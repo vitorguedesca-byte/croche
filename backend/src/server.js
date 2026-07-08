@@ -13,6 +13,7 @@ import {
   CAPACITY_PADRAO,
   profFor,
 } from "./prismaClient.js";
+import { coraConfigured, createInvoice, getInvoice } from "./cora.js";
 
 // pasta de fotos de depoimentos (servida estaticamente pelo Vite via frontend/public)
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -265,6 +266,89 @@ app.post(
       },
     });
     res.json(booking);
+  })
+);
+
+/* ---------- COBRANÇA VIA CORA (Pix com confirmação automática) ---------- */
+// Extração defensiva do retorno da Cora — os nomes exatos dos campos precisam
+// ser confirmados no primeiro teste em stage; por isso cobrimos várias formas.
+const extractPix = (inv) =>
+  inv?.pix?.emv || inv?.pix?.qr_code || inv?.payment?.pix?.emv ||
+  inv?.qr_code?.emv || (typeof inv?.qr_code === "string" ? inv.qr_code : null) || inv?.emv || null;
+const extractBoletoUrl = (inv) =>
+  inv?.payment_options?.bank_slip?.url || inv?.bank_slip?.url || inv?.pdf || inv?.url || inv?.link || null;
+const isPaidStatus = (s) => ["PAID", "SETTLED", "PAYED", "CONFIRMED", "RECEIVED"].includes(String(s || "").toUpperCase());
+async function clientCpfByName(name) {
+  if (!name) return "";
+  const c = await prisma.client.findFirst({ where: { name } });
+  return (c?.cpf || "").replace(/\D/g, "");
+}
+
+// Gera (ou reaproveita) a cobrança Pix de uma reserva
+app.post(
+  "/api/bookings/:id/invoice",
+  wrap(async (req, res) => {
+    if (!coraConfigured()) return res.status(400).json({ error: "Cora não configurada no servidor (falta certificado + client_id)." });
+    const id = Number(req.params.id);
+    const booking = await prisma.booking.findUnique({ where: { id } });
+    if (!booking) return res.status(404).json({ error: "Marcação não encontrada" });
+    if (booking.coraInvoiceId) {
+      return res.json({ invoiceId: booking.coraInvoiceId, pixCode: booking.pixCode, boletoUrl: booking.boletoUrl, reused: true });
+    }
+    const cpf = (req.body.cpf || "").replace(/\D/g, "") || (await clientCpfByName(booking.clientName));
+    if (!cpf) return res.status(400).json({ error: "CPF do pagador é obrigatório. Cadastre o CPF da aluna antes de gerar a cobrança." });
+    const amountCents = Math.round((booking.value || SETTINGS.valorPadrao) * 100);
+    const inv = await createInvoice({
+      code: `fqc-booking-${id}`,
+      name: req.body.name || booking.clientName,
+      cpf,
+      email: req.body.email || undefined,
+      amountCents,
+      dueDate: req.body.dueDate || addDays(todayISO(), 2),
+      description: `Reserva de aula — ${booking.unit} · ${booking.date} ${booking.time}`,
+    });
+    const invoiceId = inv?.id || inv?.invoice_id || null;
+    const pixCode = extractPix(inv);
+    const boletoUrl = extractBoletoUrl(inv);
+    await prisma.booking.update({
+      where: { id },
+      data: {
+        coraInvoiceId: invoiceId ? String(invoiceId) : booking.coraInvoiceId,
+        pixCode: pixCode || booking.pixCode,
+        boletoUrl: boletoUrl || booking.boletoUrl,
+      },
+    });
+    res.json({ invoiceId, pixCode, boletoUrl });
+  })
+);
+
+// Webhook da Cora — apenas um GATILHO. A verdade vem de getInvoice (chamada mTLS
+// autenticada à Cora), então um webhook forjado não confirma nada sozinho.
+app.post(
+  "/api/cora/webhook",
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const invoiceId = b?.resource?.id || b?.invoice?.id || b?.data?.id || b?.id || b?.invoice_id || null;
+    const code = b?.resource?.code || b?.invoice?.code || b?.code || null;
+    if (coraConfigured() && invoiceId) {
+      const inv = await getInvoice(invoiceId);
+      if (isPaidStatus(inv?.status)) {
+        const realId = String(inv?.id || invoiceId);
+        let booking = await prisma.booking.findFirst({ where: { coraInvoiceId: realId } });
+        if (!booking && code) {
+          const m = String(code).match(/^fqc-booking-(\d+)$/);
+          if (m) booking = await prisma.booking.findUnique({ where: { id: Number(m[1]) } });
+        }
+        if (booking && !booking.paid) {
+          await prisma.booking.update({
+            where: { id: booking.id },
+            data: { paid: true, status: "confirmada", paymentMethod: "Pix", paymentDate: todayISO() },
+          });
+          console.log(`[cora] pagamento confirmado — reserva ${booking.id}`);
+        }
+      }
+    }
+    res.json({ ok: true });
   })
 );
 
