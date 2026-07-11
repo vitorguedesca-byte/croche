@@ -65,6 +65,38 @@ export function sendWaText(to, text) {
   });
 }
 
+// Botões de resposta (até 3). buttons = [{ id, title }]. title máx 20 chars.
+export function sendWaButtons(to, body, buttons) {
+  return graph("POST", `/${PHONE_ID}/messages`, {
+    messaging_product: "whatsapp",
+    to: normalizePhone(to),
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: body },
+      action: { buttons: buttons.slice(0, 3).map((b) => ({ type: "reply", reply: { id: b.id, title: b.title.slice(0, 20) } })) },
+    },
+  });
+}
+
+// Lista tocável (até 10 itens). rows = [{ id, title, description }]. title máx 24, description máx 72.
+export function sendWaList(to, body, buttonText, rows, header) {
+  return graph("POST", `/${PHONE_ID}/messages`, {
+    messaging_product: "whatsapp",
+    to: normalizePhone(to),
+    type: "interactive",
+    interactive: {
+      type: "list",
+      ...(header ? { header: { type: "text", text: header.slice(0, 60) } } : {}),
+      body: { text: body },
+      action: {
+        button: buttonText.slice(0, 20),
+        sections: [{ rows: rows.slice(0, 10).map((r) => ({ id: r.id, title: r.title.slice(0, 24), description: (r.description || "").slice(0, 72) })) }],
+      },
+    },
+  });
+}
+
 // Extrai a primeira mensagem recebida de um payload de webhook do WhatsApp.
 export function parseIncoming(body) {
   try {
@@ -72,13 +104,15 @@ export function parseIncoming(body) {
     const msg = value?.messages?.[0];
     if (!msg) return null; // pode ser um evento de status de entrega, ignoramos
     const name = value?.contacts?.[0]?.profile?.name || "";
+    const inter = msg.interactive;
+    const replyId = inter?.button_reply?.id || inter?.list_reply?.id || msg.button?.payload || "";
     const text =
       msg.text?.body ||
+      inter?.button_reply?.title ||
+      inter?.list_reply?.title ||
       msg.button?.text ||
-      msg.interactive?.button_reply?.title ||
-      msg.interactive?.list_reply?.title ||
       "";
-    return { id: msg.id, from: msg.from, name, text, type: msg.type };
+    return { id: msg.id, from: msg.from, name, text, replyId, type: msg.type };
   } catch {
     return null;
   }

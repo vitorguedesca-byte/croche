@@ -14,7 +14,7 @@ import {
   profFor,
 } from "./prismaClient.js";
 import { coraConfigured, createInvoice, getInvoice } from "./cora.js";
-import { waConfigured, waVerify, sendWaText, parseIncoming, normalizePhone } from "./wa.js";
+import { waConfigured, waVerify, sendWaText, sendWaButtons, sendWaList, parseIncoming, normalizePhone } from "./wa.js";
 
 // pasta de fotos de depoimentos (servida estaticamente pelo Vite via frontend/public)
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -389,6 +389,20 @@ async function waSend(to, text) {
   try { await sendWaText(to, text); console.log(`[wa] respondido para ${to}`); }
   catch (e) { console.error("[wa send]", e.message, e.body || ""); }
 }
+async function waButtons(to, body, buttons) {
+  try { await sendWaButtons(to, body, buttons); console.log(`[wa] botões para ${to}`); }
+  catch (e) { console.error("[wa send]", e.message, e.body || ""); }
+}
+async function waList(to, body, buttonText, rows) {
+  try { await sendWaList(to, body, buttonText, rows); console.log(`[wa] lista para ${to}`); }
+  catch (e) { console.error("[wa send]", e.message, e.body || ""); }
+}
+// menu de unidades: botões se couber (≤3), senão lista
+async function sendUnitMenu(to, body) {
+  const us = SETTINGS.units;
+  if (us.length <= 3) return waButtons(to, body, us.map((u) => ({ id: "unit:" + u, title: u })));
+  return waList(to, body, "Escolher unidade", us.map((u) => ({ id: "unit:" + u, title: u })));
+}
 const unitsMenu = () => SETTINGS.units.map((u, i) => `${i + 1}️⃣ ${u}`).join("\n");
 function parseUnitChoice(body) {
   const us = SETTINGS.units;
@@ -435,7 +449,17 @@ async function handleWaMessage(msg) {
   const start = async (prefix = "") => {
     await setConv({ step: "unit", unit: null, slotId: null, offered: "[]" });
     const nome = msg.name ? " " + msg.name.split(" ")[0] : "";
-    await waSend(msg.from, `${prefix}Olá${nome}! 💚 Sou o assistente da *Fios que Curam*. Vamos agendar sua aula?\n\nEscolha a unidade:\n${unitsMenu()}\n\n(responda com o número)`);
+    await sendUnitMenu(msg.from, `${prefix}Olá${nome}! 💚 Sou o assistente da *Fios que Curam*. Vamos agendar sua aula? Escolha a unidade:`);
+  };
+
+  // envia a lista tocável de horários de uma unidade
+  const enviarHorarios = async (unit) => {
+    const slots = await waAvailableSlots(unit);
+    if (!slots.length) { await setConv({ step: "unit" }); return sendUnitMenu(msg.from, `No momento não há horários livres em *${unit}*. 😢 Quer ver a outra unidade?`); }
+    const top = slots.slice(0, 10);
+    const rows = top.map((s) => ({ id: "slot:" + s.id, title: fmtSlotBR(s), description: `${s.vagas} vaga(s)` }));
+    await setConv({ step: "slot", unit, offered: JSON.stringify(top.map((s) => s.id)) });
+    return waList(msg.from, `📅 Toque para escolher um horário em *${unit}*:`, "Ver horários", rows);
   };
 
   // Saudação / recomeço
@@ -444,21 +468,18 @@ async function handleWaMessage(msg) {
   }
 
   if (conv.step === "unit") {
-    const unit = parseUnitChoice(body);
-    if (!unit) return waSend(msg.from, `Não entendi 🤔. Escolha a unidade pelo número:\n${unitsMenu()}`);
-    const slots = await waAvailableSlots(unit);
-    if (!slots.length) return waSend(msg.from, `No momento não há horários livres em *${unit}*. 😢\nQuer ver a outra unidade?\n${unitsMenu()}`);
-    const top = slots.slice(0, 8);
-    const list = top.map((s, i) => `*${i + 1})* ${fmtSlotBR(s)} — ${s.vagas} vaga(s)`).join("\n");
-    await setConv({ step: "slot", unit, offered: JSON.stringify(top.map((s) => s.id)) });
-    return waSend(msg.from, `📅 Horários livres em *${unit}*:\n\n${list}\n\nResponda com o *número* do horário que você quer.`);
+    const unit = msg.replyId?.startsWith("unit:") ? msg.replyId.slice(5) : parseUnitChoice(body);
+    if (!unit || !SETTINGS.units.includes(unit)) return sendUnitMenu(msg.from, `Não entendi 🤔. Escolha a unidade:`);
+    return enviarHorarios(unit);
   }
 
   if (conv.step === "slot") {
     const offered = JSON.parse(conv.offered || "[]");
-    const n = parseInt(body, 10);
-    if (!n || n < 1 || n > offered.length) return waSend(msg.from, `Responda com o número do horário (1 a ${offered.length}), ou digite *menu* para recomeçar.`);
-    const slot = await prisma.slot.findUnique({ where: { id: offered[n - 1] } });
+    let slotId = null;
+    if (msg.replyId?.startsWith("slot:")) slotId = parseInt(msg.replyId.slice(5), 10);
+    else { const n = parseInt(body, 10); if (n >= 1 && n <= offered.length) slotId = offered[n - 1]; }
+    if (!slotId) return waSend(msg.from, `Toque em *Ver horários* e escolha um da lista, ou digite *menu* para recomeçar.`);
+    const slot = await prisma.slot.findUnique({ where: { id: slotId } });
     if (!slot) return start("Esse horário não está mais disponível. ");
     const occ = await prisma.booking.count({ where: { slotId: slot.id, status: { not: "cancelada" } } });
     if (occ >= slot.capacity) return waSend(msg.from, `Ops, esse horário acabou de lotar. 😔 Digite *menu* para escolher outro.`);
