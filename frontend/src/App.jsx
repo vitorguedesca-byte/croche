@@ -8,6 +8,7 @@ import Config from "./Config.jsx";
 import { exportBookingsCsv } from "./exports.js";
 import ClientPortal from "./ClientPortal.jsx";
 import FirstClassBooking from "./FirstClassBooking.jsx";
+import { Notifications } from "./Notifications.jsx";
 
 const NAV = [
   { sep: "Operação" },
@@ -36,6 +37,7 @@ export default function App() {
   const { data, error } = useStore();
   const { open } = useModal();
   const [view, setView] = useState("dashboard");
+  const [viewParams, setViewParams] = useState({});
   const [mode, setMode] = useState(() => {
     const h = window.location.hash;
     return h === "#agendar" ? "cliente" : h === "#portal" ? "portal" : "admin";
@@ -55,7 +57,7 @@ export default function App() {
   if (error) return <div className="empty" style={{ padding: "4rem" }}><div className="ic">🔌</div><p>Não consegui falar com o servidor.<br />Confira se o backend está rodando em <b>http://localhost:4000</b>.</p><p className="cli-sub">{error}</p></div>;
   if (!data) return <div className="empty" style={{ padding: "4rem" }}><div className="ic">🧶</div><p>Carregando…</p></div>;
 
-  const go = (v) => { setView(v); setSidebarOpen(false); };
+  const go = (v, params = {}) => { setView(v); setViewParams(params); setSidebarOpen(false); };
   const actions = {
     agenda: <button className="btn" onClick={() => open(<SlotForm />)}>＋ Novo horário</button>,
     marcacoes: <button className="btn" onClick={() => open(<BookingForm />)}>＋ Nova marcação</button>,
@@ -87,10 +89,10 @@ export default function App() {
             <button className="menu-btn" onClick={() => setSidebarOpen((o) => !o)}>☰</button>
             <div><h1>{TITLES[view][0]}</h1><div className="sub">{TITLES[view][1]}</div></div>
           </div>
-          <div>{actions[view]}</div>
+          <div className="topbar-right">{actions[view]}<Notifications go={go} /></div>
         </div>
         <div className="content">
-          <Body go={go} />
+          <Body go={go} params={viewParams} />
         </div>
       </div>
     </div>

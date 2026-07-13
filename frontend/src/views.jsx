@@ -111,9 +111,9 @@ export function Dashboard({ go }) {
     </div>
 
     <div className="people-strip">
-      <button className="people-card" onClick={() => go("clientes")}><span className="pc-ic">👩</span><span className="pc-n">{groups.cliente}</span><span className="pc-l">Clientes</span></button>
-      <button className="people-card" onClick={() => go("clientes")}><span className="pc-ic">🌱</span><span className="pc-n">{groups.lead}</span><span className="pc-l">Leads a converter</span></button>
-      <button className="people-card" onClick={() => go("clientes")}><span className="pc-ic">✨</span><span className="pc-n">{groups.novato}</span><span className="pc-l">Novatos(as)</span></button>
+      <button className="people-card" onClick={() => go("clientes", { tab: "cliente" })}><span className="pc-ic">👩</span><span className="pc-n">{groups.cliente}</span><span className="pc-l">Clientes</span></button>
+      <button className="people-card" onClick={() => go("clientes", { tab: "lead" })}><span className="pc-ic">🌱</span><span className="pc-n">{groups.lead}</span><span className="pc-l">Leads a converter</span></button>
+      <button className="people-card" onClick={() => go("clientes", { tab: "novato" })}><span className="pc-ic">✨</span><span className="pc-n">{groups.novato}</span><span className="pc-l">Novatos(as)</span></button>
     </div>
 
     <Alerts open={open} />
@@ -352,10 +352,11 @@ export function Marcacoes() {
 /* ============================= CLIENTES ============================= */
 const initials = (n) => (n || "").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 
-export function Clientes() {
+export function Clientes({ params }) {
   const { data, run } = useStore();
   const { open } = useModal();
-  const [tab, setTab] = useState("cliente"); // cliente | lead | novato
+  const [tab, setTab] = useState(params?.tab || "cliente"); // cliente | lead | novato
+  useEffect(() => { if (params?.tab) setTab(params.tab); }, [params?.tab]);
   const [search, setSearch] = useState("");
   const [unitF, setUnitF] = useState("Todas");
   const [sortBy, setSortBy] = useState("nome");
