@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import multer from "multer";
 import { fileURLToPath } from "url";
 import { dirname, join, extname } from "path";
@@ -38,6 +39,35 @@ const depoUpload = multer({
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+/* ===================== AUTENTICAÇÃO DO PAINEL ADMIN =====================
+   Protege as rotas do painel. Só quem tem conta (usuário+senha) acessa.
+   Rotas públicas (site, portal do aluno, webhook) ficam liberadas. */
+const adminTokens = new Set(); // tokens de sessão válidos (em memória)
+const genToken = () => crypto.randomBytes(24).toString("hex");
+// rotas que NÃO exigem login (site público, portal do aluno, webhooks)
+const PUBLIC_API = [
+  ["GET", /^\/api\/health$/],
+  ["GET", /^\/api\/admin\/exists$/],
+  ["POST", /^\/api\/admin\/(login|setup)$/],
+  ["GET", /^\/api\/slots\/available$/],
+  ["POST", /^\/api\/bookings$/],
+  ["POST", /^\/api\/bookings\/\d+\/(invoice|pay)$/],
+  ["PATCH", /^\/api\/bookings\/\d+$/],
+  ["POST", /^\/api\/auth\/(check|set-pin|login)$/],
+  [null, /^\/api\/portal\//],
+  ["GET", /^\/api\/testimonials$/],
+  ["GET", /^\/api\/settings$/],
+  [null, /^\/api\/wa\/webhook$/],
+];
+const isPublicApi = (req) => PUBLIC_API.some(([m, re]) => (!m || m === req.method) && re.test(req.path));
+app.use((req, res, next) => {
+  if (!req.path.startsWith("/api/")) return next(); // arquivos estáticos etc.
+  if (isPublicApi(req)) return next();
+  const tok = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+  if (tok && adminTokens.has(tok)) return next();
+  return res.status(401).json({ error: "Acesso restrito ao painel. Faça login." });
+});
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 function addDays(iso, n) {
@@ -176,15 +206,19 @@ app.get(
 );
 
 /* ---------- BOOKINGS ---------- */
-async function ensureClient(name, phone, unit, tags, cpf) {
+async function ensureClient(name, phone, unit, tags, cpf, email, firstClass) {
   const found = await prisma.client.findFirst({ where: { name } });
   if (found) {
-    // se o cliente já existe mas ainda não tem CPF, completa com o informado
-    if (cpf && !found.cpf) return prisma.client.update({ where: { id: found.id }, data: { cpf: onlyDigits(cpf) } });
+    // se o cliente já existe mas ainda não tem CPF/email, completa com o informado
+    const patch = {};
+    if (cpf && !found.cpf) patch.cpf = onlyDigits(cpf);
+    if (email && !found.email) patch.email = email.trim();
+    if (firstClass && !found.firstClass) patch.firstClass = true;
+    if (Object.keys(patch).length) return prisma.client.update({ where: { id: found.id }, data: patch });
     return found;
   }
   return prisma.client.create({
-    data: { name, phone: phone || "", cpf: onlyDigits(cpf) || null, unit, tags: JSON.stringify(tags || ["Em marcação"]) },
+    data: { name, phone: phone || "", email: (email || "").trim() || null, cpf: onlyDigits(cpf) || null, unit, tags: JSON.stringify(tags || ["Em marcação"]), firstClass: !!firstClass },
   });
 }
 
@@ -223,7 +257,7 @@ app.post(
         value: Number(b.value) || SETTINGS.valorPadrao,
       },
     });
-    await ensureClient(b.clientName, b.phone, unit, ["Em marcação"], b.cpf);
+    await ensureClient(b.clientName, b.phone, unit, ["Em marcação"], b.cpf, b.email, b.firstClass);
     res.json(booking);
   })
 );
@@ -239,6 +273,14 @@ app.patch(
       if (req.body[k] !== undefined) data[k] = req.body[k];
     if (req.body.value !== undefined) data.value = Number(req.body.value) || cur.value;
     if (req.body.paid !== undefined) data.paid = !!req.body.paid;
+    // mover a reserva para outro horário (usado no fluxo da 1ª aula)
+    if (req.body.slotId !== undefined && Number(req.body.slotId) !== cur.slotId) {
+      const ns = await prisma.slot.findUnique({ where: { id: Number(req.body.slotId) } });
+      if (!ns) return res.status(404).json({ error: "Horário não encontrado" });
+      const occ = await occupancy(ns.id);
+      if (occ >= ns.capacity) return res.status(409).json({ error: "Turma lotada." });
+      data.slotId = ns.id; data.date = ns.date; data.time = ns.time; data.unit = ns.unit; data.prof = ns.prof;
+    }
     // presente → conclui a aula
     if (data.attendance === "presente" && (data.status || cur.status) !== "cancelada") data.status = "concluida";
     // confirmada sem pagamento → marca paga
@@ -512,11 +554,11 @@ async function handleWaMessage(msg) {
 app.post(
   "/api/clients",
   wrap(async (req, res) => {
-    const { name, phone, cpf, unit, tags, notes, birthday, level, firstClass } = req.body;
+    const { name, phone, email, cpf, unit, tags, notes, birthday, level, firstClass } = req.body;
     if (!name) return res.status(400).json({ error: "name é obrigatório" });
     const client = await prisma.client.create({
       data: {
-        name, phone: phone || "", cpf: onlyDigits(cpf) || null, unit: unit || UNITS[0], tags: JSON.stringify(tags || []), notes: notes || "",
+        name, phone: phone || "", email: (email || "").trim() || null, cpf: onlyDigits(cpf) || null, unit: unit || UNITS[0], tags: JSON.stringify(tags || []), notes: notes || "",
         birthday: birthday || null, level: level || null, firstClass: !!firstClass,
       },
     });
@@ -528,10 +570,11 @@ app.patch(
   "/api/clients/:id",
   wrap(async (req, res) => {
     const id = Number(req.params.id);
-    const { name, phone, cpf, unit, tags, notes, birthday, level, firstClass } = req.body;
+    const { name, phone, email, cpf, unit, tags, notes, birthday, level, firstClass } = req.body;
     const data = {};
     if (name !== undefined) data.name = name;
     if (phone !== undefined) data.phone = phone;
+    if (email !== undefined) data.email = (email || "").trim() || null;
     if (cpf !== undefined) data.cpf = onlyDigits(cpf) || null;
     if (unit !== undefined) data.unit = unit;
     if (tags !== undefined) data.tags = JSON.stringify(tags);
@@ -694,6 +737,60 @@ app.put(
     res.json(SETTINGS);
   })
 );
+
+/* ---------- AUTH DO PAINEL ADMIN (usuário + senha) ---------- */
+
+// Existe algum administrador cadastrado? (define se mostra "criar 1º acesso" ou "login")
+app.get("/api/admin/exists", wrap(async (_req, res) => {
+  const n = await prisma.adminUser.count();
+  res.json({ exists: n > 0 });
+}));
+
+// Criar o PRIMEIRO administrador (só funciona enquanto não houver nenhum)
+app.post("/api/admin/setup", wrap(async (req, res) => {
+  if ((await prisma.adminUser.count()) > 0) return res.status(409).json({ error: "Já existe um administrador. Use o login." });
+  const username = String(req.body.username || "").trim().toLowerCase();
+  const password = String(req.body.password || "");
+  if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
+  if (password.length < 6) return res.status(400).json({ error: "Senha deve ter ao menos 6 caracteres." });
+  await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10) } });
+  const token = genToken(); adminTokens.add(token);
+  res.json({ ok: true, token, username });
+}));
+
+// Login
+app.post("/api/admin/login", wrap(async (req, res) => {
+  const username = String(req.body.username || "").trim().toLowerCase();
+  const password = String(req.body.password || "");
+  const user = await prisma.adminUser.findFirst({ where: { username } });
+  if (!user || !(await bcrypt.compare(password, user.pass))) return res.status(401).json({ error: "Usuário ou senha inválidos." });
+  const token = genToken(); adminTokens.add(token);
+  res.json({ ok: true, token, username });
+}));
+
+// Logout (invalida o token da sessão)
+app.post("/api/admin/logout", wrap(async (req, res) => {
+  const tok = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+  adminTokens.delete(tok);
+  res.json({ ok: true });
+}));
+
+// Adicionar novo usuário do painel (protegido — só admin logado) — equipe da Inêz
+app.post("/api/admin/users", wrap(async (req, res) => {
+  const username = String(req.body.username || "").trim().toLowerCase();
+  const password = String(req.body.password || "");
+  if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
+  if (password.length < 6) return res.status(400).json({ error: "Senha deve ter ao menos 6 caracteres." });
+  if (await prisma.adminUser.findFirst({ where: { username } })) return res.status(409).json({ error: "Usuário já existe." });
+  await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10) } });
+  res.json({ ok: true, username });
+}));
+
+// Listar usuários do painel (protegido)
+app.get("/api/admin/users", wrap(async (_req, res) => {
+  const list = await prisma.adminUser.findMany({ select: { id: true, username: true, createdAt: true }, orderBy: { createdAt: "asc" } });
+  res.json(list);
+}));
 
 /* ---------- AUTH (PIN de 4 dígitos) ---------- */
 

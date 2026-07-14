@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { api, getToken, setToken } from "./api.js";
+import AdminLogin from "./AdminLogin.jsx";
 import { useStore } from "./store.jsx";
 import { useModal } from "./ui.jsx";
 import { Dashboard, Agenda, Marcacoes, Clientes, Recebimentos, Depoimentos } from "./views.jsx";
@@ -16,7 +18,7 @@ const NAV = [
   { view: "agenda", ic: "📅", label: "Agenda" },
   { view: "marcacoes", ic: "📝", label: "Marcações" },
   { sep: "Relacionamento" },
-  { view: "clientes", ic: "👩", label: "Clientes" },
+  { view: "clientes", ic: "👩", label: "Alunos" },
   { view: "recebimentos", ic: "💰", label: "Recebimentos" },
   { sep: "Site" },
   { view: "depoimentos", ic: "⭐", label: "Depoimentos" },
@@ -27,7 +29,7 @@ const TITLES = {
   dashboard:    ["Painel",        "Visão geral da operação"],
   agenda:       ["Agenda",        "Horários e ocupação por unidade"],
   marcacoes:    ["Marcações",     "Novos e alunas com acesso — confirmações e remarcações"],
-  clientes:     ["Clientes",      "Clientes, leads e novatos — CRM e contato direto"],
+  clientes:     ["Alunos",        "Alunos, leads e novatos — CRM e contato direto"],
   recebimentos: ["Recebimentos",  "Visão de receita por dia, semana e mês"],
   depoimentos:  ["Depoimentos",   "Gerencie os depoimentos exibidos no site"],
   config:       ["Configurações", "Padrões do sistema, unidades e profissionais"],
@@ -54,6 +56,11 @@ export default function App() {
   if (mode === "portal") return <ClientPortal onBack={fromSite ? () => window.history.back() : () => setMode("admin")} fromSite={fromSite} />;
   if (mode === "cliente") return <FirstClassBooking onBack={fromSite ? () => window.history.back() : () => setMode("admin")} fromSite={fromSite} />;
 
+  // Painel admin exige login (usuário + senha)
+  if (mode === "admin" && !getToken()) return <AdminLogin />;
+  // Token inválido/expirado (ex.: servidor reiniciado) → volta ao login
+  if (mode === "admin" && error && /restrito|faça login/i.test(error)) { setToken(null); return <AdminLogin />; }
+
   if (error) return <div className="empty" style={{ padding: "4rem" }}><div className="ic">🔌</div><p>Não consegui falar com o servidor.<br />Confira se o backend está rodando em <b>http://localhost:4000</b>.</p><p className="cli-sub">{error}</p></div>;
   if (!data) return <div className="empty" style={{ padding: "4rem" }}><div className="ic">🧶</div><p>Carregando…</p></div>;
 
@@ -61,7 +68,7 @@ export default function App() {
   const actions = {
     agenda: <button className="btn" onClick={() => open(<SlotForm />)}>＋ Novo horário</button>,
     marcacoes: <button className="btn" onClick={() => open(<BookingForm />)}>＋ Nova marcação</button>,
-    clientes: <button className="btn" onClick={() => open(<ClientForm />)}>＋ Novo cliente</button>,
+    clientes: <button className="btn" onClick={() => open(<ClientForm />)}>＋ Novo aluno</button>,
   };
   const Body = { dashboard: Dashboard, agenda: Agenda, marcacoes: Marcacoes, clientes: Clientes, recebimentos: Recebimentos, depoimentos: Depoimentos, config: Config }[view];
 
@@ -78,8 +85,9 @@ export default function App() {
         <div className="spacer" />
         <div className="side-foot">
           Backend MySQL + Prisma · React
-          <button onClick={() => setMode("cliente")}>👁 Ver como cliente</button>
+          <button onClick={() => setMode("cliente")}>👁 Ver como aluno</button>
           <button onClick={() => exportBookingsCsv(data)}>⬇ Exportar marcações (CSV)</button>
+          <button onClick={async () => { try { await api.admin.logout(); } catch {} setToken(null); window.location.reload(); }}>🚪 Sair</button>
         </div>
       </aside>
 

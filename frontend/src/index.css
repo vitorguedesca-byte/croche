@@ -496,6 +496,38 @@
   .pt-fc-resume{background:var(--cream);border:1px solid var(--line);border-radius:12px;padding:.9rem 1rem;margin:.8rem 0 1.2rem;color:var(--brown);font-size:1.02rem}
   @media(max-width:520px){ .pt-unit-pick{grid-template-columns:1fr} }
 
+  /* calendário do fluxo de primeira aula (cliente) */
+  .pt-cal-head{display:flex;align-items:center;justify-content:space-between;gap:.6rem;margin-bottom:.9rem}
+  .pt-cal-head b{font-family:'Fraunces',serif;font-size:1.3rem;color:var(--green-deep);text-transform:capitalize}
+  .pt-cal-nav{background:#fff;border:1px solid var(--line);border-radius:10px;width:40px;height:40px;font-size:1.15rem;cursor:pointer;color:var(--green-deep);transition:.12s}
+  .pt-cal-nav:hover:not(:disabled){border-color:var(--green-mid);background:var(--cream)}
+  .pt-cal-nav:disabled{opacity:.3;cursor:default}
+  .pt-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+  .pt-cal-dow{text-align:center;font-size:.66rem;font-weight:800;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);padding:.2rem 0}
+  .pt-cal-cell{aspect-ratio:1/1;border:1px solid var(--line);border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1rem;color:var(--muted);position:relative}
+  .pt-cal-cell.out{visibility:hidden}
+  .pt-cal-cell.has{cursor:pointer;border-color:var(--sage);background:rgba(140,154,120,.12);color:var(--green-deep)}
+  .pt-cal-cell.has:hover{border-color:var(--green-mid);background:rgba(140,154,120,.22)}
+  .pt-cal-cell.sel{background:var(--green-deep);color:#fff;border-color:var(--green-deep)}
+  .pt-cal-cell .dot{position:absolute;bottom:7px;left:50%;transform:translateX(-50%);width:5px;height:5px;border-radius:50%;background:var(--terracota)}
+  .pt-cal-cell.sel .dot{background:#fff}
+  .pt-cal-empty{text-align:center;color:var(--muted);padding:1.4rem 0 .4rem;font-size:.98rem}
+  .pt-times{margin-top:1.2rem}
+  .pt-times-h{font-size:.82rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:.7rem}
+  .pt-times-grid{display:flex;flex-wrap:wrap;gap:.6rem}
+  .pt-time{background:#fff;border:2px solid var(--line);border-radius:12px;padding:.65rem 1.1rem;cursor:pointer;font-weight:800;color:var(--green-deep);transition:.12s;text-align:center;min-width:92px;font-size:1.1rem}
+  .pt-time:hover{border-color:var(--green-mid);background:rgba(140,154,120,.08)}
+  .pt-time.on{background:var(--green-deep);color:#fff;border-color:var(--green-deep)}
+  .pt-time small{display:block;font-weight:500;font-size:.7rem;opacity:.85;margin-top:.05rem}
+
+  /* caixas de matrícula / atenção */
+  .pt-matricula{background:rgba(140,154,120,.1);border:1px solid var(--sage);border-radius:14px;padding:1.1rem 1.2rem;margin-bottom:1rem;color:var(--ink);font-size:1rem;line-height:1.6}
+  .pt-matricula p{margin:0}.pt-matricula p+p{margin-top:.6rem}
+  .pt-matricula b{color:var(--green-deep)}
+  .pt-atencao{background:rgba(216,155,74,.12);border:1px solid var(--warn);border-radius:14px;padding:1.1rem 1.2rem;margin-bottom:1.2rem;color:var(--brown);font-size:.97rem;line-height:1.6}
+  .pt-atencao .t{font-weight:800;letter-spacing:.04em;color:var(--terracota);display:block;margin-bottom:.35rem}
+  .pt-pix-code{font-family:ui-monospace,monospace;font-size:.82rem;word-break:break-all;background:#fff;border:1px solid var(--line);border-radius:8px;padding:.6rem;color:var(--ink);max-height:90px;overflow:auto}
+
   /* PIN do portal */
   .pt-pin{display:flex;gap:.6rem;justify-content:center;margin:.3rem 0}
   .pt-pin-box{width:58px;height:66px;text-align:center;font-size:1.8rem;font-weight:800;border:2px solid var(--line);border-radius:14px;color:var(--ink);background:#fff}

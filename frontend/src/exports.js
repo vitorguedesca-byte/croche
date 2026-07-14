@@ -17,7 +17,7 @@ const cell = (v) => {
 const stamp = () => new Date().toISOString().slice(0, 10);
 
 export function exportBookingsCsv(data) {
-  const head = ["Cliente", "Telefone", "Unidade", "Data", "Hora", "Status", "Presenca", "Valor", "Pago", "Forma", "Data pgto"];
+  const head = ["Aluno", "Telefone", "Unidade", "Data", "Hora", "Status", "Presenca", "Valor", "Pago", "Forma", "Data pgto"];
   const rows = [...data.bookings]
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
     .map((b) => [b.clientName, b.phone, b.unit, b.date, b.time, b.status, b.attendance || "", b.value, b.paid ? "Sim" : "Nao", b.paymentMethod || "", b.paymentDate || ""]);
@@ -29,7 +29,7 @@ export function exportClientsCsv(data) {
   const head = ["Nome", "Telefone", "Unidade", "Etiquetas", "Observacoes"];
   const rows = data.clients.map((c) => [c.name, c.phone, c.unit, (c.tags || []).join(", "), c.notes || ""]);
   const csv = [head, ...rows].map((r) => r.map(cell).join(";")).join("\n");
-  download(`fios-clientes-${stamp()}.csv`, "﻿" + csv, "text/csv;charset=utf-8");
+  download(`fios-alunos-${stamp()}.csv`, "﻿" + csv, "text/csv;charset=utf-8");
 }
 
 export function downloadBackup(data) {

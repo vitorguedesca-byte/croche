@@ -1,14 +1,28 @@
 // Camada de acesso à API do backend.
+
+// ----- token de sessão do painel admin -----
+let TOKEN = null;
+try { TOKEN = localStorage.getItem("fqc_admin_token"); } catch {}
+export function setToken(t) {
+  TOKEN = t || null;
+  try { t ? localStorage.setItem("fqc_admin_token", t) : localStorage.removeItem("fqc_admin_token"); } catch {}
+}
+export function getToken() { return TOKEN; }
+
 async function req(method, url, body) {
+  const headers = { "Content-Type": "application/json" };
+  if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
   const res = await fetch(url, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
     let msg = "Erro na requisição";
     try { msg = (await res.json()).error || msg; } catch {}
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
   }
   return res.status === 204 ? null : res.json();
 }
@@ -57,6 +71,16 @@ export const api = {
     check:  (cpf)       => req("POST", "/api/auth/check",   { cpf }),
     setPin: (cpf, pin)  => req("POST", "/api/auth/set-pin", { cpf, pin }),
     login:  (cpf, pin)  => req("POST", "/api/auth/login",   { cpf, pin }),
+  },
+
+  // Login do painel administrativo
+  admin: {
+    exists:  ()                   => req("GET",  "/api/admin/exists"),
+    setup:   (username, password) => req("POST", "/api/admin/setup", { username, password }),
+    login:   (username, password) => req("POST", "/api/admin/login", { username, password }),
+    logout:  ()                   => req("POST", "/api/admin/logout"),
+    users:   ()                   => req("GET",  "/api/admin/users"),
+    addUser: (username, password) => req("POST", "/api/admin/users", { username, password }),
   },
 
   portal: {

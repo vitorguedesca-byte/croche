@@ -102,7 +102,7 @@ export function SlotDetail({ slotId }) {
       <div className="field" style={{ marginTop: "1rem" }}>
         <label>Capacidade da turma — máx. de pessoas por aula</label>
         <input type="number" min="1" value={capInput} onChange={(e) => setCapInput(parseInt(e.target.value, 10) || 1)} />
-        <div className="help" style={{ marginTop: ".5rem" }}>Esse é o limite de vagas. Quando lotar, o horário some das opções do cliente e (futuramente) o WhatsApp não oferece mais essa vaga.</div>
+        <div className="help" style={{ marginTop: ".5rem" }}>Esse é o limite de vagas. Quando lotar, o horário some das opções do aluno e (futuramente) o WhatsApp não oferece mais essa vaga.</div>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "1rem 0 .3rem" }}>
         <b style={{ color: "var(--brown)" }}>Reservas · {occ}/{cap}</b>
@@ -195,7 +195,7 @@ export function ManageBooking({ booking }) {
       {!booking.paid && <button className="btn terra" onClick={() => open(<ConfirmPayment booking={booking} />)}>Confirmar pagamento</button>}
       <button className="btn" onClick={save}>Salvar</button>
     </>}>
-      <div className="info-line"><b>Cliente</b><span>{booking.clientName}</span></div>
+      <div className="info-line"><b>Aluno</b><span>{booking.clientName}</span></div>
       <div className="info-line"><b>Telefone</b><span>{booking.phone || "—"}</span></div>
       <div className="info-line"><b>Unidade</b><span>{booking.unit}</span></div>
       <div className="info-line"><b>Aula</b><span>{fmtDateLong(booking.date)} · {booking.time}</span></div>
@@ -333,7 +333,7 @@ export function BookingForm({ slotId }) {
       <button className="btn ghost" onClick={close}>Cancelar</button>
       <button className="btn" onClick={save}>Salvar marcação</button>
     </>}>
-      <div className="field"><label>Cliente existente</label>
+      <div className="field"><label>Aluno existente</label>
         <select onChange={(e) => pickClient(e.target.value)}>
           <option value="">— Novo / digitar —</option>
           {data.clients.map((c) => <option key={c.id} value={`${c.name}|${c.phone || ""}`}>{c.name} ({c.unit})</option>)}
@@ -530,6 +530,7 @@ export function ClientForm({ client }) {
   const meta = data.meta;
   const [name, setName] = useState(client?.name || "");
   const [phone, setPhone] = useState(client?.phone || "");
+  const [email, setEmail] = useState(client?.email || "");
   const [cpf, setCpf] = useState(client?.cpf || "");
   const [unit, setUnit] = useState(client?.unit || meta.units[0]);
   const [tags, setTags] = useState(client?.tags || []);
@@ -540,15 +541,15 @@ export function ClientForm({ client }) {
   const toggle = (t) => setTags((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
   const save = async () => {
     if (!name.trim()) return alert("Informe o nome.");
-    const payload = { name: name.trim(), phone: phone.trim(), cpf: cpf.trim(), unit, tags, notes: notes.trim(), birthday, level, firstClass };
+    const payload = { name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: cpf.trim(), unit, tags, notes: notes.trim(), birthday, level, firstClass };
     await run(client ? api.updateClient(client.id, payload) : api.createClient(payload));
     close();
   };
   const del = async () => {
-    if (confirm("Excluir este cliente?")) { await run(api.deleteClient(client.id)); close(); }
+    if (confirm("Excluir este aluno?")) { await run(api.deleteClient(client.id)); close(); }
   };
   return (
-    <Modal title={client ? "Editar cliente" : "Novo cliente"} footer={<>
+    <Modal title={client ? "Editar aluno" : "Novo aluno"} footer={<>
       {client && <button className="btn danger" onClick={del}>Excluir</button>}
       <div style={{ flex: 1 }} />
       <button className="btn ghost" onClick={close}>Cancelar</button>
@@ -558,7 +559,10 @@ export function ClientForm({ client }) {
         <div className="field"><label>Nome</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
         <div className="field"><label>Telefone</label><input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="31988880000" /></div>
       </div>
-      <div className="field"><label>CPF <span style={{ color: "var(--muted)", fontWeight: 400 }}>(usado no login do portal do aluno)</span></label><input value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="000.000.000-00" inputMode="numeric" /></div>
+      <div className="row2">
+        <div className="field"><label>CPF <span style={{ color: "var(--muted)", fontWeight: 400 }}>(login do portal)</span></label><input value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="000.000.000-00" inputMode="numeric" /></div>
+        <div className="field"><label>Email</label><input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="aluno@email.com" inputMode="email" /></div>
+      </div>
       <div className="row2">
         <div className="field"><label>Unidade</label><select value={unit} onChange={(e) => setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
         <div className="field"><label>Nível de crochê</label>

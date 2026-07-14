@@ -1,24 +1,98 @@
 import { useState, useEffect } from "react";
 import { api } from "./api.js";
-import { fmtDate, fmtDateLong, money, waLink } from "./helpers.js";
-import { WaIcon } from "./icons.jsx";
+import { todayISO, addDays, fmtDate, fmtDateLong, money, capitalize } from "./helpers.js";
 
-const INEZ_WA = "5531000000000"; // número da Inêz (ajustável)
+const DOW = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+
+/* Calendário mensal (cliente): dias com horário livre ficam clicáveis;
+   ao escolher o dia, os horários aparecem como botões. */
+function PtAgenda({ available, value, onPick }) {
+  const t = todayISO();
+  const byDay = {};
+  available.forEach((s) => { (byDay[s.date] = byDay[s.date] || []).push(s); });
+  Object.values(byDay).forEach((arr) => arr.sort((a, b) => a.time.localeCompare(b.time)));
+  const firstAvail = Object.keys(byDay).sort()[0] || t;
+
+  const [monthRef, setMonthRef] = useState((value?.date || firstAvail).slice(0, 7) + "-01");
+  const [selDay, setSelDay] = useState(value?.date || null);
+
+  const refd = new Date(monthRef + "T00:00");
+  const y = refd.getFullYear(), m = refd.getMonth();
+  const firstISO = new Date(y, m, 1).toISOString().slice(0, 10);
+  const startDow = (new Date(firstISO + "T00:00").getDay() + 6) % 7;
+  const gridStart = addDays(firstISO, -startDow);
+  const monthLabel = capitalize(refd.toLocaleDateString("pt-BR", { month: "long", year: "numeric" }));
+  const thisMonth = t.slice(0, 7);
+  const canPrev = monthRef.slice(0, 7) > thisMonth;
+
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const date = addDays(gridStart, i);
+    const dd = new Date(date + "T00:00");
+    const out = dd.getMonth() !== m;
+    const has = !out && (byDay[date]?.length || 0) > 0;
+    cells.push(
+      <div
+        key={i}
+        className={`pt-cal-cell ${out ? "out" : ""} ${has ? "has" : ""} ${selDay === date ? "sel" : ""}`}
+        onClick={has ? () => setSelDay(date) : undefined}
+      >
+        {out ? "" : dd.getDate()}{has && <span className="dot" />}
+      </div>
+    );
+  }
+
+  const dayslots = selDay ? byDay[selDay] || [] : [];
+
+  return (
+    <div>
+      <div className="pt-cal-head">
+        <button className="pt-cal-nav" disabled={!canPrev} onClick={() => canPrev && setMonthRef(new Date(y, m - 1, 1).toISOString().slice(0, 10))}>←</button>
+        <b>{monthLabel}</b>
+        <button className="pt-cal-nav" onClick={() => setMonthRef(new Date(y, m + 1, 1).toISOString().slice(0, 10))}>→</button>
+      </div>
+      <div className="pt-cal-grid">
+        {DOW.map((d) => <div key={d} className="pt-cal-dow">{d}</div>)}
+        {cells}
+      </div>
+      {Object.keys(byDay).length === 0 && <div className="pt-cal-empty">Não há horários livres nesta unidade no momento.<br />Fale com a Inêz no WhatsApp. 💚</div>}
+      {selDay && (
+        <div className="pt-times">
+          <div className="pt-times-h">Horários em {capitalize(fmtDateLong(selDay))}</div>
+          <div className="pt-times-grid">
+            {dayslots.map((s) => (
+              <button key={s.id} className={`pt-time ${value?.id === s.id ? "on" : ""}`} onClick={() => onPick(s)}>
+                {s.time}<small>com {s.prof}</small>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function FirstClassBooking({ onBack, fromSite }) {
-  const [meta, setMeta] = useState({ units: [], valorPadrao: 80, pixKey: "", pixName: "" });
+  const [meta, setMeta] = useState({ units: [], valorPadrao: 20, pixKey: "", pixName: "" });
   const [available, setAvailable] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [step, setStep] = useState("unit"); // unit | slot | dados | pay
+  const [step, setStep] = useState("unit"); // unit | cal1 | pay | cal2 | done
   const [unit, setUnit] = useState(null);
-  const [slot, setSlot] = useState(null);
+  const [slot, setSlot] = useState(null);        // horário provisório (cal1)
+  const [finalSlot, setFinalSlot] = useState(null); // horário confirmado (cal2)
+
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [cpf, setCpf] = useState("");
+  const [email, setEmail] = useState("");
+
   const [booking, setBooking] = useState(null);
+  const [pix, setPix] = useState(null);   // { code } da Cora, ou null (fallback chave estática)
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
-  const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 3500); };
+  const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 3800); };
+
+  const matricula = meta.valorPadrao || 20;
 
   const loadAvail = async (u) => {
     setLoading(true);
@@ -28,26 +102,65 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   };
   useEffect(() => { loadAvail(); }, []);
 
-  const stepNum = step === "unit" ? 1 : step === "slot" ? 2 : 3;
+  const stepNum = { unit: 1, cal1: 2, pay: 3, cal2: 4, done: 5 }[step];
 
-  const submit = async () => {
-    if (!name.trim() || phone.replace(/\D/g, "").length < 10) { flash("Preencha seu nome e WhatsApp com DDD."); return; }
-    if (cpf.replace(/\D/g, "").length !== 11) { flash("Informe um CPF válido (11 números) — é com ele que você acessa o portal depois."); return; }
+  // Passo 3: gera a cobrança da matrícula (Cora) e cria a reserva provisória
+  const gerarPix = async () => {
+    if (!name.trim() || phone.replace(/\D/g, "").length < 10) return flash("Preencha seu nome e WhatsApp com DDD.");
+    if (cpf.replace(/\D/g, "").length !== 11) return flash("Informe um CPF válido (11 números).");
+    if (!/\S+@\S+\.\S+/.test(email.trim())) return flash("Informe um email válido.");
     setBusy(true);
     try {
-      const b = await api.createBooking({ clientName: name.trim(), phone: phone.trim(), cpf: cpf.trim(), unit: slot.unit, slotId: slot.id });
-      setBooking(b); setStep("pay");
-    } catch (e) { alert(e.message); } finally { setBusy(false); }
+      const b = booking || await api.createBooking({
+        clientName: name.trim(), phone: phone.trim(), cpf: cpf.trim(), email: email.trim(),
+        unit: slot.unit, slotId: slot.id, value: matricula, firstClass: true,
+      });
+      setBooking(b);
+      try {
+        const inv = await api.createInvoice(b.id, { cpf: cpf.trim(), name: name.trim(), email: email.trim() });
+        setPix({ code: inv.pixCode || null });
+      } catch {
+        setPix({ code: null }); // fallback: mostra a chave Pix estática
+      }
+    } catch (e) { flash(e.message || "Erro ao gerar a cobrança."); }
+    finally { setBusy(false); }
   };
-  const copyPix = async () => {
-    try { await navigator.clipboard.writeText(meta.pixKey); flash("Chave Pix copiada! 📋"); }
-    catch { flash("Anote a chave acima."); }
-  };
-  const restart = () => { setStep("unit"); setUnit(null); setSlot(null); setName(""); setPhone(""); setBooking(null); loadAvail(); };
 
-  const byDay = {};
-  available.forEach((s) => { (byDay[s.date] = byDay[s.date] || []).push(s); });
-  const days = Object.keys(byDay).sort();
+  const copyPix = async () => {
+    const val = pix?.code || meta.pixKey;
+    try { await navigator.clipboard.writeText(val); flash(pix?.code ? "Pix copia-e-cola copiado! 📋" : "Chave Pix copiada! 📋"); }
+    catch { flash("Copie o código acima."); }
+  };
+
+  // "JÁ PAGUEI": confirma a matrícula e vai escolher o horário da 1ª aula
+  const jaPaguei = async () => {
+    setBusy(true);
+    try {
+      await api.payBooking(booking.id, { value: matricula });
+      setFinalSlot(slot); // pré-seleciona o horário reservado
+      await loadAvail(unit);
+      setStep("cal2");
+    } catch (e) { flash(e.message || "Erro ao confirmar."); }
+    finally { setBusy(false); }
+  };
+
+  // Passo 5: confirma o horário final da 1ª aula
+  const confirmar = async () => {
+    setBusy(true);
+    try {
+      if (finalSlot && finalSlot.id !== booking.slotId) {
+        await api.updateBooking(booking.id, { slotId: finalSlot.id });
+      }
+      setStep("done");
+    } catch (e) { flash(e.message || "Erro ao confirmar o horário."); }
+    finally { setBusy(false); }
+  };
+
+  const restart = () => {
+    setStep("unit"); setUnit(null); setSlot(null); setFinalSlot(null);
+    setName(""); setPhone(""); setCpf(""); setEmail(""); setBooking(null); setPix(null);
+    loadAvail();
+  };
 
   return (
     <div className="pt-bg">
@@ -55,22 +168,24 @@ export default function FirstClassBooking({ onBack, fromSite }) {
         {toast && <div className="pt-toast">{toast}</div>}
         <div className="pt-fc-head">
           <img src="/logo-1.PNG" className="pt-logo" alt="Fios que Curam" />
-          <h1>Marque sua aula</h1>
-          {step !== "pay" && (
+          <h1>Sua aula experimental</h1>
+          {step !== "done" && (
             <div className="pt-steps">
               <span className={`pt-step ${stepNum >= 1 ? "on" : ""}`}>1 · Unidade</span>
               <span className={`pt-step ${stepNum >= 2 ? "on" : ""}`}>2 · Horário</span>
-              <span className={`pt-step ${stepNum >= 3 ? "on" : ""}`}>3 · Seus dados</span>
+              <span className={`pt-step ${stepNum >= 3 ? "on" : ""}`}>3 · Matrícula</span>
+              <span className={`pt-step ${stepNum >= 4 ? "on" : ""}`}>4 · 1ª aula</span>
             </div>
           )}
         </div>
 
+        {/* 1 · UNIDADE */}
         {step === "unit" && (
           <div className="pt-card">
             <h2 className="pt-h2" style={{ marginTop: 0 }}>Escolha a unidade</h2>
             <div className="pt-unit-pick">
               {meta.units.map((u) => (
-                <button key={u} className="pt-unit-card" onClick={() => { setUnit(u); setStep("slot"); loadAvail(u); }}>
+                <button key={u} className="pt-unit-card" onClick={() => { setUnit(u); setSlot(null); loadAvail(u); setStep("cal1"); }}>
                   <div className="ic">📍</div><b>{u}</b><span>Aulas presenciais</span>
                 </button>
               ))}
@@ -78,63 +193,86 @@ export default function FirstClassBooking({ onBack, fromSite }) {
           </div>
         )}
 
-        {step === "slot" && (<>
-          <button className="pt-link" onClick={() => { setStep("unit"); setUnit(null); }}>← Trocar unidade ({unit})</button>
-          <h2 className="pt-h2">Escolha o horário</h2>
-          {loading ? <div className="pt-empty">Carregando horários…</div>
-            : days.length ? days.map((d) => (
-              <div className="pt-day" key={d}>
-                <div className="pt-day-h">{fmtDateLong(d)}</div>
-                {byDay[d].map((s) => (
-                  <button className="pt-slot" key={s.id} onClick={() => { setSlot(s); setStep("dados"); }}>
-                    <div><b>{s.time}</b><span> · com {s.prof}</span></div>
-                    <span className="pt-vagas">{s.vagas} vaga{s.vagas === 1 ? "" : "s"}</span>
-                  </button>
-                ))}
-              </div>
-            )) : <div className="pt-empty">Não há horários livres em {unit} no momento.<br />Fale com a Inêz no WhatsApp. 💚</div>}
-        </>)}
-
-        {step === "dados" && (
+        {/* 2 · HORÁRIO (calendário) */}
+        {step === "cal1" && (
           <div className="pt-card">
-            <button className="pt-link" onClick={() => setStep("slot")}>← Trocar horário</button>
-            <div className="pt-fc-resume">📍 <b>{slot.unit}</b> · {fmtDateLong(slot.date)} · <b>{slot.time}</b> · com {slot.prof}</div>
-            <label className="pt-label">Seu nome</label>
-            <input className="pt-input" style={{ textAlign: "left", fontSize: "1.15rem" }} value={name} onChange={(e) => setName(e.target.value)} placeholder="Como podemos te chamar?" />
-            <label className="pt-label" style={{ marginTop: "1rem" }}>Seu WhatsApp (com DDD)</label>
-            <input className="pt-input" style={{ textAlign: "left", fontSize: "1.15rem" }} inputMode="numeric" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="31988880000" />
-            <label className="pt-label" style={{ marginTop: "1rem" }}>Seu CPF</label>
-            <input className="pt-input" style={{ textAlign: "left", fontSize: "1.15rem" }} inputMode="numeric" value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="000.000.000-00" />
-            <button className="pt-btn" onClick={submit} disabled={busy}>{busy ? "Marcando…" : "Continuar para o pagamento →"}</button>
-            <p className="pt-hint">A reserva ({money(meta.valorPadrao)}) garante a sua vaga. A aula é confirmada após o pagamento. 💚</p>
+            <button className="pt-link" onClick={() => { setStep("unit"); setUnit(null); }}>← Trocar unidade ({unit})</button>
+            <h2 className="pt-h2">Escolha o dia e o horário</h2>
+            {loading ? <div className="pt-cal-empty">Carregando horários…</div>
+              : <PtAgenda available={available} value={slot} onPick={(s) => { setSlot(s); setStep("pay"); }} />}
           </div>
         )}
 
-        {step === "pay" && booking && (<>
-          <h2 className="pt-h2" style={{ textAlign: "center" }}>Quase lá! Falta o pagamento 💚</h2>
-          <div className="pt-pay">
-            <div className="pt-pay-top">
-              <div><b>{fmtDateLong(booking.date)}</b><div className="pt-sub2">{booking.time} · {booking.unit}</div></div>
-              <div className="pt-pay-val">{money(booking.value)}</div>
-            </div>
-            <div className="pt-sub2">Olá, <b>{name.split(" ")[0]}</b>! Sua vaga está reservada. Escolha como pagar:</div>
-          </div>
-          <div className="pt-pay">
-            <div className="pt-pay-opt-h">💠 Pagar com Pix</div>
-            {meta.pixKey ? (<>
-              <div className="pt-pix">
-                <div className="pt-pix-row"><span>Chave Pix</span><b>{meta.pixKey}</b></div>
-                {meta.pixName ? <div className="pt-pix-row"><span>Recebedor</span><b>{meta.pixName}</b></div> : null}
-                <button className="pt-pix-copy" onClick={copyPix}>📋 Copiar chave Pix</button>
-              </div>
-              <a className="pt-btn pt-btn-wa" href={waLink(INEZ_WA, `Olá Inêz! Marquei minha aula de ${fmtDate(booking.date)} às ${booking.time} (${booking.unit}) e fiz o Pix de ${money(booking.value)}. Segue o comprovante 👇`)} target="_blank" rel="noreferrer">📲 Já paguei — enviar comprovante</a>
-            </>) : <div className="pt-empty" style={{ fontSize: "1rem" }}>Fale com a Inêz pelo WhatsApp para combinar o Pix.</div>}
-          </div>
-          <div className="pt-pay-note">🔒 Sua vaga é confirmada assim que a Inêz receber o pagamento.</div>
-          <div style={{ textAlign: "center" }}><button className="pt-link" onClick={restart}>Marcar outra aula</button></div>
-        </>)}
+        {/* 3 · MATRÍCULA (Pix) */}
+        {step === "pay" && slot && (
+          <div className="pt-card">
+            <button className="pt-link" onClick={() => { setStep("cal1"); }}>← Trocar horário</button>
+            <div className="pt-fc-resume">📍 <b>{slot.unit}</b> · {capitalize(fmtDateLong(slot.date))} · <b>{slot.time}</b> · com {slot.prof}</div>
 
-        {onBack && <div style={{ textAlign: "center", marginTop: "1.5rem" }}><button className="pt-link" onClick={onBack}>{fromSite ? "← Voltar ao site" : "← Voltar ao painel"}</button></div>}
+            <div className="pt-matricula">
+              <p>Para agendar sua <b>aula experimental gratuita</b>, solicitamos o pagamento da matrícula no valor de <b>{money(matricula)}</b>.</p>
+              <p>💬 Caso você decida não continuar após a aula, esse valor será devolvido integralmente.</p>
+              <p>🧵 Se desejar seguir conosco, a matrícula já estará paga e você poderá agendar sua primeira aula oficial.</p>
+            </div>
+            <div className="pt-atencao">
+              <span className="t">⚠️ Atenção</span>
+              Em caso de falta sem aviso prévio de no mínimo 6 horas, não devolvemos o valor da matrícula. Mas você poderá agendar sua primeira aula normalmente.<br />
+              Até lá! 💛
+            </div>
+
+            {!pix ? (<>
+              <label className="pt-label">Seu nome</label>
+              <input className="pt-input" style={{ textAlign: "left", fontSize: "1.1rem" }} value={name} onChange={(e) => setName(e.target.value)} placeholder="Como podemos te chamar?" />
+              <label className="pt-label" style={{ marginTop: ".9rem" }}>Seu WhatsApp (com DDD)</label>
+              <input className="pt-input" style={{ textAlign: "left", fontSize: "1.1rem" }} inputMode="numeric" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="31988880000" />
+              <label className="pt-label" style={{ marginTop: ".9rem" }}>Seu CPF</label>
+              <input className="pt-input" style={{ textAlign: "left", fontSize: "1.1rem" }} inputMode="numeric" value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="000.000.000-00" />
+              <label className="pt-label" style={{ marginTop: ".9rem" }}>Seu email</label>
+              <input className="pt-input" style={{ textAlign: "left", fontSize: "1.1rem" }} inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="voce@email.com" />
+              <button className="pt-btn" onClick={gerarPix} disabled={busy}>{busy ? "Gerando…" : `Gerar Pix da matrícula (${money(matricula)}) →`}</button>
+            </>) : (<>
+              <div className="pt-pay" style={{ borderLeftColor: "var(--green-mid)" }}>
+                <div className="pt-pay-opt-h">💠 Pague a matrícula com Pix</div>
+                {pix.code ? (<>
+                  <div className="pt-pix-row"><span>Pix copia-e-cola</span><b>{money(matricula)}</b></div>
+                  <div className="pt-pix-code">{pix.code}</div>
+                </>) : (<div className="pt-pix">
+                  <div className="pt-pix-row"><span>Chave Pix</span><b>{meta.pixKey || "—"}</b></div>
+                  {meta.pixName ? <div className="pt-pix-row"><span>Recebedor</span><b>{meta.pixName}</b></div> : null}
+                  <div className="pt-pix-row"><span>Valor</span><b>{money(matricula)}</b></div>
+                </div>)}
+                <button className="pt-pix-copy" onClick={copyPix}>📋 Copiar {pix.code ? "código Pix" : "chave Pix"}</button>
+              </div>
+              <button className="pt-btn" onClick={jaPaguei} disabled={busy}>{busy ? "Confirmando…" : "✅ JÁ PAGUEI — continuar"}</button>
+              <p className="pt-hint">Assim que o pagamento for aprovado, você escolhe o horário da sua 1ª aula. 💚</p>
+            </>)}
+          </div>
+        )}
+
+        {/* 4 · HORÁRIO DA 1ª AULA */}
+        {step === "cal2" && (
+          <div className="pt-card">
+            <div className="pt-fc-resume" style={{ borderColor: "var(--green-mid)" }}>✅ Matrícula recebida! Agora escolha o horário da sua <b>1ª aula</b>.</div>
+            {finalSlot && <div className="pt-fc-resume">Sugerido: <b>{capitalize(fmtDateLong(finalSlot.date))} · {finalSlot.time}</b> — pode manter ou escolher outro.</div>}
+            <PtAgenda available={available} value={finalSlot} onPick={(s) => setFinalSlot(s)} />
+            {finalSlot && <button className="pt-btn" onClick={confirmar} disabled={busy}>{busy ? "Confirmando…" : `Confirmar 1ª aula em ${finalSlot.time} →`}</button>}
+          </div>
+        )}
+
+        {/* 5 · CONCLUÍDO */}
+        {step === "done" && finalSlot && (
+          <div className="pt-card" style={{ textAlign: "center" }}>
+            <div style={{ fontSize: "2.6rem" }}>🎉</div>
+            <h2 className="pt-h2" style={{ textAlign: "center" }}>Tudo certo, {name.split(" ")[0]}!</h2>
+            <div className="pt-fc-resume" style={{ textAlign: "left" }}>
+              📍 <b>{finalSlot.unit}</b><br />🗓 {capitalize(fmtDateLong(finalSlot.date))}<br />⏰ <b>{finalSlot.time}</b> · com {finalSlot.prof}
+            </div>
+            <p className="pt-hint">Sua vaga está reservada e você já está cadastrada no nosso sistema 💛<br />Nos vemos na aula!</p>
+            <button className="pt-link" onClick={restart}>Marcar outra aula</button>
+          </div>
+        )}
+
+        {onBack && step !== "done" && <div style={{ textAlign: "center", marginTop: "1.5rem" }}><button className="pt-link" onClick={onBack}>{fromSite ? "← Voltar ao site" : "← Voltar ao painel"}</button></div>}
       </div>
     </div>
   );

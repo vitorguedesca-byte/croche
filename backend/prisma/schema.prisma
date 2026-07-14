@@ -11,6 +11,7 @@ model Client {
   id        Int      @id @default(autoincrement())
   name      String
   phone     String?
+  email     String?  @db.VarChar(255)
   cpf       String?  @db.VarChar(14) // login do aluno(a)
   unit      String?
   tags      String   @default("[]") @db.VarChar(1000) // JSON array de etiquetas
@@ -92,6 +93,13 @@ model WaConversation {
   slotId    Int? // horário escolhido (aguardando nome)
   offered   String   @default("[]") @db.VarChar(500) // JSON dos slotIds oferecidos
   updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
+model AdminUser {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique @db.VarChar(60)
+  pass      String   @db.VarChar(255) // hash bcrypt da senha
   createdAt DateTime @default(now())
 }
 

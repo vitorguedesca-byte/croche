@@ -111,7 +111,7 @@ export function Dashboard({ go }) {
     </div>
 
     <div className="people-strip">
-      <button className="people-card" onClick={() => go("clientes", { tab: "cliente" })}><span className="pc-ic">👩</span><span className="pc-n">{groups.cliente}</span><span className="pc-l">Clientes</span></button>
+      <button className="people-card" onClick={() => go("clientes", { tab: "cliente" })}><span className="pc-ic">👩</span><span className="pc-n">{groups.cliente}</span><span className="pc-l">Alunos</span></button>
       <button className="people-card" onClick={() => go("clientes", { tab: "lead" })}><span className="pc-ic">🌱</span><span className="pc-n">{groups.lead}</span><span className="pc-l">Leads a converter</span></button>
       <button className="people-card" onClick={() => go("clientes", { tab: "novato" })}><span className="pc-ic">✨</span><span className="pc-n">{groups.novato}</span><span className="pc-l">Novatos(as)</span></button>
     </div>
@@ -122,7 +122,7 @@ export function Dashboard({ go }) {
       <div className="panel">
         <div className="panel-h"><h2>⏳ Confirmar pagamento</h2><button className="btn sec sm" onClick={() => go("marcacoes")}>Ver todas</button></div>
         {aguardando.length ? (
-          <table><thead><tr><th>Cliente</th><th>Dia</th><th>Valor</th><th></th></tr></thead><tbody>
+          <table><thead><tr><th>Aluno</th><th>Dia</th><th>Valor</th><th></th></tr></thead><tbody>
             {aguardando.slice(0, 6).map((b) => (
               <tr key={b.id}>
                 <td><span className="cli-name">{b.clientName}</span><div className="cli-sub">{b.unit}</div></td>
@@ -141,7 +141,7 @@ export function Dashboard({ go }) {
       <div className="panel">
         <div className="panel-h"><h2>🧶 Aulas de hoje</h2><button className="btn sec sm" onClick={() => go("agenda")}>Agenda</button></div>
         {hoje.length ? (
-          <table><thead><tr><th>Hora</th><th>Cliente</th><th>Unidade</th><th>Status</th></tr></thead><tbody>
+          <table><thead><tr><th>Hora</th><th>Aluno</th><th>Unidade</th><th>Status</th></tr></thead><tbody>
             {hoje.map((b) => (
               <tr key={b.id} onClick={() => open(<ManageBooking booking={b} />)} style={{ cursor: "pointer" }}>
                 <td><b>{b.time}</b></td><td>{b.clientName}</td><td><span className="chip">{b.unit}</span></td><td><StatusBadge status={b.status} /></td>
@@ -155,7 +155,7 @@ export function Dashboard({ go }) {
     <div className="panel">
       <div className="panel-h"><h2>📅 Próximas aulas</h2><button className="btn sec sm" onClick={() => go("agenda")}>Abrir agenda</button></div>
       {prox.length ? (
-        <table><thead><tr><th>Dia</th><th>Hora</th><th>Cliente</th><th>Unidade</th><th>Status</th></tr></thead><tbody>
+        <table><thead><tr><th>Dia</th><th>Hora</th><th>Aluno</th><th>Unidade</th><th>Status</th></tr></thead><tbody>
           {prox.map((b) => (
             <tr key={b.id} onClick={() => open(<ManageBooking booking={b} />)} style={{ cursor: "pointer" }}>
               <td>{fmtDateLong(b.date)}</td><td><b>{b.time}</b></td><td>{b.clientName}</td><td><span className="chip">{b.unit}</span></td><td><StatusBadge status={b.status} /></td>
@@ -321,10 +321,10 @@ export function Marcacoes() {
         : "Marcações de alunas que já têm cadastro e acesso ao portal."}</div>
       <div className="filters">
         <div className="seg">{segs.map((s) => <button key={s[0]} className={filter === s[0] ? "on" : ""} onClick={() => setFilter(s[0])}>{s[1]}</button>)}</div>
-        <input placeholder="🔍 Buscar cliente..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ flex: 1, minWidth: 160 }} />
+        <input placeholder="🔍 Buscar aluno..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ flex: 1, minWidth: 160 }} />
       </div>
       {list.length ? (
-        <table><thead><tr><th>Cliente</th><th>Unidade</th><th>Dia / Hora</th><th>Valor</th><th>Pagamento</th><th>Status</th><th></th></tr></thead><tbody>
+        <table><thead><tr><th>Aluno</th><th>Unidade</th><th>Dia / Hora</th><th>Valor</th><th>Pagamento</th><th>Status</th><th></th></tr></thead><tbody>
           {list.map((b) => (
             <tr key={b.id} style={tab === "novos" ? { background: "rgba(127,194,65,.08)" } : {}}>
               <td>
@@ -366,7 +366,7 @@ export function Clientes({ params }) {
   data.clients.forEach((c) => groups[classifyClient(data, c)].push(c));
 
   const TABS = [
-    ["cliente", "👩 Clientes", groups.cliente.length, "Alunas com cadastro e aulas ativas."],
+    ["cliente", "👩 Alunos", groups.cliente.length, "Alunos com cadastro e aulas ativas."],
     ["lead", "🌱 Leads", groups.lead.length, "Cadastraram/entraram mas ainda não marcaram uma aula."],
     ["novato", "✨ Novatos", groups.novato.length, "Na primeira aula — merecem atenção especial no acolhimento."],
   ];
@@ -389,7 +389,7 @@ export function Clientes({ params }) {
       ? `Olá ${c.name}! Que alegria ter você na sua primeira aula de crochê 💚 Qualquer dúvida, é só chamar!`
       : `Olá ${c.name}! 💚`;
 
-  const emptyLabel = { cliente: "Nenhuma cliente encontrada.", lead: "Nenhum lead no momento.", novato: "Nenhuma aluna na primeira aula." }[tab];
+  const emptyLabel = { cliente: "Nenhum aluno encontrado.", lead: "Nenhum lead no momento.", novato: "Nenhum aluno na primeira aula." }[tab];
 
   return (
     <div className="panel">
@@ -410,7 +410,7 @@ export function Clientes({ params }) {
         <span style={{ color: "var(--muted)", fontWeight: 700, fontSize: ".85rem", whiteSpace: "nowrap" }}>{list.length} de {groups[tab].length}</span>
       </div>
       {list.length ? (
-        <table><thead><tr><th>{tab === "lead" ? "Contato" : "Cliente"}</th><th>Unidade</th><th>Nível</th><th>Etiquetas</th><th>Aulas</th><th>Presença</th><th></th></tr></thead><tbody>
+        <table><thead><tr><th>{tab === "lead" ? "Contato" : "Aluno"}</th><th>Unidade</th><th>Nível</th><th>Etiquetas</th><th>Aulas</th><th>Presença</th><th></th></tr></thead><tbody>
           {list.map((c) => {
             const cnt = cntOf(c);
             const at = clientAttendance(data, c.name);
@@ -534,7 +534,7 @@ export function Recebimentos() {
     <div className="panel">
       <div className="panel-h"><h2>✅ Recebimentos confirmados</h2><span className="cli-sub">{pagos.length} registro(s)</span></div>
       {pagos.length ? (
-        <table><thead><tr><th>Cliente</th><th>Unidade</th><th>Aula</th><th>Forma</th><th>Data pgto.</th><th>Valor</th></tr></thead><tbody>
+        <table><thead><tr><th>Aluno</th><th>Unidade</th><th>Aula</th><th>Forma</th><th>Data pgto.</th><th>Valor</th></tr></thead><tbody>
           {pagos.map((b) => (
             <tr key={b.id}><td className="cli-name">{b.clientName}</td><td><span className="chip">{b.unit}</span></td><td>{fmtDate(b.date)} · {b.time}</td><td><span className="badge b-sage">{b.paymentMethod || "—"}</span></td><td>{b.paymentDate ? fmtDate(b.paymentDate) : "—"}</td><td><b>{money(b.value)}</b></td></tr>
           ))}
