@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { toast } from "./toast.jsx";
 import { api } from "./api.js";
 import { setUnitOrder } from "./helpers.js";
 
@@ -31,7 +32,7 @@ export function StoreProvider({ children }) {
         await reload();
         return r;
       } catch (e) {
-        alert(e.message || "Ocorreu um erro.");
+        toast(e.message || "Ocorreu um erro.", "error");
         throw e;
       }
     },

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { toast, confirmModal } from "./toast.jsx";
 import { useStore } from "./store.jsx";
 import { useModal, StatusBadge } from "./ui.jsx";
 import { api } from "./api.js";
@@ -359,6 +360,7 @@ export function Clientes({ params }) {
   useEffect(() => { if (params?.tab) setTab(params.tab); }, [params?.tab]);
   const [search, setSearch] = useState("");
   const [unitF, setUnitF] = useState("Todas");
+  const [planF, setPlanF] = useState("Todos");
   const [sortBy, setSortBy] = useState("nome");
   const cntOf = (c) => clientActiveCount(data, c);
 
@@ -374,14 +376,15 @@ export function Clientes({ params }) {
 
   let list = groups[tab].filter((c) =>
     (!search || c.name.toLowerCase().includes(search.toLowerCase()) || (c.phone || "").includes(search)) &&
-    (unitF === "Todas" || c.unit === unitF)
+    (unitF === "Todas" || c.unit === unitF) &&
+    (planF === "Todos" || (planF === "Mensalistas" ? c.plan === "mensalista" : c.plan !== "mensalista"))
   );
   list = [...list].sort((a, b) => sortBy === "aulas" ? cntOf(b) - cntOf(a) : a.name.localeCompare(b.name));
 
   const resetPin = async (c) => {
-    if (!confirm(`Resetar PIN de ${c.name}? Na próxima entrada ela terá que criar um novo PIN.`)) return;
+    if (!(await confirmModal({ title: "Resetar PIN", message: `Resetar PIN de ${c.name}? Na próxima entrada ela terá que criar um novo PIN.`, confirmLabel: "Resetar", tone: "danger" }))) return;
     await run(api.resetPin(c.id));
-    alert("PIN resetado! A aluna criará um novo no próximo acesso.");
+    toast("PIN resetado! A aluna criará um novo no próximo acesso.");
   };
   const waMsg = (c) => tab === "lead"
     ? `Olá ${c.name}! Vi que você se interessou pelas aulas de crochê 💚 Posso te ajudar a escolher um horário?`
@@ -403,6 +406,11 @@ export function Clientes({ params }) {
           <option>Todas</option>
           {data.meta.units.map((u) => <option key={u}>{u}</option>)}
         </select>
+        <select value={planF} onChange={(e) => setPlanF(e.target.value)}>
+          <option>Todos</option>
+          <option>Mensalistas</option>
+          <option>Avulsos</option>
+        </select>
         <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
           <option value="nome">Ordenar: Nome</option>
           <option value="aulas">Ordenar: Mais aulas</option>
@@ -421,6 +429,7 @@ export function Clientes({ params }) {
                     <span className="cli-av">{initials(c.name)}</span>
                     <div>
                       <span className="cli-name">{c.name}</span>
+                      {c.plan === "mensalista" ? <span className="badge b-ok" style={{ marginLeft: ".4rem" }}>📅 mensalista</span> : null}
                       {tab === "novato" ? <span className="badge b-terra" style={{ marginLeft: ".4rem" }}>✨ 1ª aula</span> : null}
                       {tab === "lead" ? <span className="badge b-warn" style={{ marginLeft: ".4rem" }}>🌱 lead</span> : null}
                       <div className="cli-sub">{c.phone || "sem telefone"}{c.birthday ? " · 🎂 " + fmtDate(c.birthday) : ""}</div>
@@ -442,6 +451,76 @@ export function Clientes({ params }) {
           })}
         </tbody></table>
       ) : <div className="empty"><div className="ic">{tab === "lead" ? "🌱" : tab === "novato" ? "✨" : "👩"}</div><p>{emptyLabel}</p></div>}
+    </div>
+  );
+}
+
+/* ============================= MENSALISTAS (mensalidades / boletos) ============================= */
+export function Mensalistas() {
+  const { data, run } = useStore();
+  const { open } = useModal();
+  const comp = new Date().toISOString().slice(0, 10).slice(0, 7); // 'YYYY-MM'
+  const [busy, setBusy] = useState(false);
+  const mensalistas = data.clients.filter((c) => c.plan === "mensalista").sort((a, b) => a.name.localeCompare(b.name));
+  const invOf = (c) => (data.invoices || []).find((i) => i.clientId === c.id && i.competencia === comp);
+  const valorDe = (c) => (c.monthlyValue != null ? c.monthlyValue : data.meta.mensalidadeValor) || 0;
+  const vencDe = (c) => Math.min(28, Math.max(1, c.billingDay || data.meta.vencimentoDia || 10));
+
+  const gerar = async (c) => { setBusy(true); try { await run(api.gerarMensalidade(c.id)); } finally { setBusy(false); } };
+  const gerarTodos = async () => { if (!(await confirmModal({ title: "Gerar mensalidades", message: `Gerar os boletos de ${comp} para todos os ${mensalistas.length} mensalistas?`, confirmLabel: "Gerar" }))) return; setBusy(true); try { const r = await run(api.gerarMensalidadesMes()); toast(`${r?.geradas ?? 0} boleto(s) gerado(s)/reaproveitado(s).`); } finally { setBusy(false); } };
+  const marcarPago = async (inv) => { await run(api.payInvoice(inv.id)); };
+  const copyPix = (code) => { navigator.clipboard.writeText(code); toast("Código Pix copiado! 📋"); };
+
+  const pagos = mensalistas.filter((c) => invOf(c)?.status === "pago").length;
+  const pend = mensalistas.filter((c) => { const i = invOf(c); return i && i.status === "pendente"; }).length;
+  const semBoleto = mensalistas.filter((c) => !invOf(c)).length;
+
+  return (
+    <div className="panel">
+      <div className="filters" style={{ justifyContent: "space-between" }}>
+        <div style={{ display: "flex", gap: ".6rem", flexWrap: "wrap" }}>
+          <span className="badge b-ok">✓ {pagos} pagos</span>
+          <span className="badge b-warn">⏳ {pend} pendentes</span>
+          <span className="badge b-muted">📄 {semBoleto} sem boleto</span>
+          <span style={{ color: "var(--muted)", fontWeight: 700, fontSize: ".85rem" }}>Competência {comp}</span>
+        </div>
+        <button className="btn" disabled={busy || !mensalistas.length} onClick={gerarTodos}>🧾 Gerar boletos do mês</button>
+      </div>
+      {!data.meta.mensalidadeValor && <div className="seg-hint" style={{ color: "var(--terracota)" }}>⚠ Defina o valor padrão da mensalidade em Configurações (ou um valor individual em cada aluno).</div>}
+      {mensalistas.length ? (
+        <table><thead><tr><th>Aluno</th><th>Mensalidade</th><th>Vencimento</th><th>Status do mês</th><th></th></tr></thead><tbody>
+          {mensalistas.map((c) => {
+            const inv = invOf(c);
+            return (
+              <tr key={c.id}>
+                <td>
+                  <div className="cli-row" style={{ cursor: "pointer" }} onClick={() => open(<ClientProfile client={c} />)}>
+                    <span className="cli-av">{initials(c.name)}</span>
+                    <div><span className="cli-name">{c.name}</span><div className="cli-sub">{c.unit}{c.cpf ? "" : " · ⚠ sem CPF"}</div></div>
+                  </div>
+                </td>
+                <td>{money(valorDe(c))}{c.monthlyValue != null ? <span className="cli-sub"> (individual)</span> : null}</td>
+                <td>dia {vencDe(c)}</td>
+                <td>
+                  {!inv ? <span className="badge b-muted">sem boleto</span>
+                    : inv.status === "pago" ? <span className="badge b-ok">✓ pago</span>
+                    : inv.status === "cancelado" ? <span className="badge b-danger">cancelado</span>
+                    : <span className="badge b-warn">⏳ pendente · vence {fmtDate(inv.dueDate)}</span>}
+                </td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                  {!inv && <button className="btn sm" disabled={busy} onClick={() => gerar(c)}>🧾 Gerar boleto</button>}
+                  {inv && inv.status === "pendente" && <>
+                    {inv.boletoUrl && <a className="btn sec sm" href={inv.boletoUrl} target="_blank" rel="noreferrer" style={{ marginRight: ".3rem" }}>📄 Boleto</a>}
+                    {inv.pixCode && <button className="btn sec sm" style={{ marginRight: ".3rem" }} onClick={() => copyPix(inv.pixCode)}>💠 Pix</button>}
+                    <button className="btn sm" onClick={() => marcarPago(inv)}>✓ Marcar pago</button>
+                  </>}
+                  {inv && inv.status === "pago" && inv.paidAt && <span className="cli-sub">pago em {fmtDate(inv.paidAt)}</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody></table>
+      ) : <div className="empty"><div className="ic">📅</div><p>Nenhum mensalista ainda. Marque um aluno como "Mensalista" no cadastro.</p></div>}
     </div>
   );
 }
@@ -611,7 +690,7 @@ export function Depoimentos() {
   };
 
   const remove = async (t) => {
-    if (!confirm(`Excluir depoimento de ${t.name}?`)) return;
+    if (!(await confirmModal({ title: "Excluir depoimento", message: `Excluir depoimento de ${t.name}?`, confirmLabel: "Excluir", tone: "danger" }))) return;
     try { await api.testimonials.remove(t.id); load(); }
     catch (e) { flash("Erro: " + e.message); }
   };

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast } from "./toast.jsx";
 import { useStore } from "./store.jsx";
 import { api } from "./api.js";
 import {
@@ -234,7 +235,7 @@ function BookingFlow({ client, data, run, onDone }) {
     try {
       await run(api.createBooking({ clientName: client.name, phone: client.phone, unit: slot.unit, slotId: slot.id }));
       setDone({ type: "booking", slot });
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message, "error"); }
   };
 
   const submitWait = async () => {

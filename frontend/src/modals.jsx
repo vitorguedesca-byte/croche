@@ -3,6 +3,7 @@ import { Modal, useModal, StatusBadge } from "./ui.jsx";
 import { WaIcon } from "./icons.jsx";
 import { useStore } from "./store.jsx";
 import { api } from "./api.js";
+import { toast, confirmModal } from "./toast.jsx";
 import {
   UNITS, PROFS, TAG_OPTIONS, STATUS, VALOR_PADRAO, CAPACITY_PADRAO,
   unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize,
@@ -58,6 +59,15 @@ export function DayModal({ date }) {
 }
 
 /* ======================= Detalhe da turma ======================= */
+// Etiqueta do tipo do aluno numa reserva (mostrada na turma da agenda)
+function bookingTag(data, b) {
+  if (b.paymentMethod === "Reposição") return { label: "🔁 Reposição", cls: "b-warn" };
+  const c = (data.clients || []).find((x) => x.name === b.clientName);
+  if (c?.plan === "mensalista") return { label: "📅 Mensalista", cls: "b-ok" };
+  if (c?.firstClass) return { label: "✨ Novo(a)", cls: "b-terra" };
+  return { label: "💠 Avulso", cls: "b-muted" };
+}
+
 export function SlotDetail({ slotId }) {
   const { data, run } = useStore();
   const { open, close } = useModal();
@@ -71,14 +81,14 @@ export function SlotDetail({ slotId }) {
 
   const mark = (b, val) => run(api.updateBooking(b.id, { attendance: b.attendance === val ? "" : val }));
   const saveCap = () => {
-    if (capInput < occ) return alert(`A capacidade (${capInput}) não pode ser menor que as ${occ} reservas já feitas.`);
+    if (capInput < occ) return toast(`A capacidade (${capInput}) não pode ser menor que as ${occ} reservas já feitas.`, "error");
     run(api.updateSlotCapacity(slotId, capInput));
   };
   const del = async () => {
     const msg = occ > 0
       ? `Este horário tem ${occ} reserva(s). Excluir o horário também remove essas reservas. Continuar?`
       : "Excluir este horário da agenda?";
-    if (!window.confirm(msg)) return;
+    if (!(await confirmModal({ title: "Excluir horário", message: msg, confirmLabel: "Excluir", tone: "danger" }))) return;
     await run(api.deleteSlot(slotId));
     close();
   };
@@ -108,16 +118,23 @@ export function SlotDetail({ slotId }) {
         <b style={{ color: "var(--brown)" }}>Reservas · {occ}/{cap}</b>
         {full ? <span className="badge b-danger">Turma lotada</span> : <span className="badge b-ok">{cap - occ} vaga(s) livre(s)</span>}
       </div>
-      {bks.length ? bks.map((b) => (
+      {bks.length ? bks.map((b) => {
+        const tag = bookingTag(data, b);
+        return (
         <div className="roster-row" key={b.id}>
-          <div className="rr-info"><b>{b.clientName}</b><div className="cli-sub">{b.phone || "sem telefone"} · {STATUS[b.status].label}</div></div>
+          <div className="rr-info">
+            <b>{b.clientName}</b>
+            {tag && <span className={`badge ${tag.cls}`} style={{ marginLeft: ".4rem" }}>{tag.label}</span>}
+            <div className="cli-sub">{b.phone || "sem telefone"} · {STATUS[b.status].label}</div>
+          </div>
           <div className="att" title="Marcar presença">
             <button className={`att-btn ${b.attendance === "presente" ? "on-pres" : ""}`} onClick={() => mark(b, "presente")} title="Presente">✓</button>
             <button className={`att-btn ${b.attendance === "falta" ? "on-falt" : ""}`} onClick={() => mark(b, "falta")} title="Faltou">✕</button>
           </div>
           <button className="btn sec sm" onClick={() => open(<ManageBooking booking={b} />)}>Gerir</button>
         </div>
-      )) : <div className="empty" style={{ padding: "1.2rem" }}><div className="ic">🪑</div><p>Nenhuma reserva nesta turma ainda.</p></div>}
+        );
+      }) : <div className="empty" style={{ padding: "1.2rem" }}><div className="ic">🪑</div><p>Nenhuma reserva nesta turma ainda.</p></div>}
 
       {wl.length > 0 && <>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "1.3rem 0 .4rem" }}>
@@ -144,7 +161,7 @@ export function WaitlistForm({ slotId }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const save = async () => {
-    if (!name.trim()) return alert("Informe o nome.");
+    if (!name.trim()) return toast("Informe o nome.", "error");
     await run(api.addWaitlist(slotId, { name: name.trim(), phone: phone.trim() }));
     open(<SlotDetail slotId={slotId} />);
   };
@@ -181,8 +198,8 @@ export function ManageBooking({ booking }) {
     try {
       const r = await api.createInvoice(booking.id, {});
       setPix(r.pixCode || "");
-      if (!r.pixCode) alert("Cobrança criada na Cora, mas o código Pix não veio no formato esperado — preciso ajustar o parser com o retorno real (teste em stage).");
-    } catch (e) { alert("Erro ao gerar cobrança: " + e.message); }
+      if (!r.pixCode) toast("Cobrança criada na Cora, mas o código Pix não veio no formato esperado — preciso ajustar o parser com o retorno real (teste em stage).", "info");
+    } catch (e) { toast("Erro ao gerar cobrança: " + e.message, "error"); }
     setGenBusy(false);
   };
   return (
@@ -324,7 +341,7 @@ export function BookingForm({ slotId }) {
     if (c && c.unit) setUnit(c.unit);
   };
   const save = async () => {
-    if (!name.trim()) return alert("Informe o nome.");
+    if (!name.trim()) return toast("Informe o nome.", "error");
     await run(api.createBooking({ clientName: name.trim(), phone: phone.trim(), unit, value, date, time, slotId: slot ? slot.id : undefined }));
     close();
   };
@@ -385,7 +402,7 @@ export function SlotForm({ presetDate }) {
   const save = async () => {
     const r = await run(api.createSlot({ unit, prof, time, capacity, dates }));
     close();
-    if (r && r.created.length !== 1) setTimeout(() => alert(`${r.created.length} horário(s) criado(s).`), 50);
+    if (r && r.created.length !== 1) toast(`${r.created.length} horário(s) criado(s).`);
   };
   return (
     <Modal title="Novo horário na agenda" footer={<>
@@ -438,7 +455,7 @@ export function ReplicateSlotForm({ slot }) {
   const save = async () => {
     const r = await run(api.createSlot({ unit: slot.unit, prof: slot.prof, time: slot.time, capacity: slot.capacity, dates }));
     open(<SlotDetail slotId={slot.id} />);
-    setTimeout(() => alert(`${r?.created?.length ?? 0} horário(s) criado(s).`), 50);
+    toast(`${r?.created?.length ?? 0} horário(s) criado(s).`);
   };
 
   const modes = [["weekly", "Semanal"], ["daily", "Diária"], ["weekdays", "Dias específicos"]];
@@ -488,13 +505,14 @@ export function ClientProfile({ client }) {
   const total = hist.filter((b) => b.status !== "cancelada").length;
   const pago = hist.filter((b) => b.paid).reduce((s, b) => s + b.value, 0);
   const resetPin = async () => {
-    if (!window.confirm(`Redefinir o PIN de ${c.name}?\n\nO PIN atual será apagado e ela criará um novo no próximo acesso ao portal.`)) return;
+    if (!(await confirmModal({ title: "Redefinir PIN", message: `Redefinir o PIN de ${c.name}?\n\nO PIN atual será apagado e ela criará um novo no próximo acesso ao portal.`, confirmLabel: "Redefinir", tone: "danger" }))) return;
     await run(api.resetPin(c.id));
-    alert("PIN redefinido. O(a) aluno(a) criará um novo PIN no próximo acesso. 💚");
+    toast("PIN redefinido. O(a) aluno(a) criará um novo PIN no próximo acesso. 💚");
   };
   return (
     <Modal title={c.name} footer={<>
       <button className="btn wa" onClick={() => openWa(c.phone, `Olá ${c.name}! 💚`)}><WaIcon /> WhatsApp</button>
+      {c.plan === "mensalista" && <button className="btn" onClick={() => open(<BatchBookForm client={c} />)}>📅 Agendar em lote</button>}
       {c.hasPin && <button className="btn ghost" onClick={resetPin}>🔑 Redefinir PIN</button>}
       <div style={{ flex: 1 }} />
       <button className="btn sec" onClick={() => open(<ClientForm client={c} />)}>Editar cadastro</button>
@@ -524,6 +542,65 @@ export function ClientProfile({ client }) {
 }
 
 /* ======================= Cliente (novo/editar) ======================= */
+/* ============ Agendar aulas em lote (mensalista) ============ */
+export function BatchBookForm({ client }) {
+  const { data, run } = useStore();
+  const { open, close } = useModal();
+  const meta = data.meta;
+  const [unit, setUnit] = useState(client.unit || meta.units[0]);
+  const [time, setTime] = useState("09:00");
+  const [weekdays, setWeekdays] = useState(() => new Set());
+  const [weeks, setWeeks] = useState(4);
+  const [busy, setBusy] = useState(false);
+  const toggleWd = (i) => setWeekdays((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
+
+  const dates = weekdays.size ? datesForWeekdays(todayISO(), [...weekdays], weeks) : [];
+  // pré-visualização: quantas dessas datas já têm turma nessa unidade/horário
+  const comTurma = dates.filter((d) => data.slots.some((s) => s.date === d && s.time === time && s.unit === unit));
+
+  const save = async () => {
+    if (!dates.length) return toast("Marque ao menos um dia da semana.", "error");
+    setBusy(true);
+    try {
+      const r = await run(api.batchBook(client.id, { unit, time, dates }));
+      const p = r?.pulos || {};
+      close();
+      toast(
+        `✅ ${r?.agendadas ?? 0} aula(s) agendada(s).\n` +
+        `Puladas: ${p.semTurma || 0} sem turma · ${p.cheia || 0} lotada(s) · ${p.jaAgendado || 0} já agendada(s).`
+      );
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal title={`Agendar em lote — ${client.name}`} footer={<>
+      <button className="btn ghost" onClick={() => open(<ClientProfile client={client} />)}>← Voltar</button>
+      <button className="btn" onClick={save} disabled={busy || !comTurma.length}>Agendar {comTurma.length} aula(s)</button>
+    </>}>
+      <div className="cfg-preview" style={{ marginTop: 0, marginBottom: "1rem" }}>
+        Agenda o(a) mensalista <b>{client.name}</b> nas turmas <b>já existentes</b> que baterem com o dia/horário. Não cria turmas novas.
+      </div>
+      <div className="row2">
+        <div className="field"><label>Unidade</label><select value={unit} onChange={(e) => setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
+        <div className="field"><label>Horário</label><input value={time} onChange={(e) => setTime(e.target.value)} placeholder="09:00" /></div>
+      </div>
+      <div className="field">
+        <label>Dias da semana</label>
+        <WeekdayChips selected={weekdays} onToggle={toggleWd} />
+      </div>
+      <div className="field">
+        <label>Por quantas semanas</label>
+        <input type="number" min="1" max="52" value={weeks} onChange={(e) => setWeeks(Math.max(1, parseInt(e.target.value, 10) || 1))} style={{ width: 90 }} />
+      </div>
+      <div className="help">
+        {weekdays.size
+          ? `${dates.length} data(s) no período · ${comTurma.length} com turma existente (serão agendadas). As demais são puladas.`
+          : "Marque os dias da semana para ver quantas aulas serão agendadas."}
+      </div>
+    </Modal>
+  );
+}
+
 export function ClientForm({ client }) {
   const { data, run } = useStore();
   const { close } = useModal();
@@ -540,13 +617,13 @@ export function ClientForm({ client }) {
   const [firstClass, setFirstClass] = useState(client ? !!client.firstClass : true);
   const toggle = (t) => setTags((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
   const save = async () => {
-    if (!name.trim()) return alert("Informe o nome.");
+    if (!name.trim()) return toast("Informe o nome.", "error");
     const payload = { name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: cpf.trim(), unit, tags, notes: notes.trim(), birthday, level, firstClass };
     await run(client ? api.updateClient(client.id, payload) : api.createClient(payload));
     close();
   };
   const del = async () => {
-    if (confirm("Excluir este aluno?")) { await run(api.deleteClient(client.id)); close(); }
+    if (await confirmModal({ title: "Excluir aluno", message: "Excluir este aluno?", confirmLabel: "Excluir", tone: "danger" })) { await run(api.deleteClient(client.id)); close(); }
   };
   return (
     <Modal title={client ? "Editar aluno" : "Novo aluno"} footer={<>

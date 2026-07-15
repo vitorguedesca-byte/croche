@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast } from "./toast.jsx";
 import { useStore } from "./store.jsx";
 import { api } from "./api.js";
 import { WEEKDAYS_PT, parseHorario, horarioToText, serializeHorario } from "./helpers.js";
@@ -14,6 +15,8 @@ export default function Config() {
   const [profs, setProfs] = useState((m.profs || []).join("\n"));
   const [pixKey, setPixKey] = useState(m.pixKey || "");
   const [pixName, setPixName] = useState(m.pixName || "");
+  const [mensalidadeValor, setMensalidadeValor] = useState(m.mensalidadeValor || "");
+  const [vencimentoDia, setVencimentoDia] = useState(m.vencimentoDia || 10);
   const [saved, setSaved] = useState(false);
 
   const save = async () => {
@@ -23,11 +26,13 @@ export default function Config() {
       horarioFunc: serializeHorario(hours),
       pixKey: pixKey.trim(),
       pixName: pixName.trim(),
+      mensalidadeValor: Number(mensalidadeValor) || 0,
+      vencimentoDia: Math.min(28, Math.max(1, parseInt(vencimentoDia, 10) || 10)),
       units: units.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
       profs: profs.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
     };
-    if (!payload.units.length) return alert("Cadastre ao menos uma unidade.");
-    if (!payload.profs.length) return alert("Cadastre ao menos um profissional.");
+    if (!payload.units.length) return toast("Cadastre ao menos uma unidade.", "error");
+    if (!payload.profs.length) return toast("Cadastre ao menos um profissional.", "error");
     await run(api.updateSettings(payload));
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
@@ -48,6 +53,16 @@ export default function Config() {
         {pixKey.trim()
           ? <div className="cfg-preview">🔑 Alunas verão: <b>{pixName.trim() || "—"}</b> · chave <b>{pixKey.trim()}</b></div>
           : <div className="cfg-warn">⚠️ Sem chave Pix cadastrada, as alunas não conseguem pagar a reserva.</div>}
+      </div>
+
+      {/* MENSALIDADES */}
+      <div className="panel cfg-sec">
+        <div className="cfg-h"><span className="cfg-ic">📅</span><div><h2>Mensalidades</h2><p>Padrões dos alunos mensalistas. Cada aluno pode ter valor/vencimento próprios.</p></div></div>
+        <div className="row2">
+          <div className="field"><label>Valor padrão da mensalidade (R$)</label><input type="number" min="0" step="0.01" value={mensalidadeValor} onChange={(e) => setMensalidadeValor(e.target.value)} placeholder="ex.: 200" /></div>
+          <div className="field"><label>Dia de vencimento padrão (1–28)</label><input type="number" min="1" max="28" value={vencimentoDia} onChange={(e) => setVencimentoDia(e.target.value)} /></div>
+        </div>
+        <div className="cfg-preview">🧾 Boletos padrão: <b>{Number(mensalidadeValor) ? "R$ " + mensalidadeValor : "—"}</b> · vencimento dia <b>{vencimentoDia}</b></div>
       </div>
 
       {/* PADRÕES DE RESERVA */}

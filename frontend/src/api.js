@@ -43,6 +43,13 @@ export const api = {
   updateClient: (id, data) => req("PATCH", `/api/clients/${id}`, data),
   deleteClient: (id) => req("DELETE", `/api/clients/${id}`),
 
+  // mensalidades (mensalistas)
+  batchBook: (clientId, data) => req("POST", `/api/clients/${clientId}/batch-book`, data),
+  gerarMensalidade: (clientId, competencia) => req("POST", `/api/clients/${clientId}/invoice`, competencia ? { competencia } : {}),
+  gerarMensalidadesMes: () => req("POST", "/api/invoices/gerar-mes"),
+  payInvoice: (id) => req("POST", `/api/invoices/${id}/pay`),
+  cancelInvoice: (id) => req("POST", `/api/invoices/${id}/cancel`),
+
   addWaitlist: (slotId, data) => req("POST", `/api/slots/${slotId}/waitlist`, data),
   removeWaitlist: (id) => req("DELETE", `/api/waitlist/${id}`),
   promoteWaitlist: (id) => req("POST", `/api/waitlist/${id}/promote`),

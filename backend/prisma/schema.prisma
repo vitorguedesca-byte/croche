@@ -20,7 +20,32 @@ model Client {
   birthday  String?  @db.VarChar(10) // 'YYYY-MM-DD'
   level     String?  @db.VarChar(20) // Iniciante | Intermediário | Avançado
   firstClass Boolean @default(false) // aluna nova / ainda na primeira aula
+  // ----- plano / cobrança -----
+  plan         String  @default("avulso") @db.VarChar(20) // "avulso" | "mensalista"
+  monthlyValue Float?  // valor individual da mensalidade; null = usa o padrão das Configurações
+  billingDay   Int?    // dia de vencimento (1-28); null = usa o padrão
+  makeupCredits Int    @default(0) // créditos de reposição (regra a definir)
   createdAt DateTime @default(now())
+  invoices  Invoice[]
+}
+
+// Mensalidades (boletos) dos alunos mensalistas
+model Invoice {
+  id            Int      @id @default(autoincrement())
+  clientId      Int
+  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  competencia   String   @db.VarChar(7) // mês de referência 'YYYY-MM'
+  amountCents   Int      // valor em centavos
+  dueDate       String   @db.VarChar(10) // 'YYYY-MM-DD'
+  status        String   @default("pendente") @db.VarChar(20) // pendente | pago | cancelado
+  coraInvoiceId String?  @db.VarChar(80)
+  boletoUrl     String?  @db.VarChar(500)
+  pixCode       String?  @db.Text
+  paidAt        String?  @db.VarChar(30)
+  createdAt     DateTime @default(now())
+
+  @@index([clientId])
+  @@index([competencia])
 }
 
 model Slot {
@@ -112,4 +137,6 @@ model Settings {
   horarioFunc      String @default("Seg a Sáb, 09h às 17h") @db.VarChar(1000) // texto legado OU JSON com horário por dia da semana
   pixKey           String @default("") @db.VarChar(255)
   pixName          String @default("") @db.VarChar(255)
+  mensalidadeValor Float  @default(0)   // valor padrão da mensalidade
+  vencimentoDia    Int    @default(10)  // dia de vencimento padrão (1-28)
 }

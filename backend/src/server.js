@@ -39,12 +39,18 @@ const depoUpload = multer({
 const app = express();
 app.use(cors());
 app.use(express.json());
+// Garantir UTF-8 em todas as respostas JSON
+app.use((_req, res, next) => { res.setHeader("Content-Type", "application/json; charset=utf-8"); next(); });
 
 /* ===================== AUTENTICAÇÃO DO PAINEL ADMIN =====================
    Protege as rotas do painel. Só quem tem conta (usuário+senha) acessa.
    Rotas públicas (site, portal do aluno, webhook) ficam liberadas. */
 const adminTokens = new Set(); // tokens de sessão válidos (em memória)
 const genToken = () => crypto.randomBytes(24).toString("hex");
+// Enquanto não houver NENHUM admin cadastrado, o painel fica aberto (primeiro uso),
+// para não travar o sistema antes de você criar o acesso. Depois de criar, passa a exigir login.
+let hasAdmin = false;
+prisma.adminUser.count().then((n) => { hasAdmin = n > 0; }).catch(() => {});
 // rotas que NÃO exigem login (site público, portal do aluno, webhooks)
 const PUBLIC_API = [
   ["GET", /^\/api\/health$/],
@@ -59,10 +65,12 @@ const PUBLIC_API = [
   ["GET", /^\/api\/testimonials$/],
   ["GET", /^\/api\/settings$/],
   [null, /^\/api\/wa\/webhook$/],
+  [null, /^\/api\/cora\/webhook$/],
 ];
 const isPublicApi = (req) => PUBLIC_API.some(([m, re]) => (!m || m === req.method) && re.test(req.path));
 app.use((req, res, next) => {
   if (!req.path.startsWith("/api/")) return next(); // arquivos estáticos etc.
+  if (!hasAdmin) return next(); // primeiro uso: sem admin cadastrado, tudo liberado
   if (isPublicApi(req)) return next();
   const tok = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
   if (tok && adminTokens.has(tok)) return next();
@@ -99,7 +107,7 @@ const wrap = (fn) => (req, res) =>
   });
 
 /* ---------- configurações (linha única id=1, cache em memória) ---------- */
-let SETTINGS = { valorPadrao: VALOR_PADRAO, capacidadePadrao: CAPACITY_PADRAO, units: UNITS, profs: PROFS, horarioFunc: "", pixKey: "", pixName: "" };
+let SETTINGS = { valorPadrao: VALOR_PADRAO, capacidadePadrao: CAPACITY_PADRAO, units: UNITS, profs: PROFS, horarioFunc: "", pixKey: "", pixName: "", mensalidadeValor: 0, vencimentoDia: 10 };
 async function loadSettings() {
   let s = await prisma.settings.findUnique({ where: { id: 1 } });
   if (!s) s = await prisma.settings.create({ data: { id: 1 } });
@@ -111,6 +119,8 @@ async function loadSettings() {
     horarioFunc: s.horarioFunc || "",
     pixKey: s.pixKey || "",
     pixName: s.pixName || "",
+    mensalidadeValor: s.mensalidadeValor ?? 0,
+    vencimentoDia: s.vencimentoDia ?? 10,
   };
   return SETTINGS;
 }
@@ -119,16 +129,18 @@ async function loadSettings() {
 app.get(
   "/api/state",
   wrap(async (req, res) => {
-    const [clients, slots, bookings] = await Promise.all([
+    const [clients, slots, bookings, invoices] = await Promise.all([
       prisma.client.findMany({ orderBy: { name: "asc" } }),
       prisma.slot.findMany({ include: { waitlist: true }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
       prisma.booking.findMany({ orderBy: [{ date: "asc" }, { time: "asc" }] }),
+      prisma.invoice.findMany({ orderBy: [{ competencia: "desc" }, { createdAt: "desc" }] }),
     ]);
     res.json({
-      meta: { units: SETTINGS.units, profs: SETTINGS.profs, valorPadrao: SETTINGS.valorPadrao, capacidadePadrao: SETTINGS.capacidadePadrao, horarioFunc: SETTINGS.horarioFunc, pixKey: SETTINGS.pixKey, pixName: SETTINGS.pixName },
+      meta: { units: SETTINGS.units, profs: SETTINGS.profs, valorPadrao: SETTINGS.valorPadrao, capacidadePadrao: SETTINGS.capacidadePadrao, horarioFunc: SETTINGS.horarioFunc, pixKey: SETTINGS.pixKey, pixName: SETTINGS.pixName, mensalidadeValor: SETTINGS.mensalidadeValor, vencimentoDia: SETTINGS.vencimentoDia },
       clients: clients.map(({ pin, ...c }) => ({ ...c, tags: parseTags(c.tags), hasPin: !!pin })),
       slots,
       bookings,
+      invoices,
     });
   })
 );
@@ -389,11 +401,226 @@ app.post(
           });
           console.log(`[cora] pagamento confirmado — reserva ${booking.id}`);
         }
+        // mensalidade? (código fqc-mensalidade-<clientId>-<YYYY-MM>)
+        let invoice = await prisma.invoice.findFirst({ where: { coraInvoiceId: realId } });
+        if (!invoice && code) {
+          const mm = String(code).match(/^fqc-mensalidade-(\d+)-(\d{4}-\d{2})$/);
+          if (mm) invoice = await prisma.invoice.findFirst({ where: { clientId: Number(mm[1]), competencia: mm[2] } });
+        }
+        if (invoice && invoice.status !== "pago") {
+          await prisma.invoice.update({ where: { id: invoice.id }, data: { status: "pago", paidAt: todayISO() } });
+          console.log(`[cora] mensalidade confirmada — invoice ${invoice.id}`);
+        }
       }
     }
     res.json({ ok: true });
   })
 );
+
+/* ---------- MENSALIDADES (mensalistas) ---------- */
+const competenciaAtual = () => todayISO().slice(0, 7); // 'YYYY-MM'
+// valor e vencimento efetivos do aluno (individual OU padrão das Configurações)
+const mensalidadeValorDe = (c) => (c.monthlyValue != null ? c.monthlyValue : SETTINGS.mensalidadeValor) || 0;
+const vencimentoDe = (c) => {
+  const dia = Math.min(28, Math.max(1, c.billingDay || SETTINGS.vencimentoDia || 10));
+  const [y, m] = competenciaAtual().split("-").map(Number);
+  return `${y}-${String(m).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+};
+
+// Gera (ou reaproveita) o boleto da mensalidade de um aluno para uma competência
+async function gerarMensalidade(clientId, competencia) {
+  const client = await prisma.client.findUnique({ where: { id: clientId } });
+  if (!client) throw Object.assign(new Error("Aluno não encontrado"), { code: 404 });
+  if (client.plan !== "mensalista") throw Object.assign(new Error("Aluno não é mensalista"), { code: 400 });
+  const comp = competencia || competenciaAtual();
+  // já existe para essa competência? reaproveita
+  const existing = await prisma.invoice.findFirst({ where: { clientId, competencia: comp } });
+  if (existing) return existing;
+  const valor = mensalidadeValorDe(client);
+  if (!valor) throw Object.assign(new Error("Defina o valor da mensalidade (no aluno ou nas Configurações)."), { code: 400 });
+  const dueDate = vencimentoDe(client);
+  let coraInvoiceId = null, pixCode = null, boletoUrl = null;
+  if (coraConfigured()) {
+    const cpf = (client.cpf || "").replace(/\D/g, "");
+    if (!cpf) throw Object.assign(new Error("Cadastre o CPF do aluno antes de gerar o boleto."), { code: 400 });
+    const inv = await createInvoice({
+      code: `fqc-mensalidade-${clientId}-${comp}`,
+      name: client.name,
+      cpf,
+      email: client.email || undefined,
+      amountCents: Math.round(valor * 100),
+      dueDate,
+      description: `Mensalidade ${comp} — Fios que Curam`,
+    });
+    coraInvoiceId = (inv?.id || inv?.invoice_id || null);
+    coraInvoiceId = coraInvoiceId ? String(coraInvoiceId) : null;
+    pixCode = extractPix(inv);
+    boletoUrl = extractBoletoUrl(inv);
+  }
+  return prisma.invoice.create({
+    data: { clientId, competencia: comp, amountCents: Math.round(valor * 100), dueDate, status: "pendente", coraInvoiceId, pixCode, boletoUrl },
+  });
+}
+
+// Gerar boleto da mensalidade (manual) — body opcional { competencia: 'YYYY-MM' }
+app.post("/api/clients/:id/invoice", wrap(async (req, res) => {
+  try {
+    const inv = await gerarMensalidade(Number(req.params.id), req.body?.competencia);
+    res.json(inv);
+  } catch (e) {
+    res.status(e.code || 500).json({ error: e.message });
+  }
+}));
+
+// Marcar mensalidade como paga (manual)
+app.post("/api/invoices/:id/pay", wrap(async (req, res) => {
+  const inv = await prisma.invoice.update({
+    where: { id: Number(req.params.id) },
+    data: { status: "pago", paidAt: req.body?.paidAt || todayISO() },
+  });
+  res.json(inv);
+}));
+
+// Cancelar mensalidade
+app.post("/api/invoices/:id/cancel", wrap(async (req, res) => {
+  const inv = await prisma.invoice.update({ where: { id: Number(req.params.id) }, data: { status: "cancelado" } });
+  res.json(inv);
+}));
+
+// Gerar boletos de TODOS os mensalistas ativos para a competência atual (usado no botão "gerar todos" e no automático)
+async function gerarMensalidadesDoMes() {
+  const comp = competenciaAtual();
+  const mensalistas = await prisma.client.findMany({ where: { plan: "mensalista" } });
+  const feitas = [];
+  for (const c of mensalistas) {
+    try { feitas.push(await gerarMensalidade(c.id, comp)); } catch (e) { console.warn(`[mensalidade] ${c.name}: ${e.message}`); }
+  }
+  return feitas;
+}
+app.post("/api/invoices/gerar-mes", wrap(async (_req, res) => {
+  const feitas = await gerarMensalidadesDoMes();
+  res.json({ geradas: feitas.length });
+}));
+
+// Automático: 1x/dia verifica se é o dia de vencimento padrão e gera as mensalidades do mês
+let ultimoDiaGeracao = null;
+setInterval(async () => {
+  try {
+    const hoje = todayISO();
+    const diaHoje = new Date(hoje + "T00:00").getDate();
+    if (diaHoje === (SETTINGS.vencimentoDia || 10) && ultimoDiaGeracao !== hoje) {
+      ultimoDiaGeracao = hoje;
+      const feitas = await gerarMensalidadesDoMes();
+      if (feitas.length) console.log(`[mensalidade] ${feitas.length} boleto(s) do mês gerados automaticamente.`);
+    }
+  } catch (e) { console.warn("[mensalidade auto]", e.message); }
+}, 60 * 60 * 1000); // a cada hora
+
+/* ---------- PORTAL DO ALUNO ---------- */
+// Localiza o aluno pela "chave" usada no portal: CPF, telefone (dígitos) ou id.
+async function clientByPortalKey(key) {
+  const d = onlyDigits(key);
+  const clients = await prisma.client.findMany();
+  return (
+    clients.find((c) => (c.cpf && onlyDigits(c.cpf) === d) || (c.phone && onlyDigits(c.phone) === d)) ||
+    (Number(key) ? clients.find((c) => c.id === Number(key)) : null) ||
+    null
+  );
+}
+const safeClient = (c) => { const { pin, ...rest } = c; return { ...rest, tags: parseTags(c.tags), hasPin: !!pin }; };
+
+// Dados do aluno: cadastro, aulas e horários disponíveis para marcar
+app.get("/api/portal/:key", wrap(async (req, res) => {
+  const client = await clientByPortalKey(req.params.key);
+  if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const t = todayISO();
+  const [bookings, slots, ativas] = await Promise.all([
+    prisma.booking.findMany({ where: { clientName: client.name }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
+    prisma.slot.findMany({ where: { date: { gte: t } }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
+    prisma.booking.findMany({ where: { status: { not: "cancelada" } } }),
+  ]);
+  const occ = {}; ativas.forEach((b) => { occ[b.slotId] = (occ[b.slotId] || 0) + 1; });
+  const available = slots
+    .filter((s) => (occ[s.id] || 0) < (s.capacity || 1))
+    .map((s) => ({ ...s, occupancy: occ[s.id] || 0, free: (s.capacity || 1) - (occ[s.id] || 0) }));
+  res.json({ client: safeClient(client), bookings, available, meta: { units: SETTINGS.units, valorPadrao: SETTINGS.valorPadrao, pixKey: SETTINGS.pixKey, pixName: SETTINGS.pixName } });
+}));
+
+// Marcar aula
+app.post("/api/portal/:key/book", wrap(async (req, res) => {
+  const client = await clientByPortalKey(req.params.key);
+  if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const slot = await prisma.slot.findUnique({ where: { id: Number(req.body.slotId) } });
+  if (!slot) return res.status(404).json({ error: "Horário não encontrado." });
+  const dup = await prisma.booking.findFirst({ where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } } });
+  if (dup) return res.status(400).json({ error: "Você já tem essa aula marcada." });
+  if ((await occupancy(slot.id)) >= (slot.capacity || 1)) return res.status(400).json({ error: "Turma lotada." });
+  const mensalista = client.plan === "mensalista";
+  const booking = await prisma.booking.create({
+    data: {
+      clientName: client.name, phone: client.phone || "", unit: slot.unit, date: slot.date, time: slot.time, prof: slot.prof || profFor(slot.unit),
+      slotId: slot.id,
+      status: mensalista ? "confirmada" : "aguardando",
+      value: mensalista ? 0 : SETTINGS.valorPadrao,
+      paid: false,
+      paymentMethod: mensalista ? "Mensalista" : null,
+    },
+  });
+  res.json(booking);
+}));
+
+// Cancelar aula (libera a vaga)
+app.post("/api/portal/:key/cancel/:bookingId", wrap(async (req, res) => {
+  const client = await clientByPortalKey(req.params.key);
+  if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const b = await prisma.booking.findUnique({ where: { id: Number(req.params.bookingId) } });
+  if (!b || b.clientName !== client.name) return res.status(404).json({ error: "Aula não encontrada." });
+  await prisma.booking.update({ where: { id: b.id }, data: { status: "cancelada" } });
+  res.json({ ok: true });
+}));
+
+// "Não poderei ir" — registra o aviso/motivo e libera a vaga
+app.post("/api/portal/:key/absence/:bookingId", wrap(async (req, res) => {
+  const client = await clientByPortalKey(req.params.key);
+  if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const b = await prisma.booking.findUnique({ where: { id: Number(req.params.bookingId) } });
+  if (!b || b.clientName !== client.name) return res.status(404).json({ error: "Aula não encontrada." });
+  await prisma.booking.update({
+    where: { id: b.id },
+    data: { status: "cancelada", absenceReason: String(req.body.reason || "").slice(0, 500) },
+  });
+  res.json({ ok: true });
+}));
+
+/* ---------- AGENDAMENTO EM LOTE (mensalista) ---------- */
+// Agenda o aluno em várias turmas de uma vez, só nos horários JÁ existentes,
+// respeitando a capacidade. Body: { unit, time, dates: ['YYYY-MM-DD', ...] }
+app.post("/api/clients/:id/batch-book", wrap(async (req, res) => {
+  const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
+  if (!client) return res.status(404).json({ error: "Aluno não encontrado" });
+  const { unit, time } = req.body || {};
+  const dates = Array.isArray(req.body?.dates) ? req.body.dates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)) : [];
+  if (!unit || !time || !dates.length) return res.status(400).json({ error: "Informe unidade, horário e ao menos uma data." });
+
+  const agendadas = [], pulos = { semTurma: 0, cheia: 0, jaAgendado: 0 };
+  for (const date of [...new Set(dates)].sort()) {
+    const slot = await prisma.slot.findFirst({ where: { date, time, unit } });
+    if (!slot) { pulos.semTurma++; continue; }
+    // já agendado nesta turma?
+    const jaTem = await prisma.booking.findFirst({ where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } } });
+    if (jaTem) { pulos.jaAgendado++; continue; }
+    // capacidade
+    if ((await occupancy(slot.id)) >= (slot.capacity || 1)) { pulos.cheia++; continue; }
+    const b = await prisma.booking.create({
+      data: {
+        clientName: client.name, phone: client.phone || "", unit, date, time, prof: slot.prof || profFor(unit),
+        slotId: slot.id, status: "confirmada", value: 0, paid: false, paymentMethod: "Mensalista",
+      },
+    });
+    agendadas.push(b);
+  }
+  res.json({ agendadas: agendadas.length, pulos });
+}));
 
 /* ---------- WHATSAPP (Cloud API) ---------- */
 // Verificação do webhook (a Meta chama com GET ao registrar a URL)
@@ -554,12 +781,15 @@ async function handleWaMessage(msg) {
 app.post(
   "/api/clients",
   wrap(async (req, res) => {
-    const { name, phone, email, cpf, unit, tags, notes, birthday, level, firstClass } = req.body;
+    const { name, phone, email, cpf, unit, tags, notes, birthday, level, firstClass, plan, monthlyValue, billingDay } = req.body;
     if (!name) return res.status(400).json({ error: "name é obrigatório" });
     const client = await prisma.client.create({
       data: {
         name, phone: phone || "", email: (email || "").trim() || null, cpf: onlyDigits(cpf) || null, unit: unit || UNITS[0], tags: JSON.stringify(tags || []), notes: notes || "",
         birthday: birthday || null, level: level || null, firstClass: !!firstClass,
+        plan: plan === "mensalista" ? "mensalista" : "avulso",
+        monthlyValue: monthlyValue === "" || monthlyValue == null ? null : Number(monthlyValue),
+        billingDay: billingDay === "" || billingDay == null ? null : Math.min(28, Math.max(1, parseInt(billingDay, 10) || 0)) || null,
       },
     });
     res.json(client);
@@ -570,7 +800,7 @@ app.patch(
   "/api/clients/:id",
   wrap(async (req, res) => {
     const id = Number(req.params.id);
-    const { name, phone, email, cpf, unit, tags, notes, birthday, level, firstClass } = req.body;
+    const { name, phone, email, cpf, unit, tags, notes, birthday, level, firstClass, plan, monthlyValue, billingDay } = req.body;
     const data = {};
     if (name !== undefined) data.name = name;
     if (phone !== undefined) data.phone = phone;
@@ -582,6 +812,9 @@ app.patch(
     if (birthday !== undefined) data.birthday = birthday || null;
     if (level !== undefined) data.level = level || null;
     if (firstClass !== undefined) data.firstClass = !!firstClass;
+    if (plan !== undefined) data.plan = plan === "mensalista" ? "mensalista" : "avulso";
+    if (monthlyValue !== undefined) data.monthlyValue = monthlyValue === "" || monthlyValue == null ? null : Number(monthlyValue);
+    if (billingDay !== undefined) data.billingDay = billingDay === "" || billingDay == null ? null : Math.min(28, Math.max(1, parseInt(billingDay, 10) || 0)) || null;
     const client = await prisma.client.update({ where: { id }, data });
     res.json(client);
   })
@@ -732,6 +965,8 @@ app.put(
     if (b.horarioFunc !== undefined) data.horarioFunc = String(b.horarioFunc);
     if (b.pixKey !== undefined) data.pixKey = String(b.pixKey);
     if (b.pixName !== undefined) data.pixName = String(b.pixName);
+    if (b.mensalidadeValor !== undefined) data.mensalidadeValor = Number(b.mensalidadeValor) || 0;
+    if (b.vencimentoDia !== undefined) data.vencimentoDia = Math.min(28, Math.max(1, parseInt(b.vencimentoDia, 10) || 10));
     await prisma.settings.upsert({ where: { id: 1 }, update: data, create: { id: 1, ...data } });
     await loadSettings();
     res.json(SETTINGS);
@@ -754,6 +989,7 @@ app.post("/api/admin/setup", wrap(async (req, res) => {
   if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
   if (password.length < 6) return res.status(400).json({ error: "Senha deve ter ao menos 6 caracteres." });
   await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10) } });
+  hasAdmin = true;
   const token = genToken(); adminTokens.add(token);
   res.json({ ok: true, token, username });
 }));

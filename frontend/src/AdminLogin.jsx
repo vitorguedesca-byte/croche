@@ -14,7 +14,11 @@ export default function AdminLogin() {
   useEffect(() => {
     api.admin.exists()
       .then((r) => setMode(r.exists ? "login" : "setup"))
-      .catch(() => setMode("login"));
+      .catch(() => {
+        // Backend antigo/desligado: não tem o endpoint. Assume primeiro acesso e avisa.
+        setMode("setup");
+        setErr("Não consegui falar com o servidor. Reinicie o backend (npm run dev) e recarregue a página.");
+      });
   }, []);
 
   async function submit(e) {

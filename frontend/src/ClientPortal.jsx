@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast, confirmModal } from "./toast.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money } from "./helpers.js";
@@ -6,6 +7,8 @@ import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money } from "./helper
 const CPF_KEY = "fqc_portal_cpf";
 const INEZ_WA = "5531000000000"; // número da Inêz (ajustável)
 const getStored = () => { try { return localStorage.getItem(CPF_KEY) || ""; } catch { return ""; } };
+// chave do portal: prioriza CPF, cai para telefone, depois id
+const portalKey = (c) => (c?.cpf || "").replace(/\D/g, "") || (c?.phone || "").replace(/\D/g, "") || String(c?.id || "");
 
 function statusText(b) {
   if (b.status === "aguardando") return "Aguardando pagamento";
@@ -77,13 +80,13 @@ export default function ClientPortal() {
     if (pin.length !== 4) { setErr("O PIN deve ter 4 números."); return; }
     if (pin !== pinConfirm) { setErr("Os PINs não conferem."); setPinConfirm(""); return; }
     setLoading(true); setErr("");
-    try { const r = await api.auth.setPin(input.replace(/\D/g, ""), pin); await load(r.client.phone); }
+    try { const r = await api.auth.setPin(input.replace(/\D/g, ""), pin); await load(portalKey(r.client)); }
     catch (e) { setErr(e.message); setLoading(false); }
   };
   const enterPin = async () => {
     if (pin.length !== 4) { setErr("Digite os 4 números do seu PIN."); return; }
     setLoading(true); setErr("");
-    try { const r = await api.auth.login(input.replace(/\D/g, ""), pin); await load(r.client.phone); }
+    try { const r = await api.auth.login(input.replace(/\D/g, ""), pin); await load(portalKey(r.client)); }
     catch (e) { setErr(e.message); setPin(""); setLoading(false); }
   };
   const disconnect = () => {
@@ -140,10 +143,10 @@ export default function ClientPortal() {
   const nome = ((data.client && data.client.name) || "").split(" ")[0] || "aluno(a)";
 
   const doCancel = async (b) => {
-    if (!window.confirm(`Cancelar a sua aula de ${fmtDateLong(b.date)} às ${b.time}?\n\nA vaga ficará livre para outra pessoa.`)) return;
+    if (!(await confirmModal({ title: "Cancelar aula", message: `Cancelar a sua aula de ${fmtDateLong(b.date)} às ${b.time}?\n\nA vaga ficará livre para outra pessoa.`, confirmLabel: "Cancelar aula", cancelLabel: "Voltar", tone: "danger" }))) return;
     setBusy(true);
     try { await api.portal.cancel(phone, b.id); flash("Aula cancelada."); await load(phone); }
-    catch (e) { alert(e.message); } finally { setBusy(false); }
+    catch (e) { toast(e.message, "error"); } finally { setBusy(false); }
   };
   const doAbsence = async (b) => {
     setBusy(true);
@@ -152,16 +155,16 @@ export default function ClientPortal() {
       flash("Aviso enviado. Obrigada por avisar! 💚");
       setAbsenceFor(null); setAbsenceText("");
       await load(phone);
-    } catch (e) { alert(e.message); } finally { setBusy(false); }
+    } catch (e) { toast(e.message, "error"); } finally { setBusy(false); }
   };
   const doBook = async (slot) => {
-    if (!window.confirm(`Marcar aula em ${slot.unit}\n${fmtDateLong(slot.date)} às ${slot.time}?`)) return;
+    if (!(await confirmModal({ title: "Confirmar marcação", message: `Marcar aula em ${slot.unit}\n${fmtDateLong(slot.date)} às ${slot.time}?`, confirmLabel: "Marcar" }))) return;
     setBusy(true);
     try {
       await api.portal.book(phone, slot.id, data.client && data.client.name);
       flash("Aula marcada! Toque em “Pagar reserva” para confirmar. 💚");
       setScreen("home"); await load(phone);
-    } catch (e) { alert(e.message); } finally { setBusy(false); }
+    } catch (e) { toast(e.message, "error"); } finally { setBusy(false); }
   };
   const openPay = (b) => { setPayBooking(b); setScreen("pay"); };
 
