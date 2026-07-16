@@ -124,7 +124,7 @@ export function SlotDetail({ slotId }) {
         <div className="roster-row" key={b.id}>
           <div className="rr-info">
             <b>{b.clientName}</b>
-            {tag && <span className={`badge ${tag.cls}`} style={{ marginLeft: ".4rem" }}>{tag.label}</span>}
+            {tag && <span className={`badge ${tag.cls} ml`}>{tag.label}</span>}
             <div className="cli-sub">{b.phone || "sem telefone"} · {STATUS[b.status].label}</div>
           </div>
           <div className="att" title="Marcar presença">
@@ -518,7 +518,7 @@ export function ClientProfile({ client }) {
       <button className="btn sec" onClick={() => open(<ClientForm client={c} />)}>Editar cadastro</button>
     </>}>
       <div className="info-line"><b>Telefone</b><span>{c.phone || "—"}</span></div>
-      <div className="info-line"><b>Unidade</b><span><span className="chip">{c.unit || "—"}</span>{c.firstClass ? <span className="badge b-terra" style={{ marginLeft: ".4rem" }}>✨ Aluno(a) novo(a)</span> : null}</span></div>
+      <div className="info-line"><b>Unidade</b><span><span className="chip">{c.unit || "—"}</span>{c.firstClass ? <span className="badge b-terra ml">✨ Aluno(a) novo(a)</span> : null}</span></div>
       <div className="info-line"><b>Nível · Aniversário</b><span>{c.level || "—"}{c.birthday ? " · 🎂 " + fmtDate(c.birthday) : ""}</span></div>
       <div className="info-line"><b>Etiquetas</b><span className="tags" style={{ justifyContent: "flex-end" }}>{(c.tags || []).length ? c.tags.map((t) => <span key={t} className="chip">{t}</span>) : "—"}</span></div>
       <div className="info-line"><b>Acesso ao portal (PIN)</b><span>{c.hasPin ? <span className="badge b-ok">PIN cadastrado</span> : <span className="badge b-muted">Sem PIN ainda</span>}</span></div>
@@ -531,7 +531,7 @@ export function ClientProfile({ client }) {
       <b style={{ color: "var(--brown)" }}>Histórico de aulas</b>
       <div style={{ marginTop: ".6rem" }}>
         {hist.length ? hist.map((b) => (
-          <div className="roster-row" key={b.id} style={{ cursor: "pointer" }} onClick={() => open(<ManageBooking booking={b} />)}>
+          <div className="roster-row row-click" key={b.id} onClick={() => open(<ManageBooking booking={b} />)}>
             <div className="rr-info"><b>{fmtDate(b.date)} · {b.time}</b><div className="cli-sub">{b.unit}{b.attendance === "presente" ? " · ✓ presente" : b.attendance === "falta" ? " · ✕ faltou" : ""}{b.paid ? " · pago" : ""}</div></div>
             <StatusBadge status={b.status} />
           </div>

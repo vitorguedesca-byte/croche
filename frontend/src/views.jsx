@@ -52,7 +52,7 @@ function Alerts({ open }) {
           <div>
             <div className="alert-h" style={{ color: "var(--terracota)" }}>🔥 Turmas quase lotando</div>
             {quase.map((s) => (
-              <div className="alert-row" key={s.id} style={{ cursor: "pointer" }} onClick={() => open(<SlotDetail slotId={s.id} />)}>
+              <div className="alert-row row-click" key={s.id} onClick={() => open(<SlotDetail slotId={s.id} />)}>
                 <div><b>{fmtDate(s.date)} · {s.time}</b><div className="cli-sub">{s.unit} · 1 vaga restante</div></div>
                 <span className="badge b-terra">1 vaga</span>
               </div>
@@ -129,8 +129,8 @@ export function Dashboard({ go }) {
                 <td><span className="cli-name">{b.clientName}</span><div className="cli-sub">{b.unit}</div></td>
                 <td>{fmtDate(b.date)} · {b.time}</td>
                 <td><b>{money(b.value)}</b></td>
-                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                  <button className="btn wa sm" onClick={() => openWa(b.phone, `Olá ${b.clientName}! Para confirmar sua aula de ${fmtDate(b.date)} às ${b.time}, a reserva é de ${money(b.value)}. Pode me enviar o comprovante? 💚`)}><WaIcon /></button>{" "}
+                <td className="td-actions">
+                  <button className="btn wa sm" onClick={() => openWa(b.phone, `Olá ${b.clientName}! Para confirmar sua aula de ${fmtDate(b.date)} às ${b.time}, a reserva é de ${money(b.value)}. Pode me enviar o comprovante? 💚`)}><WaIcon /></button>
                   <button className="btn sm" onClick={() => open(<ConfirmPayment booking={b} />)}>✓ Pago</button>
                 </td>
               </tr>
@@ -144,7 +144,7 @@ export function Dashboard({ go }) {
         {hoje.length ? (
           <table><thead><tr><th>Hora</th><th>Aluno</th><th>Unidade</th><th>Status</th></tr></thead><tbody>
             {hoje.map((b) => (
-              <tr key={b.id} onClick={() => open(<ManageBooking booking={b} />)} style={{ cursor: "pointer" }}>
+              <tr key={b.id} onClick={() => open(<ManageBooking booking={b} />)} className="row-click">
                 <td><b>{b.time}</b></td><td>{b.clientName}</td><td><span className="chip">{b.unit}</span></td><td><StatusBadge status={b.status} /></td>
               </tr>
             ))}
@@ -158,7 +158,7 @@ export function Dashboard({ go }) {
       {prox.length ? (
         <table><thead><tr><th>Dia</th><th>Hora</th><th>Aluno</th><th>Unidade</th><th>Status</th></tr></thead><tbody>
           {prox.map((b) => (
-            <tr key={b.id} onClick={() => open(<ManageBooking booking={b} />)} style={{ cursor: "pointer" }}>
+            <tr key={b.id} onClick={() => open(<ManageBooking booking={b} />)} className="row-click">
               <td>{fmtDateLong(b.date)}</td><td><b>{b.time}</b></td><td>{b.clientName}</td><td><span className="chip">{b.unit}</span></td><td><StatusBadge status={b.status} /></td>
             </tr>
           ))}
@@ -322,7 +322,7 @@ export function Marcacoes() {
         : "Marcações de alunas que já têm cadastro e acesso ao portal."}</div>
       <div className="filters">
         <div className="seg">{segs.map((s) => <button key={s[0]} className={filter === s[0] ? "on" : ""} onClick={() => setFilter(s[0])}>{s[1]}</button>)}</div>
-        <input placeholder="🔍 Buscar aluno..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ flex: 1, minWidth: 160 }} />
+        <input className="grow" placeholder="🔍 Buscar aluno..." value={search} onChange={(e) => setSearch(e.target.value)} />
       </div>
       {list.length ? (
         <table><thead><tr><th>Aluno</th><th>Unidade</th><th>Dia / Hora</th><th>Valor</th><th>Pagamento</th><th>Status</th><th></th></tr></thead><tbody>
@@ -330,7 +330,7 @@ export function Marcacoes() {
             <tr key={b.id} style={tab === "novos" ? { background: "rgba(127,194,65,.08)" } : {}}>
               <td>
                 <span className="cli-name">{b.clientName}</span>
-                {isNovo(b) && <span className="badge b-terra" style={{ marginLeft: ".4rem", fontSize: ".7rem" }}>🆕 Novata</span>}
+                {isNovo(b) && <span className="badge b-terra ml">🆕 Novata</span>}
                 <div className="cli-sub">{b.phone}</div>
               </td>
               <td><span className="chip">{b.unit}</span></td>
@@ -338,8 +338,8 @@ export function Marcacoes() {
               <td>{money(b.value)}</td>
               <td>{b.paid ? <span className="badge b-ok">Pago · {b.paymentMethod}</span> : <span className="badge b-warn">Pendente</span>}</td>
               <td><StatusBadge status={b.status} /></td>
-              <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                <button className="btn wa sm" title="WhatsApp" onClick={() => openWa(b.phone, `Olá ${b.clientName}! 💚`)}><WaIcon /></button>{" "}
+              <td className="td-actions">
+                <button className="btn wa sm" title="WhatsApp" onClick={() => openWa(b.phone, `Olá ${b.clientName}! 💚`)}><WaIcon /></button>
                 <button className="btn sec sm" onClick={() => open(<ManageBooking booking={b} />)}>Gerir</button>
               </td>
             </tr>
@@ -401,7 +401,7 @@ export function Clientes({ params }) {
       </div>
       <div className="seg-hint">{hint}</div>
       <div className="filters">
-        <input placeholder="🔍 Buscar por nome ou telefone..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ flex: 1, minWidth: 160 }} />
+        <input className="grow" placeholder="🔍 Buscar por nome ou telefone..." value={search} onChange={(e) => setSearch(e.target.value)} />
         <select value={unitF} onChange={(e) => setUnitF(e.target.value)}>
           <option>Todas</option>
           {data.meta.units.map((u) => <option key={u}>{u}</option>)}
@@ -415,7 +415,7 @@ export function Clientes({ params }) {
           <option value="nome">Ordenar: Nome</option>
           <option value="aulas">Ordenar: Mais aulas</option>
         </select>
-        <span style={{ color: "var(--muted)", fontWeight: 700, fontSize: ".85rem", whiteSpace: "nowrap" }}>{list.length} de {groups[tab].length}</span>
+        <span className="count">{list.length} de {groups[tab].length}</span>
       </div>
       {list.length ? (
         <table><thead><tr><th>{tab === "lead" ? "Contato" : "Aluno"}</th><th>Unidade</th><th>Nível</th><th>Etiquetas</th><th>Aulas</th><th>Presença</th><th></th></tr></thead><tbody>
@@ -425,13 +425,13 @@ export function Clientes({ params }) {
             return (
               <tr key={c.id} style={tab === "novato" ? { background: "rgba(194,113,79,.06)" } : {}}>
                 <td>
-                  <div className="cli-row" style={{ cursor: "pointer" }} onClick={() => open(<ClientProfile client={c} />)}>
+                  <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} />)}>
                     <span className="cli-av">{initials(c.name)}</span>
                     <div>
                       <span className="cli-name">{c.name}</span>
-                      {c.plan === "mensalista" ? <span className="badge b-ok" style={{ marginLeft: ".4rem" }}>📅 mensalista</span> : null}
-                      {tab === "novato" ? <span className="badge b-terra" style={{ marginLeft: ".4rem" }}>✨ 1ª aula</span> : null}
-                      {tab === "lead" ? <span className="badge b-warn" style={{ marginLeft: ".4rem" }}>🌱 lead</span> : null}
+                      {c.plan === "mensalista" ? <span className="badge b-ok ml">📅 mensalista</span> : null}
+                      {tab === "novato" ? <span className="badge b-terra ml">✨ 1ª aula</span> : null}
+                      {tab === "lead" ? <span className="badge b-warn ml">🌱 lead</span> : null}
                       <div className="cli-sub">{c.phone || "sem telefone"}{c.birthday ? " · 🎂 " + fmtDate(c.birthday) : ""}</div>
                     </div>
                   </div>
@@ -441,9 +441,9 @@ export function Clientes({ params }) {
                 <td><div className="tags">{(c.tags || []).length ? c.tags.map((t) => <span key={t} className="chip">{t}</span>) : <span className="cli-sub">—</span>}</div></td>
                 <td>{cnt}</td>
                 <td><span className="badge b-ok" title="Presenças">✓ {at.pres}</span>{at.falt ? <> <span className="badge b-danger" title="Faltas">✕ {at.falt}</span></> : null}</td>
-                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                  <button className="btn wa sm" title={tab === "lead" ? "Convidar" : "WhatsApp"} onClick={() => openWa(c.phone, waMsg(c))}><WaIcon /></button>{" "}
-                  {c.hasPin && <button className="btn sec sm" style={{ marginRight: ".3rem" }} onClick={() => resetPin(c)}>🔒 Resetar PIN</button>}
+                <td className="td-actions">
+                  <button className="btn wa sm" title={tab === "lead" ? "Convidar" : "WhatsApp"} onClick={() => openWa(c.phone, waMsg(c))}><WaIcon /></button>
+                  {c.hasPin && <button className="btn sec sm" onClick={() => resetPin(c)}>🔒 Resetar PIN</button>}
                   <button className="btn sec sm" onClick={() => open(<ClientForm client={c} />)}>Editar</button>
                 </td>
               </tr>
@@ -478,11 +478,11 @@ export function Mensalistas() {
   return (
     <div className="panel">
       <div className="filters" style={{ justifyContent: "space-between" }}>
-        <div style={{ display: "flex", gap: ".6rem", flexWrap: "wrap" }}>
+        <div className="tags" style={{ gap: ".6rem", alignItems: "center" }}>
           <span className="badge b-ok">✓ {pagos} pagos</span>
           <span className="badge b-warn">⏳ {pend} pendentes</span>
           <span className="badge b-muted">📄 {semBoleto} sem boleto</span>
-          <span style={{ color: "var(--muted)", fontWeight: 700, fontSize: ".85rem" }}>Competência {comp}</span>
+          <span className="count">Competência {comp}</span>
         </div>
         <button className="btn" disabled={busy || !mensalistas.length} onClick={gerarTodos}>🧾 Gerar boletos do mês</button>
       </div>
@@ -494,7 +494,7 @@ export function Mensalistas() {
             return (
               <tr key={c.id}>
                 <td>
-                  <div className="cli-row" style={{ cursor: "pointer" }} onClick={() => open(<ClientProfile client={c} />)}>
+                  <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} />)}>
                     <span className="cli-av">{initials(c.name)}</span>
                     <div><span className="cli-name">{c.name}</span><div className="cli-sub">{c.unit}{c.cpf ? "" : " · ⚠ sem CPF"}</div></div>
                   </div>
@@ -507,11 +507,11 @@ export function Mensalistas() {
                     : inv.status === "cancelado" ? <span className="badge b-danger">cancelado</span>
                     : <span className="badge b-warn">⏳ pendente · vence {fmtDate(inv.dueDate)}</span>}
                 </td>
-                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                <td className="td-actions">
                   {!inv && <button className="btn sm" disabled={busy} onClick={() => gerar(c)}>🧾 Gerar boleto</button>}
                   {inv && inv.status === "pendente" && <>
-                    {inv.boletoUrl && <a className="btn sec sm" href={inv.boletoUrl} target="_blank" rel="noreferrer" style={{ marginRight: ".3rem" }}>📄 Boleto</a>}
-                    {inv.pixCode && <button className="btn sec sm" style={{ marginRight: ".3rem" }} onClick={() => copyPix(inv.pixCode)}>💠 Pix</button>}
+                    {inv.boletoUrl && <a className="btn sec sm" href={inv.boletoUrl} target="_blank" rel="noreferrer">📄 Boleto</a>}
+                    {inv.pixCode && <button className="btn sec sm" onClick={() => copyPix(inv.pixCode)}>💠 Pix</button>}
                     <button className="btn sm" onClick={() => marcarPago(inv)}>✓ Marcar pago</button>
                   </>}
                   {inv && inv.status === "pago" && inv.paidAt && <span className="cli-sub">pago em {fmtDate(inv.paidAt)}</span>}
@@ -588,7 +588,7 @@ export function Recebimentos() {
   });
 
   return (<>
-    <div className="grid stats" style={{ marginBottom: "1.2rem", gridTemplateColumns: "repeat(4,1fr)" }}>
+    <div className="grid stats" style={{ marginBottom: "1.2rem" }}>
       <div className="card stat"><div className="lbl">💰 Recebido no mês</div><div className="val">{money(recMes)}</div><div className="foot">mês atual</div></div>
       <div className="card stat"><div className="lbl">⏳ A receber</div><div className="val warn">{money(totalPend)}</div><div className="foot">{pend.length} reservas</div></div>
       <div className="card stat"><div className="lbl">📈 Recebido total</div><div className="val terra">{money(recTotal)}</div><div className="foot">{pagos.length} pagamentos</div></div>
@@ -596,16 +596,16 @@ export function Recebimentos() {
     </div>
 
     <div className="panel">
-      <div className="panel-h"><h2>📅 Recebido por dia <span className="cli-sub" style={{ fontWeight: 400 }}>· últimos 14 dias</span></h2></div>
+      <div className="panel-h"><h2>📅 Recebido por dia <span className="muted-note">· últimos 14 dias</span></h2></div>
       <BarChart series={porDia} color="var(--sage-deep)" />
     </div>
-    <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: "1.2rem" }}>
+    <div className="dash-cols">
       <div className="panel">
-        <div className="panel-h"><h2>📆 Por semana <span className="cli-sub" style={{ fontWeight: 400 }}>· 8 semanas</span></h2></div>
+        <div className="panel-h"><h2>📆 Por semana <span className="muted-note">· 8 semanas</span></h2></div>
         <BarChart series={porSemana} color="var(--terracota)" />
       </div>
       <div className="panel">
-        <div className="panel-h"><h2>🗓 Por mês <span className="cli-sub" style={{ fontWeight: 400 }}>· 6 meses</span></h2></div>
+        <div className="panel-h"><h2>🗓 Por mês <span className="muted-note">· 6 meses</span></h2></div>
         <BarChart series={porMes} color="var(--green-deep)" />
       </div>
     </div>
@@ -703,42 +703,43 @@ export function Depoimentos() {
   if (editing) return (
     <div className="panel" style={{ maxWidth: 640 }}>
       <div className="panel-h">
-        <h2>{editing === "new" ? "Novo depoimento" : `Editando — ${editing.name}`}</h2>
-        <button className="btn-ghost" onClick={() => setEditing(null)}>✕ Cancelar</button>
+        <h2>{editing === "new" ? "⭐ Novo depoimento" : `⭐ Editando — ${editing.name}`}</h2>
+        <button className="btn ghost sm" onClick={() => setEditing(null)}>✕ Cancelar</button>
       </div>
       {msg && <div className="toast-inline">{msg}</div>}
 
-      {/* Foto */}
-      <div style={{ display: "flex", alignItems: "center", gap: "1.2rem", marginBottom: "1.4rem" }}>
-        <div style={{ width: 72, height: 72, borderRadius: "50%", overflow: "hidden", background: "var(--sage)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: "1.6rem" }}>
-          {photoPreview
-            ? <img src={photoPreview} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-            : "📷"}
+      <div className="dep-photo-row">
+        <div className="dep-av lg">
+          {photoPreview ? <img src={photoPreview} alt="" /> : "📷"}
         </div>
         <div>
-          <button className="btn" onClick={() => fileRef.current.click()}>📷 Escolher foto</button>
-          <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handlePhoto} />
-          <p style={{ fontSize: ".8rem", color: "var(--muted)", marginTop: ".3rem" }}>JPG, PNG ou WebP · máx 5 MB</p>
+          <button className="btn sec sm" onClick={() => fileRef.current.click()}>📷 Escolher foto</button>
+          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handlePhoto} />
+          <p className="hint">JPG, PNG ou WebP · máx 5 MB</p>
         </div>
       </div>
 
-      <label className="form-label">Nome</label>
-      <input className="form-input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Ex: Ana Paula Tavares" />
+      <div className="field">
+        <label>Nome</label>
+        <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Ex: Ana Paula Tavares" />
+      </div>
+      <div className="field">
+        <label>Identificação <span style={{ color: "var(--muted)", fontWeight: 400 }}>(opcional)</span></label>
+        <input value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))} placeholder="@instagram · Cidade/UF" />
+      </div>
+      <div className="field">
+        <label>Depoimento</label>
+        <textarea rows={5} value={form.text} onChange={e => setForm(f => ({ ...f, text: e.target.value }))} placeholder="Escreva o relato da aluna…" />
+      </div>
 
-      <label className="form-label" style={{ marginTop: ".9rem" }}>Identificação <span style={{ color: "var(--muted)", fontWeight: 400 }}>(opcional)</span></label>
-      <input className="form-input" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))} placeholder="@instagram · Cidade/UF" />
-
-      <label className="form-label" style={{ marginTop: ".9rem" }}>Depoimento</label>
-      <textarea className="form-input" rows={5} value={form.text} onChange={e => setForm(f => ({ ...f, text: e.target.value }))} placeholder="Escreva o relato da aluna…" style={{ resize: "vertical" }} />
-
-      <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginTop: ".9rem" }}>
-        <label style={{ display: "flex", alignItems: "center", gap: ".5rem", cursor: "pointer", fontSize: ".9rem" }}>
+      <div className="dep-inline-opts">
+        <label className="opt">
           <input type="checkbox" checked={form.active} onChange={e => setForm(f => ({ ...f, active: e.target.checked }))} />
           Visível no site
         </label>
-        <div style={{ display: "flex", alignItems: "center", gap: ".5rem", fontSize: ".9rem" }}>
+        <div className="opt">
           <span style={{ color: "var(--muted)" }}>Ordem:</span>
-          <input type="number" className="form-input" style={{ width: 64, padding: ".3rem .5rem" }} value={form.order} onChange={e => setForm(f => ({ ...f, order: Number(e.target.value) }))} />
+          <input type="number" className="form-input" value={form.order} onChange={e => setForm(f => ({ ...f, order: Number(e.target.value) }))} />
         </div>
       </div>
 
@@ -752,41 +753,34 @@ export function Depoimentos() {
     {msg && <div className="toast-inline">{msg}</div>}
     <div className="panel">
       <div className="panel-h">
-        <h2>⭐ Depoimentos <span className="cli-sub">{list.length} no total</span></h2>
+        <h2>⭐ Depoimentos <span className="muted-note">· {list.length} no total</span></h2>
         <button className="btn" onClick={openNew}>＋ Novo depoimento</button>
       </div>
 
       {loading ? <div className="empty"><div className="ic">⭐</div><p>Carregando…</p></div>
         : list.length === 0 ? <div className="empty"><div className="ic">💬</div><p>Nenhum depoimento ainda.<br />Clique em <b>＋ Novo</b> para adicionar.</p></div>
         : (
-          <div style={{ display: "grid", gap: ".9rem" }}>
+          <div className="dep-list">
             {list.map(t => (
-              <div key={t.id} style={{ display: "flex", alignItems: "flex-start", gap: "1rem", padding: "1rem 1.2rem", background: t.active ? "var(--offwhite)" : "var(--cream)", border: "1px solid var(--line)", borderRadius: 8, opacity: t.active ? 1 : .6 }}>
-                {/* Avatar */}
-                <div style={{ width: 52, height: 52, borderRadius: "50%", overflow: "hidden", background: "var(--sage)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: "1.1rem" }}>
-                  {t.photo
-                    ? <img src={`/depoimentos/${t.photo}`} alt={t.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                    : t.name[0]}
+              <div key={t.id} className={`dep-card ${t.active ? "" : "off"}`}>
+                <div className="dep-av">
+                  {t.photo ? <img src={`/depoimentos/${t.photo}`} alt={t.name} /> : t.name[0]}
                 </div>
-                {/* Texto */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: ".6rem", flexWrap: "wrap" }}>
-                    <b style={{ fontSize: ".95rem" }}>{t.name}</b>
-                    {t.role && <span style={{ fontSize: ".78rem", color: "var(--muted)" }}>{t.role}</span>}
-                    {!t.active && <span className="badge" style={{ background: "var(--line)", color: "var(--muted)" }}>oculto</span>}
-                    <span style={{ fontSize: ".75rem", color: "var(--muted)", marginLeft: "auto" }}>#{t.order}</span>
+                <div className="dep-body">
+                  <div className="dep-top">
+                    <b>{t.name}</b>
+                    {t.role && <span className="dep-role">{t.role}</span>}
+                    {!t.active && <span className="badge b-muted">🙈 oculto</span>}
+                    <span className="dep-order">#{t.order}</span>
                   </div>
-                  <p style={{ fontSize: ".88rem", color: "var(--muted)", marginTop: ".3rem", lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-                    "{t.text}"
-                  </p>
+                  <p className="dep-text">"{t.text}"</p>
                 </div>
-                {/* Ações */}
-                <div style={{ display: "flex", flexDirection: "column", gap: ".4rem", flexShrink: 0 }}>
-                  <button className="btn" style={{ fontSize: ".78rem", padding: ".3rem .7rem" }} onClick={() => openEdit(t)}>✏️ Editar</button>
-                  <button className="btn-ghost" style={{ fontSize: ".78rem", padding: ".3rem .7rem" }} onClick={() => toggleActive(t)}>
+                <div className="dep-actions">
+                  <button className="btn sec sm" onClick={() => openEdit(t)}>✏️ Editar</button>
+                  <button className="btn ghost sm" onClick={() => toggleActive(t)}>
                     {t.active ? "🙈 Ocultar" : "👁 Mostrar"}
                   </button>
-                  <button className="btn-ghost" style={{ fontSize: ".78rem", padding: ".3rem .7rem", color: "var(--terracota)" }} onClick={() => remove(t)}>🗑 Excluir</button>
+                  <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={() => remove(t)}>🗑 Excluir</button>
                 </div>
               </div>
             ))}

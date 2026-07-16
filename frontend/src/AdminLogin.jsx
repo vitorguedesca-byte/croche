@@ -53,7 +53,7 @@ export default function AdminLogin() {
         </p>
 
         {mode === null ? (
-          <div style={{ color: "#857A6B", padding: "1rem 0" }}>Carregando…</div>
+          <div style={{ color: "var(--muted)", padding: "1rem 0" }}>Carregando…</div>
         ) : (
           <>
             <label style={S.label}>Usuário</label>
@@ -85,13 +85,13 @@ export default function AdminLogin() {
 }
 
 const S = {
-  wrap: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(160deg,#F4ECDF,#FBF8F2)", padding: "1.5rem" },
-  card: { width: "min(400px,100%)", background: "#fff", border: "1px solid rgba(44,38,32,.12)", borderRadius: "18px", padding: "2.2rem", boxShadow: "0 30px 60px -30px rgba(44,38,32,.35)", display: "flex", flexDirection: "column" },
+  wrap: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(160deg,var(--cream),var(--offwhite))", padding: "1.5rem" },
+  card: { width: "min(400px,100%)", background: "#fff", border: "1px solid var(--line)", borderRadius: "var(--radius)", padding: "2.2rem", boxShadow: "var(--shadow)", display: "flex", flexDirection: "column" },
   logo: { height: 56, width: "auto", margin: "0 auto 1.1rem", display: "block" },
-  title: { fontFamily: "'Fraunces',serif", fontWeight: 400, fontSize: "1.6rem", color: "#1C5E33", textAlign: "center", margin: 0 },
-  sub: { color: "#857A6B", fontSize: ".9rem", textAlign: "center", margin: ".5rem 0 1.5rem" },
-  label: { fontSize: ".78rem", fontWeight: 600, color: "#5E4A38", margin: ".7rem 0 .3rem" },
-  input: { padding: ".8rem 1rem", borderRadius: "10px", border: "1px solid rgba(44,38,32,.18)", fontSize: "1rem", outline: "none" },
-  err: { background: "#fdecec", color: "#b3261e", fontSize: ".85rem", padding: ".6rem .8rem", borderRadius: "8px", marginTop: ".9rem" },
-  btn: { marginTop: "1.4rem", padding: ".9rem", borderRadius: "999px", border: "none", background: "#1C5E33", color: "#fff", fontWeight: 600, fontSize: ".95rem", cursor: "pointer" },
+  title: { fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: "1.6rem", color: "var(--green-deep)", textAlign: "center", margin: 0 },
+  sub: { color: "var(--muted)", fontSize: ".9rem", textAlign: "center", margin: ".5rem 0 1.5rem" },
+  label: { fontSize: ".82rem", fontWeight: 700, color: "var(--brown)", margin: ".7rem 0 .35rem" },
+  input: { padding: ".65rem .8rem", borderRadius: "10px", border: "1px solid var(--line)", fontSize: "1rem", outline: "none", background: "#fff", color: "var(--ink)" },
+  err: { background: "rgba(194,84,63,.1)", color: "var(--danger)", fontSize: ".85rem", padding: ".6rem .8rem", borderRadius: "10px", marginTop: ".9rem" },
+  btn: { marginTop: "1.4rem", padding: ".8rem 1.1rem", borderRadius: "10px", border: "none", background: "var(--green-deep)", color: "#fff", fontWeight: 700, fontSize: ".95rem", cursor: "pointer", transition: ".15s" },
 };
