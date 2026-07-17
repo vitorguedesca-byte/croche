@@ -995,7 +995,9 @@ app.post("/api/admin/setup", wrap(async (req, res) => {
 }));
 
 // Cadastro de novo acesso pela própria tela de login (equipe da Inêz)
+// Por enquanto: permite apenas 1 único usuário no sistema.
 app.post("/api/admin/register", wrap(async (req, res) => {
+  if ((await prisma.adminUser.count()) > 0) return res.status(409).json({ error: "Já existe um acesso cadastrado. Use o login." });
   const username = String(req.body.username || "").trim().toLowerCase();
   const password = String(req.body.password || "");
   if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
