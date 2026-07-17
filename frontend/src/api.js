@@ -84,6 +84,7 @@ export const api = {
   admin: {
     exists:  ()                   => req("GET",  "/api/admin/exists"),
     setup:   (username, password) => req("POST", "/api/admin/setup", { username, password }),
+    register:(username, password) => req("POST", "/api/admin/register", { username, password }),
     login:   (username, password) => req("POST", "/api/admin/login", { username, password }),
     logout:  ()                   => req("POST", "/api/admin/logout"),
     users:   ()                   => req("GET",  "/api/admin/users"),
