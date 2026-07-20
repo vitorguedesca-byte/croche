@@ -12,6 +12,9 @@ import ClientPortal from "./ClientPortal.jsx";
 import FirstClassBooking from "./FirstClassBooking.jsx";
 import { Notifications } from "./Notifications.jsx";
 
+// marca o aparelho como tablet da sala (quiosque), persistindo entre recargas
+const KIOSK_KEY = "fqc_kiosk";
+
 const NAV = [
   { sep: "Operação" },
   { view: "dashboard", ic: "📊", label: "Painel" },
@@ -42,6 +45,14 @@ export default function App() {
   const { open } = useModal();
   const [view, setView] = useState("dashboard");
   const [viewParams, setViewParams] = useState({});
+  // Modo tablet (quiosque da sala): fica gravado para sobreviver a recarga do
+  // aparelho. Entra com #tablet e sai com #sairtablet.
+  const [kiosk, setKiosk] = useState(() => {
+    const h = window.location.hash;
+    if (h === "#sairtablet") { try { localStorage.removeItem(KIOSK_KEY); } catch {} return false; }
+    if (h === "#tablet") { try { localStorage.setItem(KIOSK_KEY, "1"); } catch {} return true; }
+    try { return localStorage.getItem(KIOSK_KEY) === "1"; } catch { return false; }
+  });
   const [mode, setMode] = useState(() => {
     const h = window.location.hash;
     return h === "#agendar" ? "cliente" : h === "#portal" ? "portal" : "admin";
@@ -50,11 +61,13 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
-    if (window.location.hash === "#agendar" || window.location.hash === "#portal") {
+    if (["#agendar", "#portal", "#tablet", "#sairtablet"].includes(window.location.hash)) {
       window.history.replaceState(null, "", window.location.pathname);
     }
   }, []);
 
+  // No tablet da sala o portal é a única tela: sem volta para o painel admin.
+  if (kiosk) return <ClientPortal kiosk onSairKiosk={() => { try { localStorage.removeItem(KIOSK_KEY); } catch {} setKiosk(false); }} />;
   if (mode === "portal") return <ClientPortal onBack={fromSite ? () => window.history.back() : () => setMode("admin")} fromSite={fromSite} />;
   if (mode === "cliente") return <FirstClassBooking onBack={fromSite ? () => window.history.back() : () => setMode("admin")} fromSite={fromSite} />;
 

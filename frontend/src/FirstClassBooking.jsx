@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "./api.js";
-import { todayISO, addDays, fmtDate, fmtDateLong, money, capitalize } from "./helpers.js";
+import { todayISO, addDays, fmtDate, fmtDateLong, money, capitalize, fimDaAula } from "./helpers.js";
 
 const DOW = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
 
@@ -76,10 +76,12 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const [meta, setMeta] = useState({ units: [], valorPadrao: 20, pixKey: "", pixName: "" });
   const [available, setAvailable] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [step, setStep] = useState("unit"); // unit | cal1 | pay | cal2 | done
+  // A 1ª aula OFICIAL não é marcada aqui: pela regra do curso, ela é agendada
+  // no fim da aula experimental (portal da sala ou com a Inêz), junto com a
+  // escolha do plano e o pagamento da 1ª mensalidade.
+  const [step, setStep] = useState("unit"); // unit | cal1 | pay | done
   const [unit, setUnit] = useState(null);
-  const [slot, setSlot] = useState(null);        // horário provisório (cal1)
-  const [finalSlot, setFinalSlot] = useState(null); // horário confirmado (cal2)
+  const [slot, setSlot] = useState(null); // horário da aula experimental
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -92,7 +94,8 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const [toast, setToast] = useState("");
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 3800); };
 
-  const matricula = meta.valorPadrao || 20;
+  // taxa fixa de matrícula — a aula experimental em si é gratuita
+  const matricula = meta.taxaMatricula ?? 20;
 
   const loadAvail = async (u) => {
     setLoading(true);
@@ -102,7 +105,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   };
   useEffect(() => { loadAvail(); }, []);
 
-  const stepNum = { unit: 1, cal1: 2, pay: 3, cal2: 4, done: 5 }[step];
+  const stepNum = { unit: 1, cal1: 2, pay: 3, done: 4 }[step];
 
   // Passo 3: gera a cobrança da matrícula (Cora) e cria a reserva provisória
   const gerarPix = async () => {
@@ -113,7 +116,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
     try {
       const b = booking || await api.createBooking({
         clientName: name.trim(), phone: phone.trim(), cpf: cpf.trim(), email: email.trim(),
-        unit: slot.unit, slotId: slot.id, value: matricula, firstClass: true,
+        unit: slot.unit, slotId: slot.id, firstClass: true, // o valor vem da taxa de matrícula no servidor
       });
       setBooking(b);
       try {
@@ -132,32 +135,18 @@ export default function FirstClassBooking({ onBack, fromSite }) {
     catch { flash("Copie o código acima."); }
   };
 
-  // "JÁ PAGUEI": confirma a matrícula e vai escolher o horário da 1ª aula
+  // "JÁ PAGUEI": confirma a taxa de matrícula e encerra — a vaga da experimental fica reservada
   const jaPaguei = async () => {
     setBusy(true);
     try {
       await api.payBooking(booking.id, { value: matricula });
-      setFinalSlot(slot); // pré-seleciona o horário reservado
-      await loadAvail(unit);
-      setStep("cal2");
+      setStep("done");
     } catch (e) { flash(e.message || "Erro ao confirmar."); }
     finally { setBusy(false); }
   };
 
-  // Passo 5: confirma o horário final da 1ª aula
-  const confirmar = async () => {
-    setBusy(true);
-    try {
-      if (finalSlot && finalSlot.id !== booking.slotId) {
-        await api.updateBooking(booking.id, { slotId: finalSlot.id });
-      }
-      setStep("done");
-    } catch (e) { flash(e.message || "Erro ao confirmar o horário."); }
-    finally { setBusy(false); }
-  };
-
   const restart = () => {
-    setStep("unit"); setUnit(null); setSlot(null); setFinalSlot(null);
+    setStep("unit"); setUnit(null); setSlot(null);
     setName(""); setPhone(""); setCpf(""); setEmail(""); setBooking(null); setPix(null);
     loadAvail();
   };
@@ -174,7 +163,6 @@ export default function FirstClassBooking({ onBack, fromSite }) {
               <span className={`pt-step ${stepNum >= 1 ? "on" : ""}`}>1 · Unidade</span>
               <span className={`pt-step ${stepNum >= 2 ? "on" : ""}`}>2 · Horário</span>
               <span className={`pt-step ${stepNum >= 3 ? "on" : ""}`}>3 · Matrícula</span>
-              <span className={`pt-step ${stepNum >= 4 ? "on" : ""}`}>4 · 1ª aula</span>
             </div>
           )}
         </div>
@@ -210,9 +198,9 @@ export default function FirstClassBooking({ onBack, fromSite }) {
             <div className="pt-fc-resume">📍 <b>{slot.unit}</b> · {capitalize(fmtDateLong(slot.date))} · <b>{slot.time}</b> · com {slot.prof}</div>
 
             <div className="pt-matricula">
-              <p>Para agendar sua <b>aula experimental gratuita</b>, solicitamos o pagamento da matrícula no valor de <b>{money(matricula)}</b>.</p>
-              <p>💬 Caso você decida não continuar após a aula, esse valor será devolvido integralmente.</p>
-              <p>🧵 Se desejar seguir conosco, a matrícula já estará paga e você poderá agendar sua primeira aula oficial.</p>
+              <p>A <b>aula experimental é gratuita</b> 💚 Para reservar a sua vaga, pedimos apenas a taxa de matrícula de <b>{money(matricula)}</b>.</p>
+              <p>💬 Fez a aula e não quis continuar? <b>Devolvemos os {money(matricula)} integralmente.</b></p>
+              <p>🧵 Quis continuar? Esse valor já fica como a sua <b>matrícula</b> — você não paga de novo.</p>
             </div>
             <div className="pt-atencao">
               <span className="t">⚠️ Atenção</span>
@@ -244,30 +232,26 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 <button className="pt-pix-copy" onClick={copyPix}>📋 Copiar {pix.code ? "código Pix" : "chave Pix"}</button>
               </div>
               <button className="pt-btn" onClick={jaPaguei} disabled={busy}>{busy ? "Confirmando…" : "✅ JÁ PAGUEI — continuar"}</button>
-              <p className="pt-hint">Assim que o pagamento for aprovado, você escolhe o horário da sua 1ª aula. 💚</p>
+              <p className="pt-hint">Assim que o pagamento for aprovado, sua vaga na aula experimental está garantida. 💚</p>
             </>)}
           </div>
         )}
 
-        {/* 4 · HORÁRIO DA 1ª AULA */}
-        {step === "cal2" && (
-          <div className="pt-card">
-            <div className="pt-fc-resume" style={{ borderColor: "var(--green-mid)" }}>✅ Matrícula recebida! Agora escolha o horário da sua <b>1ª aula</b>.</div>
-            {finalSlot && <div className="pt-fc-resume">Sugerido: <b>{capitalize(fmtDateLong(finalSlot.date))} · {finalSlot.time}</b> — pode manter ou escolher outro.</div>}
-            <PtAgenda available={available} value={finalSlot} onPick={(s) => setFinalSlot(s)} />
-            {finalSlot && <button className="pt-btn" onClick={confirmar} disabled={busy}>{busy ? "Confirmando…" : `Confirmar 1ª aula em ${finalSlot.time} →`}</button>}
-          </div>
-        )}
-
-        {/* 5 · CONCLUÍDO */}
-        {step === "done" && finalSlot && (
+        {/* 4 · CONCLUÍDO */}
+        {step === "done" && slot && (
           <div className="pt-card" style={{ textAlign: "center" }}>
             <div style={{ fontSize: "2.6rem" }}>🎉</div>
             <h2 className="pt-h2" style={{ textAlign: "center" }}>Tudo certo, {name.split(" ")[0]}!</h2>
             <div className="pt-fc-resume" style={{ textAlign: "left" }}>
-              📍 <b>{finalSlot.unit}</b><br />🗓 {capitalize(fmtDateLong(finalSlot.date))}<br />⏰ <b>{finalSlot.time}</b> · com {finalSlot.prof}
+              📍 <b>{slot.unit}</b><br />🗓 {capitalize(fmtDateLong(slot.date))}<br />
+              ⏰ <b>{slot.time}{meta.duracaoAulaMin ? ` às ${fimDaAula(slot.time, meta.duracaoAulaMin)}` : ""}</b> · com {slot.prof}
             </div>
-            <p className="pt-hint">Sua vaga está reservada e você já está cadastrada no nosso sistema 💛<br />Nos vemos na aula!</p>
+            <p className="pt-hint">Sua aula experimental está reservada e você já está cadastrada 💛</p>
+            <div className="pt-matricula" style={{ textAlign: "left" }}>
+              <p><b>E depois da aula?</b></p>
+              <p>🧵 Se quiser continuar, no fim da aula você escolhe o seu plano, paga a primeira mensalidade e já agenda a sua 1ª aula oficial — a matrícula já está paga.</p>
+              <p>💬 Se preferir não seguir, devolvemos os {money(matricula)} integralmente.</p>
+            </div>
             <button className="pt-link" onClick={restart}>Marcar outra aula</button>
           </div>
         )}

@@ -17,6 +17,11 @@ export default function Config() {
   const [pixName, setPixName] = useState(m.pixName || "");
   const [mensalidadeValor, setMensalidadeValor] = useState(m.mensalidadeValor || "");
   const [vencimentoDia, setVencimentoDia] = useState(m.vencimentoDia || 10);
+  const [taxaMatricula, setTaxaMatricula] = useState(m.taxaMatricula ?? 20);
+  const [plano1x, setPlano1x] = useState(m.valorPlano1x ?? 120);
+  const [plano2x, setPlano2x] = useState(m.valorPlano2x ?? 200);
+  const [avulsa, setAvulsa] = useState(m.valorAvulsa ?? 40);
+  const [duracao, setDuracao] = useState(m.duracaoAulaMin ?? 120);
   const [saved, setSaved] = useState(false);
 
   const save = async () => {
@@ -28,6 +33,11 @@ export default function Config() {
       pixName: pixName.trim(),
       mensalidadeValor: Number(mensalidadeValor) || 0,
       vencimentoDia: Math.min(28, Math.max(1, parseInt(vencimentoDia, 10) || 10)),
+      taxaMatricula: Number(taxaMatricula) || 0,
+      valorPlano1x: Number(plano1x) || 0,
+      valorPlano2x: Number(plano2x) || 0,
+      valorAvulsa: Number(avulsa) || 0,
+      duracaoAulaMin: Math.min(600, Math.max(15, parseInt(duracao, 10) || 120)),
       units: units.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
       profs: profs.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
     };
@@ -55,14 +65,43 @@ export default function Config() {
           : <div className="cfg-warn">⚠️ Sem chave Pix cadastrada, as alunas não conseguem pagar a reserva.</div>}
       </div>
 
+      {/* TABELA DE PREÇOS */}
+      <div className="panel cfg-sec">
+        <div className="cfg-h"><span className="cfg-ic">🏷️</span><div><h2>Tabela de preços</h2><p>Valores do curso. Alimentam a aula experimental, os planos e as aulas extras.</p></div></div>
+        <div className="row2">
+          <div className="field">
+            <label>Taxa de matrícula (R$)</label>
+            <input type="number" min="0" step="0.01" value={taxaMatricula} onChange={(e) => setTaxaMatricula(e.target.value)} />
+            <div className="help" style={{ marginTop: ".4rem" }}>Cobrada para agendar a aula experimental. Devolvida se a aluna não continuar; se continuar, vira a matrícula.</div>
+          </div>
+          <div className="field">
+            <label>Duração da aula (minutos)</label>
+            <input type="number" min="15" max="600" step="15" value={duracao} onChange={(e) => setDuracao(e.target.value)} />
+            <div className="help" style={{ marginTop: ".4rem" }}>Usada para mostrar o fim da aula e impedir turmas sobrepostas na mesma unidade.</div>
+          </div>
+        </div>
+        <div className="row2">
+          <div className="field"><label>Plano 1x por semana (R$/mês)</label><input type="number" min="0" step="0.01" value={plano1x} onChange={(e) => setPlano1x(e.target.value)} /></div>
+          <div className="field"><label>Plano 2x por semana (R$/mês)</label><input type="number" min="0" step="0.01" value={plano2x} onChange={(e) => setPlano2x(e.target.value)} /></div>
+        </div>
+        <div className="field"><label>Aula extra avulsa (R$)</label><input type="number" min="0" step="0.01" value={avulsa} onChange={(e) => setAvulsa(e.target.value)} /></div>
+        <div className="cfg-preview">
+          🏷️ Matrícula <b>R$ {taxaMatricula}</b> · 1x/semana <b>R$ {plano1x}</b> (4 aulas) · 2x/semana <b>R$ {plano2x}</b> (8 aulas) · extra <b>R$ {avulsa}</b> · aula de <b>{Math.floor(duracao / 60)}h{duracao % 60 ? String(duracao % 60).padStart(2, "0") : ""}</b>
+        </div>
+      </div>
+
       {/* MENSALIDADES */}
       <div className="panel cfg-sec">
-        <div className="cfg-h"><span className="cfg-ic">📅</span><div><h2>Mensalidades</h2><p>Padrões dos alunos mensalistas. Cada aluno pode ter valor/vencimento próprios.</p></div></div>
+        <div className="cfg-h"><span className="cfg-ic">📅</span><div><h2>Cobrança das mensalidades</h2><p>Quando os boletos vencem. O valor vem do plano da aluna (acima) ou de um valor próprio no cadastro dela.</p></div></div>
         <div className="row2">
-          <div className="field"><label>Valor padrão da mensalidade (R$)</label><input type="number" min="0" step="0.01" value={mensalidadeValor} onChange={(e) => setMensalidadeValor(e.target.value)} placeholder="ex.: 200" /></div>
           <div className="field"><label>Dia de vencimento padrão (1–28)</label><input type="number" min="1" max="28" value={vencimentoDia} onChange={(e) => setVencimentoDia(e.target.value)} /></div>
+          <div className="field">
+            <label>Valor padrão antigo (R$)</label>
+            <input type="number" min="0" step="0.01" value={mensalidadeValor} onChange={(e) => setMensalidadeValor(e.target.value)} placeholder="ex.: 200" />
+            <div className="help" style={{ marginTop: ".4rem" }}>Só é usado por alunas cadastradas antes dos planos, que ainda não têm 1x ou 2x definido.</div>
+          </div>
         </div>
-        <div className="cfg-preview">🧾 Boletos padrão: <b>{Number(mensalidadeValor) ? "R$ " + mensalidadeValor : "—"}</b> · vencimento dia <b>{vencimentoDia}</b></div>
+        <div className="cfg-preview">🧾 Vencimento dia <b>{vencimentoDia}</b> de cada mês</div>
       </div>
 
       {/* PADRÕES DE RESERVA */}
