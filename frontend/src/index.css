@@ -161,17 +161,25 @@
   .chart-empty{text-align:center;color:var(--muted);font-size:.85rem;padding:.8rem 0 .2rem}
 
   /* Configurações em seções — 2 colunas */
-  .config-wrap{max-width:1080px;display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;align-items:start}
-  .config-wrap .cfg-sec{margin-bottom:0}
-  .cfg-sec{padding:1.4rem}
-  .cfg-h{display:flex;gap:.9rem;align-items:flex-start;margin-bottom:1.1rem}
+  .config-wrap{max-width:1100px}
+  /* empacotamento tipo masonry: os cartões preenchem as colunas sem deixar buracos */
+  .cfg-cols{column-count:2;column-gap:1.1rem}
+  @media(max-width:1024px){.cfg-cols{column-count:1}}
+  .cfg-cols .cfg-sec{break-inside:avoid;-webkit-column-break-inside:avoid;page-break-inside:avoid;display:block;width:100%;margin:0 0 1.1rem}
+  .cfg-sec{padding:1.15rem 1.25rem}
+  .cfg-h{display:flex;gap:.75rem;align-items:flex-start;margin-bottom:.9rem;padding-bottom:.75rem;border-bottom:1px solid var(--line)}
   .cfg-ic{font-size:1.5rem;line-height:1}
   .cfg-h h2{font-size:1.1rem;color:var(--green-deep)}
   .cfg-h p{font-size:.85rem;color:var(--muted);margin-top:.15rem}
+  .cfg-sec .field{margin-bottom:.85rem}
+  .cfg-sec .row2{gap:.9rem}
+  .cfg-sec .field:last-child{margin-bottom:0}
+  .cfg-sec .help{background:none;border-left:0;padding:.3rem 0 0;font-size:.78rem;line-height:1.35;color:var(--muted);margin-top:0!important}
   .cfg-count{display:inline-block;margin-left:.4rem;padding:0 .45rem;border-radius:999px;background:var(--cream);color:var(--muted);font-size:.7rem;font-weight:800}
-  .cfg-preview{margin-top:.9rem;font-size:.85rem;color:var(--ink);background:var(--cream);border-radius:10px;padding:.6rem .85rem}
+  .cfg-preview{margin-top:.85rem;font-size:.85rem;color:var(--ink);background:var(--cream);border-radius:10px;padding:.6rem .85rem}
   .cfg-warn{margin-top:.9rem;font-size:.85rem;color:var(--danger);background:rgba(194,84,63,.08);border-radius:10px;padding:.6rem .85rem}
-  .cfg-save{grid-column:1 / -1;display:flex;gap:.7rem;align-items:center;margin-top:.4rem}
+  .cfg-save{position:sticky;bottom:0;display:flex;gap:.7rem;align-items:center;padding:.85rem 0;margin-top:.2rem;background:linear-gradient(180deg,rgba(243,234,219,0),var(--cream) 38%)}
+  .cfg-save .btn{padding:.7rem 1.6rem}
   /* Horário de funcionamento por dia */
   .hf-list{display:flex;flex-direction:column;gap:.5rem}
   .hf-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.55rem .8rem;border:1px solid var(--line);border-radius:10px;background:#fff}
@@ -396,7 +404,7 @@
     .stats{grid-template-columns:1fr 1fr}
     .dash-cols{grid-template-columns:1fr}
     .people-strip{grid-template-columns:1fr}
-    .config-wrap{grid-template-columns:1fr}
+    .cfg-cols{column-count:1}
     .agenda{grid-template-columns:1fr;}
     .month-grid{gap:3px}
     .m-cell{min-height:62px;padding:.25rem}
@@ -604,3 +612,104 @@
   .pt-pin-box:focus{outline:none;border-color:var(--green-mid)}
 
   @media(max-width:520px){ .pt-actions{grid-template-columns:1fr} .pt-card{padding:1.4rem} .pt-big{font-size:1.3rem} .pt-tab{font-size:1rem;padding:.85rem .5rem} }
+
+  /* ===== Agenda: alunas dentro do horário ===== */
+  .sc-roster{display:flex;flex-direction:column;gap:.18rem;margin-top:.3rem}
+  .sc-al{display:flex;align-items:center;gap:.32rem;font-size:.76rem;line-height:1.25;color:var(--ink)}
+  .sc-al .sc-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+  .sc-al .sc-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sc-al.canc .sc-nm{text-decoration:line-through;opacity:.55}
+  .sc-al .sc-tag{font-size:.68rem;flex-shrink:0}
+  .sc-more{font-size:.7rem;color:var(--muted);font-weight:700}
+  /* ===== Agenda: visão lista (dia + próximos dias) ===== */
+  .ls-slot{border:1px solid var(--line);border-left:4px solid var(--uc,var(--muted));border-radius:12px;padding:.7rem .85rem;margin-bottom:.6rem;background:#fff}
+  .ls-slot-h{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.45rem}
+  .ls-time{font-family:'Fraunces',serif;font-size:1.02rem;color:var(--uc,var(--green-deep));font-weight:600}
+  .ls-unit{font-size:.78rem;font-weight:700;color:var(--uc,var(--muted))}
+  .ls-cap{margin-left:auto;font-size:.74rem;font-weight:800;color:var(--muted)}
+  .ls-al{display:flex;align-items:center;gap:.5rem;padding:.34rem .1rem;border-top:1px dashed var(--line);cursor:pointer}
+  .ls-al:hover{background:rgba(243,234,219,.5)}
+  .ls-al .nm{font-weight:700;font-size:.9rem}
+  .ls-al.canc .nm{text-decoration:line-through;opacity:.6}
+  .ls-al .sp{margin-left:auto;display:flex;gap:.35rem;align-items:center;flex-wrap:wrap}
+  .ls-vazio{font-size:.8rem;color:var(--muted);padding:.3rem .1rem}
+  /* ===== Fechamento / histórico de mensalidades ===== */
+  .fch-tot{display:grid;grid-template-columns:repeat(4,1fr);gap:.7rem;margin-bottom:1rem}
+  .fch-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:.8rem 1rem}
+  .fch-card .l{font-size:.74rem;color:var(--muted);font-weight:700}
+  .fch-card .v{font-family:'Fraunces',serif;font-size:1.35rem;color:var(--green-deep);line-height:1.15;margin-top:.2rem}
+  .fch-card .v.warn{color:var(--warn)} .fch-card .v.terra{color:var(--terracota)}
+  .hist-row{display:flex;align-items:center;gap:.6rem;padding:.5rem 0;border-bottom:1px dashed var(--line)}
+  .hist-row:last-child{border-bottom:none}
+  .hist-comp{font-weight:800;font-size:.86rem;min-width:104px;text-transform:capitalize}
+  .hist-val{font-size:.86rem;color:var(--muted)}
+  .hist-st{margin-left:auto}
+  @media(max-width:900px){ .fch-tot{grid-template-columns:1fr 1fr} }
+
+  /* ===== Perfil do aluno (dossiê em 2 colunas) ===== */
+  .modal.modal-lg{width:min(1080px,97vw)}
+  .prof{display:grid;grid-template-columns:308px 1fr;gap:1.1rem;align-items:start}
+  .prof-side{display:flex;flex-direction:column;gap:.75rem;min-width:0}
+  .prof-main{display:flex;flex-direction:column;gap:.85rem;min-width:0}
+  .prof-id{display:flex;align-items:center;gap:.7rem}
+  .prof-av{width:54px;height:54px;border-radius:15px;background:var(--sage);color:#fff;display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-size:1.3rem;flex-shrink:0}
+  .prof-id-n{font-family:'Fraunces',serif;font-size:1.12rem;color:var(--green-deep);line-height:1.15}
+  .prof-chips{display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.3rem}
+  .prof-card{background:var(--offwhite);border:1px solid var(--line);border-radius:12px;padding:.75rem .85rem}
+  .prof-card h4{font-size:.7rem;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-family:'Nunito Sans',sans-serif;font-weight:800;margin-bottom:.55rem}
+  .prof-dl{display:flex;flex-direction:column;gap:.4rem}
+  .prof-dl > div{display:flex;justify-content:space-between;align-items:center;gap:.6rem;font-size:.85rem}
+  .prof-dl .k{color:var(--muted);font-weight:600;flex-shrink:0}
+  .prof-dl .v{text-align:right;font-weight:600;overflow-wrap:anywhere}
+  .prof-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:.55rem}
+  .prof-kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:.65rem .8rem}
+  .prof-kpi .l{font-size:.71rem;color:var(--muted);font-weight:700}
+  .prof-kpi .v{font-family:'Fraunces',serif;font-size:1.45rem;color:var(--green-deep);line-height:1.15;margin-top:.1rem}
+  .prof-kpi .v.terra{color:var(--terracota)}
+  .prof-kpi .f{font-size:.72rem;color:var(--muted)}
+  .prof-panels{display:grid;grid-template-columns:1fr 1fr;gap:.85rem;align-items:start}
+  .prof-panels.one{grid-template-columns:1fr}
+  .prof-panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:.8rem .9rem;min-width:0}
+  .prof-panel-h{display:flex;align-items:baseline;justify-content:space-between;gap:.5rem;flex-wrap:wrap;margin-bottom:.55rem}
+  .prof-panel-h b{color:var(--brown);font-size:.9rem}
+  .prof-scroll{max-height:300px;overflow-y:auto;padding-right:.15rem}
+  .prof-hist{display:flex;align-items:center;gap:.5rem;padding:.42rem 0;border-bottom:1px dashed var(--line);cursor:pointer}
+  .prof-hist:last-child{border-bottom:none}
+  .prof-hist:hover{background:rgba(243,234,219,.5)}
+  .prof-hist .d{font-weight:700;font-size:.85rem;white-space:nowrap}
+  .prof-hist .s{font-size:.75rem;color:var(--muted)}
+  .prof-hist .r{margin-left:auto;display:flex;gap:.3rem;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+  .prof-empty{font-size:.84rem;color:var(--muted);padding:.6rem 0}
+  @media(max-width:980px){
+    .prof{grid-template-columns:1fr}
+    .prof-panels{grid-template-columns:1fr}
+    .prof-kpis{grid-template-columns:1fr 1fr}
+  }
+
+  /* ===== Formulários: linha de checkbox (evita o "chip" com texto quebrado) ===== */
+  .modal.modal-md{width:min(680px,96vw)}
+  .check-row{display:flex;align-items:center;gap:.55rem;cursor:pointer;padding:.62rem .8rem;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:.9rem;font-weight:600;color:var(--ink);white-space:nowrap}
+  .check-row:hover{border-color:var(--green-mid)}
+  .check-row input{width:17px;height:17px;accent-color:var(--green-deep);cursor:pointer;margin:0;flex-shrink:0}
+
+  /* abas dentro do perfil do aluno */
+  .prof-tabs{align-self:flex-start;flex-wrap:wrap}
+  .prof-scroll.tall{max-height:392px}
+  .prof-panel > div[style]:first-child{margin-top:0}
+
+  /* ===== Modal com abas no topo e altura fixa (não muda de tamanho entre abas) ===== */
+  .modal-sub{padding:0 1.4rem .85rem;background:var(--offwhite);border-bottom:1px solid var(--line)}
+  .modal.modal-lg{width:min(1080px,97vw);max-height:none;overflow:hidden;display:flex;flex-direction:column}
+  .modal.modal-lg .modal-b{height:clamp(380px,58vh,560px);overflow-y:auto;flex:none}
+  .modal.modal-lg .modal-h{border-bottom:none;padding-bottom:.7rem}
+  /* aba "Principal" */
+  .prin{display:grid;grid-template-columns:308px 1fr;gap:1.1rem;align-items:start}
+  .prin-main{display:flex;flex-direction:column;gap:.85rem;min-width:0}
+  .feed{display:flex;flex-direction:column}
+  .feed-row{display:flex;gap:.6rem;align-items:flex-start;padding:.5rem 0;border-bottom:1px dashed var(--line)}
+  .feed-row:last-child{border-bottom:none}
+  .feed-ic{width:28px;height:28px;border-radius:9px;background:var(--cream);display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0}
+  .feed-t{font-size:.86rem;font-weight:700;line-height:1.25}
+  .feed-s{font-size:.76rem;color:var(--muted)}
+  .feed-d{margin-left:auto;font-size:.74rem;color:var(--muted);white-space:nowrap;font-weight:700}
+  @media(max-width:980px){ .prin{grid-template-columns:1fr} }

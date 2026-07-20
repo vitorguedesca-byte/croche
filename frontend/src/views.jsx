@@ -5,12 +5,13 @@ import { useModal, StatusBadge } from "./ui.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import {
-  SlotCard, DayModal, ManageBooking, ConfirmPayment, ClientForm, ClientProfile, SlotDetail,
+  SlotCard, DayModal, ManageBooking, ConfirmPayment, ClientProfile, SlotDetail,
 } from "./modals.jsx";
 import {
   UNITS, STATUS, unitColor,
-  todayISO, addDays, weekStart, fmtDate, fmtDateLong, weekdayShort, money, waLink, capitalize,
-  bookingsActive, slotBookings, slotCapacity, slotOccupancy, slotWaitlist, clientAttendance,
+  todayISO, addDays, weekStart, fmtDate, fmtDateLong, weekdayShort, money, waLink, capitalize, faixaHorario,
+  bookingsActive, slotBookings, slotBookingsAll, slotCapacity, slotOccupancy, slotWaitlist, clientAttendance,
+  bookingKind, compAtual, addComp, compLabel, competenciasDoAluno, mensalidadeDe, matriculaISO,
   clientActiveCount, classifyClient, isNewLead,
 } from "./helpers.js";
 
@@ -205,13 +206,13 @@ export function Agenda() {
   const agSlots = (date) => data.slots.filter((s) => s.date === date && (unit === "Todas" || s.unit === unit)).sort((a, b) => a.time.localeCompare(b.time));
   const nav = (dir) => {
     if (view === "month") { const d = new Date(ref + "T00:00"); d.setDate(1); d.setMonth(d.getMonth() + dir); setRef(d.toISOString().slice(0, 10)); }
-    else if (view === "week") setRef(addDays(ref, 7 * dir));
+    else setRef(addDays(ref, 7 * dir)); // semana e lista andam de 7 em 7 dias
   };
   const periodLabel = () => {
     const d = new Date(ref + "T00:00");
     if (view === "month") return capitalize(d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" }));
     if (view === "week") { const s = weekStart(ref); return fmtDate(s) + " – " + fmtDate(addDays(s, 6)); }
-    return "Próximas aulas";
+    return ref === todayISO() ? "Hoje e próximos dias" : "A partir de " + fmtDate(ref);
   };
 
   const views = [["month", "🗓 Mês"], ["week", "📆 Semana"], ["list", "📋 Lista"]];
@@ -225,10 +226,10 @@ export function Agenda() {
           {views.map((v) => <button key={v[0]} className={view === v[0] ? "on" : ""} onClick={() => setView(v[0])}>{v[1]}</button>)}
         </div>
         <div className="ag-nav">
-          {view !== "list" && <button className="navbtn" onClick={() => nav(-1)}>←</button>}
+          <button className="navbtn" onClick={() => nav(-1)}>←</button>
           <span className="ag-period">{periodLabel()}</span>
-          {view !== "list" && <button className="navbtn" onClick={() => nav(1)}>→</button>}
-          {view !== "list" && <button className="btn ghost sm" onClick={() => setRef(todayISO())}>Hoje</button>}
+          <button className="navbtn" onClick={() => nav(1)}>→</button>
+          <button className="btn ghost sm" onClick={() => setRef(todayISO())}>Hoje</button>
         </div>
       </div>
       <div className="ag-filters">
@@ -247,7 +248,7 @@ export function Agenda() {
       </div>
       {view === "month" && <MonthView ref0={ref} agSlots={agSlots} open={open} data={data} />}
       {view === "week" && <WeekView ref0={ref} agSlots={agSlots} unit={unit} />}
-      {view === "list" && <ListView data={data} unit={unit} open={open} />}
+      {view === "list" && <ListView data={data} unit={unit} open={open} ref0={ref} />}
     </div>
   );
 }
@@ -299,22 +300,60 @@ function WeekView({ ref0, agSlots, unit }) {
   );
 }
 
-function ListView({ data, unit, open }) {
+function ListView({ data, unit, open, ref0 }) {
+  const base = ref0 || todayISO();
+  const DIAS = 21; // mostra ~3 semanas a partir da data de referência
+  const dias = Array.from({ length: DIAS }, (_, i) => addDays(base, i));
   const t = todayISO();
-  const list = bookingsActive(data).filter((b) => b.date >= t && (unit === "Todas" || b.unit === unit)).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-  if (!list.length) return <div className="empty"><div className="ic">📋</div><p>Sem aulas agendadas a partir de hoje.</p></div>;
-  const byDay = {};
-  list.forEach((b) => { (byDay[b.date] = byDay[b.date] || []).push(b); });
-  return <>{Object.keys(byDay).sort().map((day) => (
-    <div className="list-day" key={day}>
-      <div className="list-day-h">{fmtDateLong(day)}</div>
-      {byDay[day].map((b) => (
-        <div className="list-row" key={b.id} style={{ "--uc": unitColor(b.unit) }} onClick={() => open(<ManageBooking booking={b} />)}>
-          <span className="lr-time">{b.time}</span>
-          <div className="lr-main"><b>{b.clientName}</b><span>{b.unit}</span></div>
-          <StatusBadge status={b.status} />
-        </div>
-      ))}
+
+  // dias que têm horário cadastrado na unidade filtrada
+  const porDia = dias
+    .map((d) => ({
+      date: d,
+      slots: data.slots
+        .filter((s) => s.date === d && (unit === "Todas" || s.unit === unit))
+        .sort((a, b) => a.time.localeCompare(b.time)),
+    }))
+    .filter((x) => x.slots.length);
+
+  if (!porDia.length)
+    return <div className="empty"><div className="ic">📋</div><p>Sem horários cadastrados nesse período.</p></div>;
+
+  return <>{porDia.map(({ date, slots }) => (
+    <div className="list-day" key={date}>
+      <div className="list-day-h">{fmtDateLong(date)}{date === t ? " · hoje" : ""}</div>
+      {slots.map((s) => {
+        const uc = unitColor(s.unit);
+        const todas = slotBookingsAll(data, s.id);      // inclui canceladas
+        const ativas = todas.filter((b) => b.status !== "cancelada");
+        const cap = slotCapacity(s);
+        return (
+          <div className="ls-slot" key={s.id} style={{ "--uc": uc }}>
+            <div className="ls-slot-h">
+              <span className="ls-time">{faixaHorario(s.time, data.meta.duracaoAulaMin)}</span>
+              <span className="ls-unit">{s.unit}</span>
+              {s.prof && <span className="cli-sub">· {s.prof}</span>}
+              <span className="ls-cap">{ativas.length}/{cap}</span>
+              <button className="btn ghost sm" onClick={() => open(<SlotDetail slotId={s.id} />)}>Gerir turma</button>
+            </div>
+            {todas.length ? todas.map((b) => {
+              const k = bookingKind(b);
+              return (
+                <div className={`ls-al ${b.status === "cancelada" ? "canc" : ""}`} key={b.id}
+                  onClick={() => open(<ManageBooking booking={b} />)}>
+                  <span className="nm">{b.clientName}</span>
+                  <span className="sp">
+                    {k && <span className={`badge ${k.cls}`}>{k.ic} {k.label}</span>}
+                    {b.attendance === "presente" && <span className="badge b-ok">✓ presente</span>}
+                    {b.attendance === "falta" && <span className="badge b-danger">✕ faltou</span>}
+                    <StatusBadge status={b.status} />
+                  </span>
+                </div>
+              );
+            }) : <div className="ls-vazio">Nenhuma aluna nesse horário ainda.</div>}
+          </div>
+        );
+      })}
     </div>
   ))}</>;
 }
@@ -476,7 +515,7 @@ export function Clientes({ params }) {
                 <td className="td-actions">
                   <button className="btn wa sm" title={tab === "lead" ? "Convidar" : "WhatsApp"} onClick={() => openWa(c.phone, waMsg(c))}><WaIcon /></button>
                   {c.hasPin && <button className="btn sec sm" onClick={() => resetPin(c)}>🔒 Resetar PIN</button>}
-                  <button className="btn sec sm" onClick={() => open(<ClientForm client={c} />)}>Editar</button>
+                  <button className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>Editar</button>
                   <button className="btn ghost sm" style={{ color: "var(--danger)" }} title="Excluir" onClick={() => delClient(c)}>🗑</button>
                 </td>
               </tr>
@@ -492,34 +531,64 @@ export function Clientes({ params }) {
 export function Mensalistas() {
   const { data, run } = useStore();
   const { open } = useModal();
-  const comp = new Date().toISOString().slice(0, 10).slice(0, 7); // 'YYYY-MM'
+  const [comp, setComp] = useState(compAtual());
   const [busy, setBusy] = useState(false);
-  const mensalistas = data.clients.filter((c) => c.plan === "mensalista").sort((a, b) => a.name.localeCompare(b.name));
+  const atual = compAtual();
+  const ehMesAtual = comp === atual;
+
+  // mensalistas que já estavam matriculados nessa competência
+  const mensalistas = data.clients
+    .filter((c) => c.plan === "mensalista")
+    .filter((c) => { const ini = matriculaISO(c); return !ini || ini.slice(0, 7) <= comp; })
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   const invOf = (c) => (data.invoices || []).find((i) => i.clientId === c.id && i.competencia === comp);
-  const valorDe = (c) => (c.monthlyValue != null ? c.monthlyValue : data.meta.mensalidadeValor) || 0;
+  const valorDe = (c) => mensalidadeDe(c, data.meta);
   const vencDe = (c) => Math.min(28, Math.max(1, c.billingDay || data.meta.vencimentoDia || 10));
 
-  const gerar = async (c) => { setBusy(true); try { await run(api.gerarMensalidade(c.id)); } finally { setBusy(false); } };
-  const gerarTodos = async () => { if (!(await confirmModal({ title: "Gerar mensalidades", message: `Gerar os boletos de ${comp} para todos os ${mensalistas.length} mensalistas?`, confirmLabel: "Gerar" }))) return; setBusy(true); try { const r = await run(api.gerarMensalidadesMes()); toast(`${r?.geradas ?? 0} boleto(s) gerado(s)/reaproveitado(s).`); } finally { setBusy(false); } };
+  const gerar = async (c) => { setBusy(true); try { await run(api.gerarMensalidade(c.id, comp)); } finally { setBusy(false); } };
+  const gerarTodos = async () => {
+    if (!(await confirmModal({ title: "Gerar mensalidades", message: `Gerar os boletos de ${compLabel(comp)} para todos os ${mensalistas.length} mensalistas?`, confirmLabel: "Gerar" }))) return;
+    setBusy(true);
+    try { const r = await run(api.gerarMensalidadesMes()); toast(`${r?.geradas ?? 0} boleto(s) gerado(s)/reaproveitado(s).`); }
+    finally { setBusy(false); }
+  };
   const marcarPago = async (inv) => { await run(api.payInvoice(inv.id)); };
   const copyPix = (code) => { navigator.clipboard.writeText(code); toast("Código Pix copiado! 📋"); };
 
-  const pagos = mensalistas.filter((c) => invOf(c)?.status === "pago").length;
-  const pend = mensalistas.filter((c) => { const i = invOf(c); return i && i.status === "pendente"; }).length;
-  const semBoleto = mensalistas.filter((c) => !invOf(c)).length;
+  // ----- fechamento da competência -----
+  const invs = mensalistas.map(invOf);
+  const pagosArr = invs.filter((i) => i && i.status === "pago");
+  const pendArr = invs.filter((i) => i && i.status === "pendente");
+  const semBoleto = invs.filter((i) => !i).length;
+  const recebido = pagosArr.reduce((s, i) => s + i.amountCents / 100, 0);
+  const aReceber = pendArr.reduce((s, i) => s + i.amountCents / 100, 0);
+  const previsto = mensalistas.reduce((s, c) => { const i = invOf(c); return s + (i ? i.amountCents / 100 : valorDe(c)); }, 0);
 
   return (
     <div className="panel">
-      <div className="filters" style={{ justifyContent: "space-between" }}>
-        <div className="tags" style={{ gap: ".6rem", alignItems: "center" }}>
-          <span className="badge b-ok">✓ {pagos} pagos</span>
-          <span className="badge b-warn">⏳ {pend} pendentes</span>
-          <span className="badge b-muted">📄 {semBoleto} sem boleto</span>
-          <span className="count">Competência {comp}</span>
+      <div className="ag-toolbar">
+        <div className="ag-nav">
+          <button className="navbtn" onClick={() => setComp(addComp(comp, -1))}>←</button>
+          <span className="ag-period">{compLabel(comp)}</span>
+          <button className="navbtn" onClick={() => setComp(addComp(comp, 1))} disabled={comp >= atual}>→</button>
+          {!ehMesAtual && <button className="btn ghost sm" onClick={() => setComp(atual)}>Mês atual</button>}
         </div>
-        <button className="btn" disabled={busy || !mensalistas.length} onClick={gerarTodos}>🧾 Gerar boletos do mês</button>
+        <button className="btn" disabled={busy || !mensalistas.length || !ehMesAtual}
+          title={ehMesAtual ? "" : "Boletos só são gerados para o mês atual"} onClick={gerarTodos}>
+          🧾 Gerar boletos do mês
+        </button>
       </div>
-      {!data.meta.mensalidadeValor && <div className="seg-hint" style={{ color: "var(--terracota)" }}>⚠ Defina o valor padrão da mensalidade em Configurações (ou um valor individual em cada aluno).</div>}
+
+      <div className="fch-tot">
+        <div className="fch-card"><div className="l">✓ Recebido</div><div className="v">{money(recebido)}</div><div className="cli-sub">{pagosArr.length} pago(s)</div></div>
+        <div className="fch-card"><div className="l">⏳ A receber</div><div className="v warn">{money(aReceber)}</div><div className="cli-sub">{pendArr.length} pendente(s)</div></div>
+        <div className="fch-card"><div className="l">📄 Sem boleto</div><div className="v terra">{semBoleto}</div><div className="cli-sub">de {mensalistas.length} aluno(s)</div></div>
+        <div className="fch-card"><div className="l">📊 Previsto no mês</div><div className="v">{money(previsto)}</div><div className="cli-sub">{previsto ? Math.round((recebido / previsto) * 100) : 0}% fechado</div></div>
+      </div>
+
+      {!ehMesAtual && <div className="seg-hint">📅 Mês fechado — os boletos são gerados apenas para o mês atual. Meses anteriores sem boleto aparecem como “não gerado”.</div>}
+
       {mensalistas.length ? (
         <table><thead><tr><th>Aluno</th><th>Mensalidade</th><th>Vencimento</th><th>Status do mês</th><th></th></tr></thead><tbody>
           {mensalistas.map((c) => {
@@ -532,28 +601,27 @@ export function Mensalistas() {
                     <div><span className="cli-name">{c.name}</span><div className="cli-sub">{c.unit}{c.cpf ? "" : " · ⚠ sem CPF"}</div></div>
                   </div>
                 </td>
-                <td>{money(valorDe(c))}{c.monthlyValue != null ? <span className="cli-sub"> (individual)</span> : null}</td>
-                <td>dia {vencDe(c)}</td>
+                <td>{money(inv ? inv.amountCents / 100 : valorDe(c))}{c.monthlyValue != null ? <span className="cli-sub"> (individual)</span> : null}</td>
+                <td>{inv ? fmtDate(inv.dueDate) : "dia " + vencDe(c)}</td>
                 <td>
-                  {!inv ? <span className="badge b-muted">sem boleto</span>
-                    : inv.status === "pago" ? <span className="badge b-ok">✓ pago</span>
+                  {!inv ? <span className="badge b-muted">não gerado</span>
+                    : inv.status === "pago" ? <span className="badge b-ok">✓ pago{inv.paidAt ? " em " + fmtDate(String(inv.paidAt).slice(0, 10)) : ""}</span>
                     : inv.status === "cancelado" ? <span className="badge b-danger">cancelado</span>
                     : <span className="badge b-warn">⏳ pendente · vence {fmtDate(inv.dueDate)}</span>}
                 </td>
                 <td className="td-actions">
-                  {!inv && <button className="btn sm" disabled={busy} onClick={() => gerar(c)}>🧾 Gerar boleto</button>}
+                  {!inv && ehMesAtual && <button className="btn sm" disabled={busy} onClick={() => gerar(c)}>🧾 Gerar boleto</button>}
                   {inv && inv.status === "pendente" && <>
                     {inv.boletoUrl && <a className="btn sec sm" href={inv.boletoUrl} target="_blank" rel="noreferrer">📄 Boleto</a>}
                     {inv.pixCode && <button className="btn sec sm" onClick={() => copyPix(inv.pixCode)}>💠 Pix</button>}
                     <button className="btn sm" onClick={() => marcarPago(inv)}>✓ Marcar pago</button>
                   </>}
-                  {inv && inv.status === "pago" && inv.paidAt && <span className="cli-sub">pago em {fmtDate(inv.paidAt)}</span>}
                 </td>
               </tr>
             );
           })}
         </tbody></table>
-      ) : <div className="empty"><div className="ic">📅</div><p>Nenhum mensalista ainda. Marque um aluno como "Mensalista" no cadastro.</p></div>}
+      ) : <div className="empty"><div className="ic">📅</div><p>Nenhum mensalista nessa competência.</p></div>}
     </div>
   );
 }

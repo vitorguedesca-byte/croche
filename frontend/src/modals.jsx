@@ -7,7 +7,8 @@ import { toast, confirmModal, promptModal } from "./toast.jsx";
 import {
   UNITS, PROFS, TAG_OPTIONS, STATUS, VALOR_PADRAO, CAPACITY_PADRAO,
   unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize, faixaHorario,
-  slotById, slotBookings, slotCapacity, slotWaitlist, clientAttendance,
+  slotById, slotBookings, slotBookingsAll, slotCapacity, slotWaitlist, clientAttendance,
+  bookingKind, competenciasDoAluno, compLabel, mensalidadeDe, matriculaISO,
   WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays,
 } from "./helpers.js";
 
@@ -41,7 +42,7 @@ export function SlotCard({ slot, showUnit }) {
   const wlc = slotWaitlist(slot).length;
   const cls = occ === 0 ? "free" : full ? "full" : "partial";
   const pct = Math.round((occ / cap) * 100);
-  const names = occ ? bks.map((b) => b.clientName.split(" ")[0]).join(", ") : "Livre";
+  const todas = slotBookingsAll(data, slot.id); // inclui canceladas
   return (
     <div className={`slot ${cls}`} style={{ "--uc": uc, background: occ ? unitSoft(slot.unit) : undefined }}
       onClick={() => open(<SlotDetail slotId={slot.id} />)}>
@@ -49,7 +50,22 @@ export function SlotCard({ slot, showUnit }) {
         <span className="t" style={{ color: occ ? uc : undefined }}>{slot.time}</span>
         <span className={`occ ${full ? "is-full" : occ > 0 ? "is-part" : ""}`}>{occ}/{cap}</span>
       </div>
-      <div className="n">{showUnit && <b style={{ color: uc }}>{slot.unit}</b>}{showUnit ? " · " : ""}{names}</div>
+      {showUnit && <div className="n"><b style={{ color: uc }}>{slot.unit}</b></div>}
+      {todas.length ? (
+        <div className="sc-roster">
+          {todas.slice(0, 5).map((b) => {
+            const k = bookingKind(b);
+            return (
+              <div key={b.id} className={`sc-al ${b.status === "cancelada" ? "canc" : ""}`} title={`${b.clientName} · ${STATUS[b.status].label}${k ? " · " + k.label : ""}`}>
+                <span className="sc-dot" style={{ background: STATUS[b.status].dot }} />
+                <span className="sc-nm">{b.clientName.split(" ")[0]}</span>
+                {k && <span className="sc-tag">{k.ic}</span>}
+              </div>
+            );
+          })}
+          {todas.length > 5 && <div className="sc-more">+{todas.length - 5} mais</div>}
+        </div>
+      ) : <div className="n">Livre</div>}
       <div className="occbar"><span style={{ width: pct + "%", background: full ? "var(--danger)" : uc }} /></div>
       {wlc > 0 && <div className="wl-badge">⏰ {wlc} na espera</div>}
     </div>
@@ -224,7 +240,7 @@ export function WaitlistForm({ slotId }) {
 }
 
 /* ======================= Gerir marcação ======================= */
-export function ManageBooking({ booking }) {
+export function ManageBooking({ booking, onBack }) {
   const { data, run } = useStore();
   const { open, close } = useModal();
   const [status, setStatus] = useState(booking.status);
@@ -295,9 +311,11 @@ export function ManageBooking({ booking }) {
   };
   return (
     <Modal title="Gerir marcação" footer={<>
-      {slotExists
-        ? <button className="btn ghost" onClick={() => open(<SlotDetail slotId={booking.slotId} />)}>← Voltar à turma</button>
-        : <button className="btn ghost" onClick={close}>Fechar</button>}
+      {onBack
+        ? <button className="btn ghost" onClick={onBack}>← Voltar ao perfil</button>
+        : slotExists
+          ? <button className="btn ghost" onClick={() => open(<SlotDetail slotId={booking.slotId} />)}>← Voltar à turma</button>
+          : <button className="btn ghost" onClick={close}>Fechar</button>}
       <div style={{ flex: 1 }} />
       <button className="btn wa" onClick={() => openWa(booking.phone, `Olá ${booking.clientName}! 💚`)}><WaIcon /> WhatsApp</button>
       {!booking.paid && <button className="btn terra" onClick={() => open(<ConfirmPayment booking={booking} />)}>Confirmar pagamento</button>}
@@ -598,7 +616,75 @@ export function ReplicateSlotForm({ slot }) {
 }
 
 /* ======================= Perfil da aluna (histórico) ======================= */
-export function ClientProfile({ client }) {
+const iniciais = (n) => (n || "").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+
+/* ====== Mensalidades do aluno (fechamento + pagamento) ======
+   Mês a mês desde a primeira matrícula. Meses sem boleto aparecem como
+   "não gerado" — o sistema não cria cobrança retroativa. */
+function MensalidadesPanel({ client }) {
+  const { data } = useStore();
+  const comps = competenciasDoAluno(client);
+  const invs = (data.invoices || []).filter((i) => i.clientId === client.id);
+  const valorPadrao = mensalidadeDe(client, data.meta);
+  const totalPago = invs.filter((i) => i.status === "pago").reduce((s, i) => s + i.amountCents / 100, 0);
+  const emAberto = invs.filter((i) => i.status === "pendente").reduce((s, i) => s + i.amountCents / 100, 0);
+  const ini = matriculaISO(client);
+  return (
+    <div className="prof-panel">
+      <div className="prof-panel-h">
+        <b>🧾 Mensalidades · fechamento</b>
+        <span className="cli-sub">{ini ? `desde ${fmtDate(ini)}` : "sem matrícula"}</span>
+      </div>
+      <div className="cli-sub" style={{ marginBottom: ".5rem" }}>
+        <b style={{ color: "var(--green-deep)" }}>{money(totalPago)}</b> pago
+        {emAberto ? <> · <b style={{ color: "var(--warn)" }}>{money(emAberto)}</b> em aberto</> : null}
+      </div>
+      <div>
+        {comps.map((comp) => {
+          const inv = invs.find((i) => i.competencia === comp);
+          const valor = inv ? inv.amountCents / 100 : valorPadrao;
+          return (
+            <div className="hist-row" key={comp}>
+              <span className="hist-comp">{compLabel(comp)}</span>
+              <span className="hist-val">{money(valor)}</span>
+              <span className="hist-st">
+                {!inv ? <span className="badge b-muted">não gerado</span>
+                  : inv.status === "pago" ? <span className="badge b-ok">✓ {inv.paidAt ? fmtDate(String(inv.paidAt).slice(0, 10)) : "pago"}</span>
+                  : inv.status === "cancelado" ? <span className="badge b-danger">cancelado</span>
+                  : <span className="badge b-warn">⏳ vence {fmtDate(inv.dueDate)}</span>}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* Últimas movimentações do aluno: aulas, pagamentos, mensalidades, reposição. */
+function atividadesDoAluno(data, c) {
+  const out = [];
+  const add = (d, ic, t, s) => { if (d) out.push({ d: String(d).slice(0, 10), ic, t, s }); };
+  data.bookings.filter((b) => b.clientName === c.name).forEach((b) => {
+    add(b.createdAt, "🆕", `Aula marcada — ${fmtDate(b.date)} às ${b.time}`, b.unit);
+    if (b.status === "cancelada") add(b.date, "❌", `Aula cancelada — ${fmtDate(b.date)}`, b.absenceReason || b.unit);
+    if (b.paid && b.paymentDate) add(b.paymentDate, "💰", `Pagou a aula — ${money(b.value)}`, b.paymentMethod || "");
+  });
+  (data.invoices || []).filter((i) => i.clientId === c.id).forEach((i) => {
+    if (i.paidAt) add(i.paidAt, "🧾", `Mensalidade paga — ${compLabel(i.competencia)}`, money(i.amountCents / 100));
+    else if (i.status === "pendente") add(i.dueDate, "⏳", `Mensalidade em aberto — ${compLabel(i.competencia)}`, `vence ${fmtDate(i.dueDate)}`);
+  });
+  (data.makeups || []).filter((k) => k.clientId === c.id).forEach((k) => {
+    add(k.originDate, "🔁", "Crédito de reposição gerado", `vale até ${fmtDate(k.expiresOn)}`);
+    if (k.usedAt) add(k.usedAt, "✅", "Reposição marcada", "crédito usado");
+  });
+  add(c.trialDate, "✨", "Aula experimental", "");
+  add(c.matriculaAt, "🎟️", "Taxa de matrícula paga", "");
+  add(c.matriculaRefundAt, "↩️", "Taxa de matrícula devolvida", "");
+  return out.sort((a, b) => b.d.localeCompare(a.d)).slice(0, 14);
+}
+
+export function ClientProfile({ client, initialTab }) {
   const { data, run } = useStore();
   const { open, close } = useModal();
   const c = data.clients.find((x) => x.id === client.id) || client;
@@ -606,6 +692,23 @@ export function ClientProfile({ client }) {
   const hist = data.bookings.filter((b) => b.clientName === c.name).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
   const total = hist.filter((b) => b.status !== "cancelada").length;
   const pago = hist.filter((b) => b.paid).reduce((s, b) => s + b.value, 0);
+  const t = todayISO();
+  const proxima = hist.filter((b) => b.date >= t && b.status !== "cancelada").sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))[0];
+  const ehMensalista = c.plan === "mensalista";
+  const temMatricula = c.matriculaStatus && c.matriculaStatus !== "nao_aplica";
+  const pendentes = (data.invoices || []).filter((i) => i.clientId === c.id && i.status === "pendente").length;
+  const [tab, setTab] = useState(initialTab || "principal");
+  const form = useClientForm(c, () => setTab("principal"));
+  const atividades = atividadesDoAluno(data, c);
+
+  const abas = [
+    { k: "principal", ic: "⭐", label: "Principal", n: null },
+    { k: "aulas", ic: "📋", label: "Aulas", n: hist.length },
+    ...(ehMensalista ? [{ k: "mens", ic: "🧾", label: "Mensalidades", n: pendentes || null }] : []),
+    ...(ehMensalista || temMatricula ? [{ k: "repo", ic: "🔁", label: "Reposição", n: null }] : []),
+    { k: "editar", ic: "✏️", label: "Editar", n: null },
+  ];
+
   const resetPin = async () => {
     if (!(await confirmModal({ title: "Redefinir PIN", message: `Redefinir o PIN de ${c.name}?\n\nO PIN atual será apagado e ela criará um novo no próximo acesso ao portal.`, confirmLabel: "Redefinir", tone: "danger" }))) return;
     await run(api.resetPin(c.id));
@@ -617,39 +720,139 @@ export function ClientProfile({ client }) {
     toast("Cadastro excluído.");
     close();
   };
-  return (
-    <Modal title={c.name} footer={<>
-      <button className="btn wa" onClick={() => openWa(c.phone, `Olá ${c.name}! 💚`)}><WaIcon /> WhatsApp</button>
-      {c.plan === "mensalista" && <button className="btn" onClick={() => open(<BatchBookForm client={c} />)}>📅 Agendar em lote</button>}
-      {c.hasPin && <button className="btn ghost" onClick={resetPin}>🔑 Redefinir PIN</button>}
-      <button className="btn ghost" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir</button>
+
+  const rodape = tab === "editar" ? (
+    <>
+      <button className="btn danger" onClick={del}>🗑 Excluir</button>
       <div style={{ flex: 1 }} />
-      <button className="btn sec" onClick={() => open(<ClientForm client={c} />)}>Editar cadastro</button>
-    </>}>
-      <div className="info-line"><b>Telefone</b><span>{c.phone || "—"}</span></div>
-      <div className="info-line"><b>Unidade</b><span><span className="chip">{c.unit || "—"}</span>{c.firstClass ? <span className="badge b-terra ml">✨ Aluno(a) novo(a)</span> : null}</span></div>
-      <div className="info-line"><b>Nível · Aniversário</b><span>{c.level || "—"}{c.birthday ? " · 🎂 " + fmtDate(c.birthday) : ""}</span></div>
-      <div className="info-line"><b>Etiquetas</b><span className="tags" style={{ justifyContent: "flex-end" }}>{(c.tags || []).length ? c.tags.map((t) => <span key={t} className="chip">{t}</span>) : "—"}</span></div>
-      <div className="info-line"><b>Acesso ao portal (PIN)</b><span>{c.hasPin ? <span className="badge b-ok">PIN cadastrado</span> : <span className="badge b-muted">Sem PIN ainda</span>}</span></div>
-      <div className="info-line"><b>Inscrição</b><span>{c.status === "cancelado" ? <span className="badge b-danger">Cancelada — rompeu com o curso</span> : <span className="badge b-ok">Ativa</span>}</span></div>
-      <div className="info-line"><b>Plano</b><span>{planoLabel(c, data.meta)}</span></div>
-      {c.notes ? <div className="help" style={{ margin: ".7rem 0" }}>{c.notes}</div> : null}
-      <MatriculaBlock client={c} />
-      {c.plan === "mensalista" && <MakeupBlock client={c} />}
-      <div className="grid" style={{ gridTemplateColumns: "repeat(3,1fr)", gap: ".6rem", margin: "1rem 0" }}>
-        <div className="card stat" style={{ padding: ".8rem 1rem" }}><div className="lbl">Aulas</div><div className="val" style={{ fontSize: "1.6rem" }}>{total}</div></div>
-        <div className="card stat" style={{ padding: ".8rem 1rem" }}><div className="lbl">Presenças</div><div className="val" style={{ fontSize: "1.6rem" }}>{at.pres}</div><div className="foot">{at.falt} falta(s)</div></div>
-        <div className="card stat" style={{ padding: ".8rem 1rem" }}><div className="lbl">Pago</div><div className="val terra" style={{ fontSize: "1.3rem" }}>{money(pago)}</div></div>
-      </div>
-      <b style={{ color: "var(--brown)" }}>Histórico de aulas</b>
-      <div style={{ marginTop: ".6rem" }}>
-        {hist.length ? hist.map((b) => (
-          <div className="roster-row row-click" key={b.id} onClick={() => open(<ManageBooking booking={b} />)}>
-            <div className="rr-info"><b>{fmtDate(b.date)} · {b.time}</b><div className="cli-sub">{b.unit}{b.attendance === "presente" ? " · ✓ presente" : b.attendance === "falta" ? " · ✕ faltou" : ""}{b.paid ? " · pago" : ""}</div></div>
-            <StatusBadge status={b.status} />
+      <button className="btn ghost" onClick={() => setTab("principal")}>Cancelar</button>
+      <button className="btn" onClick={form.save}>Salvar alterações</button>
+    </>
+  ) : (
+    <>
+      <button className="btn wa" onClick={() => openWa(c.phone, `Olá ${c.name}! 💚`)}><WaIcon /> WhatsApp</button>
+      {ehMensalista && <button className="btn" onClick={() => open(<BatchBookForm client={c} />)}>📅 Agendar em lote</button>}
+      {c.hasPin && <button className="btn ghost" onClick={resetPin}>🔑 Redefinir PIN</button>}
+      <div style={{ flex: 1 }} />
+      <button className="btn sec" onClick={() => setTab("editar")}>✏️ Editar cadastro</button>
+    </>
+  );
+
+  const abasEl = (
+    <div className="seg seg-tabs prof-tabs">
+      {abas.map((a) => (
+        <button key={a.k} className={tab === a.k ? "on" : ""} onClick={() => setTab(a.k)}>
+          {a.ic} {a.label}{a.n ? <span className="seg-count">{a.n}</span> : null}
+        </button>
+      ))}
+    </div>
+  );
+
+  const cartaoIdentidade = (
+    <aside className="prof-side">
+      <div className="prof-id">
+        <span className="prof-av">{iniciais(c.name)}</span>
+        <div style={{ minWidth: 0 }}>
+          <div className="prof-id-n">{c.name}</div>
+          <div className="prof-chips">
+            <span className="chip">{c.unit || "—"}</span>
+            {c.status === "cancelado"
+              ? <span className="badge b-danger">Inscrição cancelada</span>
+              : <span className="badge b-ok">Ativa</span>}
+            {c.firstClass ? <span className="badge b-terra">✨ Novo(a)</span> : null}
           </div>
-        )) : <div className="cli-sub" style={{ padding: ".5rem 0" }}>Sem histórico ainda.</div>}
+        </div>
       </div>
+      <div className="prof-card">
+        <h4>Contato e cadastro</h4>
+        <div className="prof-dl">
+          <div><span className="k">Telefone</span><span className="v">{c.phone || "—"}</span></div>
+          {c.cpf ? <div><span className="k">CPF</span><span className="v">{c.cpf}</span></div> : null}
+          {c.email ? <div><span className="k">Email</span><span className="v">{c.email}</span></div> : null}
+          <div><span className="k">Nível</span><span className="v">{c.level || "—"}</span></div>
+          <div><span className="k">Aniversário</span><span className="v">{c.birthday ? "🎂 " + fmtDate(c.birthday) : "—"}</span></div>
+          <div><span className="k">Plano</span><span className="v">{planoLabel(c, data.meta)}</span></div>
+          <div><span className="k">Portal (PIN)</span><span className="v">{c.hasPin ? <span className="badge b-ok">cadastrado</span> : <span className="badge b-muted">sem PIN</span>}</span></div>
+          {(c.tags || []).length ? <div><span className="k">Etiquetas</span><span className="v tags" style={{ justifyContent: "flex-end" }}>{c.tags.map((x) => <span key={x} className="chip">{x}</span>)}</span></div> : null}
+        </div>
+      </div>
+      {c.notes ? <div className="prof-card"><h4>Observações</h4><div className="cli-sub" style={{ lineHeight: 1.45 }}>{c.notes}</div></div> : null}
+    </aside>
+  );
+
+  return (
+    <Modal size="lg" title={c.name} subheader={abasEl} footer={rodape}>
+      {tab === "principal" && (
+        <div className="prin">
+          {cartaoIdentidade}
+          <div className="prin-main">
+            <div className="prof-kpis">
+              <div className="prof-kpi"><div className="l">Aulas</div><div className="v">{total}</div></div>
+              <div className="prof-kpi"><div className="l">Presenças</div><div className="v">{at.pres}</div><div className="f">{at.falt} falta(s)</div></div>
+              <div className="prof-kpi"><div className="l">Pago em aulas</div><div className="v terra">{money(pago)}</div></div>
+              <div className="prof-kpi">
+                <div className="l">Próxima aula</div>
+                <div className="v" style={{ fontSize: proxima ? "1.15rem" : "1.45rem" }}>{proxima ? fmtDate(proxima.date) : "—"}</div>
+                <div className="f">{proxima ? `${proxima.time} · ${proxima.unit}` : "nada agendado"}</div>
+              </div>
+            </div>
+            <div className="prof-panel">
+              <div className="prof-panel-h">
+                <b>🔔 Últimas movimentações</b>
+                {pendentes ? <span className="badge b-warn">{pendentes} mensalidade(s) em aberto</span> : null}
+              </div>
+              <div className="feed">
+                {atividades.length ? atividades.map((a, i) => (
+                  <div className="feed-row" key={i}>
+                    <span className="feed-ic">{a.ic}</span>
+                    <div style={{ minWidth: 0 }}>
+                      <div className="feed-t">{a.t}</div>
+                      {a.s ? <div className="feed-s">{a.s}</div> : null}
+                    </div>
+                    <span className="feed-d">{fmtDate(a.d)}</span>
+                  </div>
+                )) : <div className="prof-empty">Nenhuma movimentação registrada.</div>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "aulas" && (
+        <div className="prof-panel">
+          <div className="prof-panel-h">
+            <b>📋 Histórico de aulas</b>
+            <span className="cli-sub">{hist.length} no total</span>
+          </div>
+          {hist.length ? hist.map((b) => {
+            const k = bookingKind(b);
+            return (
+              <div className="prof-hist" key={b.id} onClick={() => open(<ManageBooking booking={b} onBack={() => open(<ClientProfile client={client} />)} />)}>
+                <div style={{ minWidth: 0 }}>
+                  <div className="d">{fmtDate(b.date)} · {b.time}</div>
+                  <div className="s">{b.unit}{b.attendance === "presente" ? " · ✓ presente" : b.attendance === "falta" ? " · ✕ faltou" : ""}</div>
+                </div>
+                <div className="r">
+                  {k && <span className={`badge ${k.cls}`}>{k.ic} {k.label}</span>}
+                  {b.paid && <span className="cli-sub">{money(b.value)}</span>}
+                  <StatusBadge status={b.status} />
+                </div>
+              </div>
+            );
+          }) : <div className="prof-empty">Sem histórico ainda.</div>}
+        </div>
+      )}
+
+      {tab === "mens" && <MensalidadesPanel client={c} />}
+
+      {tab === "repo" && (
+        <div className="prof-panel">
+          {temMatricula && <MatriculaBlock client={c} />}
+          {ehMensalista && <MakeupBlock client={c} />}
+        </div>
+      )}
+
+      {tab === "editar" && <ClientFormFields f={form} />}
     </Modal>
   );
 }
@@ -957,9 +1160,11 @@ export function BatchBookForm({ client }) {
   );
 }
 
-export function ClientForm({ client }) {
+/* ====== Formulário do aluno: estado reutilizável ======
+   Usado tanto pelo modal "Novo aluno" quanto pela aba "Editar" do perfil,
+   para que editar o cadastro não precise abrir outro modal. */
+function useClientForm(client, onDone) {
   const { data, run } = useStore();
-  const { close } = useModal();
   const meta = data.meta;
   const [name, setName] = useState(client?.name || "");
   const [phone, setPhone] = useState(client?.phone || "");
@@ -975,6 +1180,7 @@ export function ClientForm({ client }) {
   // Plano: "avulso" | "1" | "2" (mensalista 1x/2x por semana)
   const [plano, setPlano] = useState(client?.plan === "mensalista" ? String(client.weeklyFreq || 1) : "avulso");
   const toggle = (t) => setTags((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
+
   const save = async () => {
     if (!name.trim()) return toast("Informe o nome.", "error");
     const payload = { name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: cpf.trim(), unit, tags, notes: notes.trim(), birthday, level, firstClass, status };
@@ -1000,74 +1206,110 @@ export function ClientForm({ client }) {
       const id = client ? client.id : saved?.id;
       if (id) await run(api.enroll(id, { weeklyFreq: Number(plano) }));
       toast(`📅 Mensalista ${plano}x/semana — 1ª mensalidade gerada.`);
+    } else {
+      toast("Cadastro salvo. 💚");
     }
-    close();
+    onDone && onDone();
   };
-  const del = async () => {
-    if (await confirmModal({ title: "Excluir aluno", message: `Excluir ${client.name}?\n\nAs aulas futuras serão removidas da agenda; o histórico de aulas passadas é mantido.`, confirmLabel: "Excluir", tone: "danger" })) { await run(api.deleteClient(client.id)); close(); }
-  };
+
+  return { meta, client, name, setName, phone, setPhone, email, setEmail, cpf, setCpf,
+    unit, setUnit, tags, toggle, notes, setNotes, birthday, setBirthday, level, setLevel,
+    firstClass, setFirstClass, status, setStatus, plano, setPlano, save };
+}
+
+function ClientFormFields({ f }) {
+  const { meta, client } = f;
   return (
-    <Modal title={client ? "Editar aluno" : "Novo aluno"} footer={<>
-      {client && <button className="btn danger" onClick={del}>Excluir</button>}
-      <div style={{ flex: 1 }} />
-      <button className="btn ghost" onClick={close}>Cancelar</button>
-      <button className="btn" onClick={save}>Salvar</button>
-    </>}>
+    <>
       <div className="row2">
-        <div className="field"><label>Nome</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
-        <div className="field"><label>Telefone</label><input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="31988880000" /></div>
+        <div className="field"><label>Nome</label><input value={f.name} onChange={(e) => f.setName(e.target.value)} /></div>
+        <div className="field"><label>Telefone</label><input value={f.phone} onChange={(e) => f.setPhone(e.target.value)} placeholder="31988880000" /></div>
       </div>
       <div className="row2">
-        <div className="field"><label>CPF <span style={{ color: "var(--muted)", fontWeight: 400 }}>(login do portal)</span></label><input value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="000.000.000-00" inputMode="numeric" /></div>
-        <div className="field"><label>Email</label><input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="aluno@email.com" inputMode="email" /></div>
+        <div className="field"><label>CPF <span style={{ color: "var(--muted)", fontWeight: 400 }}>(login do portal)</span></label><input value={f.cpf} onChange={(e) => f.setCpf(e.target.value)} placeholder="000.000.000-00" inputMode="numeric" /></div>
+        <div className="field"><label>Email</label><input value={f.email} onChange={(e) => f.setEmail(e.target.value)} placeholder="aluno@email.com" inputMode="email" /></div>
       </div>
       <div className="row2">
-        <div className="field"><label>Unidade</label><select value={unit} onChange={(e) => setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
+        <div className="field"><label>Unidade</label><select value={f.unit} onChange={(e) => f.setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
         <div className="field"><label>Nível de crochê</label>
-          <select value={level} onChange={(e) => setLevel(e.target.value)}>
+          <select value={f.level} onChange={(e) => f.setLevel(e.target.value)}>
             <option value="">— não informado</option>
             {["Iniciante", "Intermediário", "Avançado"].map((l) => <option key={l}>{l}</option>)}
           </select>
         </div>
       </div>
       <div className="row2">
-        <div className="field"><label>Aniversário</label><input type="date" value={birthday} onChange={(e) => setBirthday(e.target.value)} /></div>
+        <div className="field"><label>Aniversário</label><input type="date" value={f.birthday} onChange={(e) => f.setBirthday(e.target.value)} /></div>
         <div className="field"><label>Primeira aula?</label>
-          <label className="chip" style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", marginTop: ".3rem" }}>
-            <input type="checkbox" checked={firstClass} onChange={(e) => setFirstClass(e.target.checked)} style={{ marginRight: ".4rem" }} />
-            Sim, é aluno(a) novo(a)
-          </label>
+          <button
+            type="button"
+            onClick={() => f.setFirstClass(!f.firstClass)}
+            style={{
+              display: "flex", alignItems: "center", gap: ".6rem",
+              padding: ".45rem .9rem", borderRadius: 8, cursor: "pointer",
+              border: `1.5px solid ${f.firstClass ? "var(--green-deep)" : "var(--line)"}`,
+              background: f.firstClass ? "rgba(28,94,51,.08)" : "var(--cream)",
+              color: f.firstClass ? "var(--green-deep)" : "var(--muted)",
+              fontWeight: f.firstClass ? 600 : 400, fontSize: ".9rem",
+              transition: "all .18s",
+            }}
+          >
+            <span style={{ fontSize: "1.1rem" }}>{f.firstClass ? "✨" : "👩"}</span>
+            {f.firstClass ? "Sim — aluno(a) novo(a)" : "Não — já é aluno(a)"}
+          </button>
         </div>
       </div>
-      <div className="field"><label>Plano</label>
-        <select value={plano} onChange={(e) => setPlano(e.target.value)}>
-          <option value="avulso">Avulso — paga por aula</option>
-          <option value="1">📅 Mensalista — 1x por semana ({money(meta.valorPlano1x ?? 120)}/mês)</option>
-          <option value="2">📅 Mensalista — 2x por semana ({money(meta.valorPlano2x ?? 200)}/mês)</option>
-        </select>
-        {plano !== "avulso" && client?.plan !== "mensalista" && (
-          <div className="help" style={{ marginTop: ".4rem" }}>Ao salvar, a matrícula é feita e a 1ª mensalidade é gerada automaticamente.</div>
-        )}
+      <div className="row2">
+        <div className="field"><label>Plano</label>
+          <select value={f.plano} onChange={(e) => f.setPlano(e.target.value)}>
+            <option value="avulso">Avulso — paga por aula</option>
+            <option value="1">📅 Mensalista — 1x por semana ({money(meta.valorPlano1x ?? 120)}/mês)</option>
+            <option value="2">📅 Mensalista — 2x por semana ({money(meta.valorPlano2x ?? 200)}/mês)</option>
+          </select>
+          {f.plano !== "avulso" && client?.plan !== "mensalista" && (
+            <div className="help" style={{ marginTop: ".4rem" }}>Ao salvar, a matrícula é feita e a 1ª mensalidade é gerada automaticamente.</div>
+          )}
+        </div>
+        <div className="field"><label>Situação da inscrição</label>
+          <select value={f.status} onChange={(e) => f.setStatus(e.target.value)}>
+            <option value="ativo">Ativa — está fazendo o curso</option>
+            <option value="cancelado">Cancelada — rompeu com o curso</option>
+          </select>
+          <div className="help" style={{ marginTop: ".4rem" }}>Quem rompe deixa de ganhar e de usar créditos de reposição.</div>
+        </div>
       </div>
       {client?.plan !== "mensalista" && (
         <div className="field"><label>Etiquetas</label>
           <div className="tags">
             {TAG_OPTIONS.map((t) => (
               <label key={t} className="chip" style={{ cursor: "pointer" }}>
-                <input type="checkbox" checked={tags.includes(t)} onChange={() => toggle(t)} style={{ marginRight: ".3rem" }} />{t}
+                <input type="checkbox" checked={f.tags.includes(t)} onChange={() => f.toggle(t)} style={{ marginRight: ".3rem" }} />{t}
               </label>
             ))}
           </div>
         </div>
       )}
-      <div className="field"><label>Situação da inscrição</label>
-        <select value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="ativo">Ativa — está fazendo o curso</option>
-          <option value="cancelado">Cancelada — rompeu com o curso</option>
-        </select>
-        <div className="help" style={{ marginTop: ".4rem" }}>Quem rompe com o curso deixa de ganhar e de usar créditos de reposição.</div>
-      </div>
-      <div className="field"><label>Observações</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
+      <div className="field"><label>Observações</label><textarea value={f.notes} onChange={(e) => f.setNotes(e.target.value)} /></div>
+    </>
+  );
+}
+
+/* Modal separado — usado só para CRIAR aluno (editar acontece dentro do perfil). */
+export function ClientForm({ client }) {
+  const { run } = useStore();
+  const { close } = useModal();
+  const f = useClientForm(client, close);
+  const del = async () => {
+    if (await confirmModal({ title: "Excluir aluno", message: `Excluir ${client.name}?\n\nAs aulas futuras serão removidas da agenda; o histórico de aulas passadas é mantido.`, confirmLabel: "Excluir", tone: "danger" })) { await run(api.deleteClient(client.id)); close(); }
+  };
+  return (
+    <Modal size="md" title={client ? "Editar aluno" : "Novo aluno"} footer={<>
+      {client && <button className="btn danger" onClick={del}>Excluir</button>}
+      <div style={{ flex: 1 }} />
+      <button className="btn ghost" onClick={close}>Cancelar</button>
+      <button className="btn" onClick={f.save}>Salvar</button>
+    </>}>
+      <ClientFormFields f={f} />
     </Modal>
   );
 }

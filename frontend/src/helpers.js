@@ -164,3 +164,48 @@ export function isNewLead(data, booking) {
   if (client && client.firstClass) return true;
   return !client || !client.hasPin;
 }
+
+/* ================= tipo da aula: reposição / aula extra =================
+   O backend marca o tipo no paymentMethod ao criar a reserva:
+   "Reposição" = consumiu crédito do MakeupCredit · "Avulsa" = aula extra paga. */
+export const bookingKind = (b) =>
+  b.paymentMethod === "Reposição" ? { key: "reposicao", label: "Reposição", ic: "🔁", cls: "b-warn" }
+  : b.paymentMethod === "Avulsa" ? { key: "extra", label: "Aula extra", ic: "✨", cls: "b-terra" }
+  : null;
+
+// Reservas do horário INCLUINDO canceladas (a agenda mostra quem desmarcou).
+export const slotBookingsAll = (data, slotId) =>
+  data.bookings
+    .filter((b) => b.slotId === slotId)
+    .sort((a, b) => (a.status === "cancelada") - (b.status === "cancelada") || a.clientName.localeCompare(b.clientName));
+
+/* ================= mensalidades: competências ================= */
+export const compAtual = () => todayISO().slice(0, 7); // 'YYYY-MM'
+export function addComp(comp, n) {
+  const [y, m] = comp.split("-").map(Number);
+  const d = new Date(y, m - 1 + n, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+export function compLabel(comp) {
+  const [y, m] = comp.split("-").map(Number);
+  return capitalize(new Date(y, m - 1, 1).toLocaleDateString("pt-BR", { month: "long", year: "numeric" }));
+}
+// Data da primeira matrícula do aluno (taxa paga → experimental → cadastro).
+export const matriculaISO = (c) =>
+  c.matriculaAt || c.trialDate || (c.createdAt ? String(c.createdAt).slice(0, 10) : null);
+// Competências da matrícula até `ate` (mais recente primeiro).
+export function competenciasDoAluno(c, ate = compAtual()) {
+  const ini = matriculaISO(c);
+  if (!ini) return [ate];
+  let comp = ini.slice(0, 7);
+  const out = [];
+  while (comp <= ate && out.length < 240) { out.push(comp); comp = addComp(comp, 1); }
+  return out.reverse();
+}
+// Mensalidade efetiva do aluno (individual → plano 1x/2x → padrão legado).
+export function mensalidadeDe(c, meta) {
+  if (c.monthlyValue != null) return c.monthlyValue || 0;
+  if (c.weeklyFreq === 1) return (meta && meta.valorPlano1x) || 0;
+  if (c.weeklyFreq === 2) return (meta && meta.valorPlano2x) || 0;
+  return (meta && meta.mensalidadeValor) || 0;
+}
