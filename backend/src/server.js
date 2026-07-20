@@ -510,47 +510,74 @@ app.post(
     const b = req.body;
     if (!b.clientName) return res.status(400).json({ error: "clientName é obrigatório" });
     const unit = b.unit || UNITS[0];
-    const date = b.date || todayISO();
     const time = b.time || "09:00";
+    // `dates` (opcional) replica a mesma marcação em várias datas. Sem ele,
+    // continua sendo uma marcação única — comportamento de antes.
+    const datas = Array.isArray(b.dates) && b.dates.length
+      ? [...new Set(b.dates)].sort()
+      : [b.date || todayISO()];
+    const replicando = datas.length > 1;
 
-    let slot = b.slotId
-      ? await prisma.slot.findUnique({ where: { id: Number(b.slotId) } })
-      : await prisma.slot.findFirst({ where: { date, time, unit } });
+    const criadas = [];
+    const pulos = { lotada: 0, jaMarcada: 0 };
+    let client = null;
 
-    if (slot) {
-      const occ = await occupancy(slot.id);
-      if (occ >= slot.capacity) return res.status(409).json({ error: "Turma lotada." });
-    } else {
-      slot = await prisma.slot.create({
-        data: { date, time, unit, prof: b.prof || profFor(unit), capacity: SETTINGS.capacidadePadrao },
+    for (let i = 0; i < datas.length; i++) {
+      const date = datas[i];
+      let slot = (b.slotId && !replicando)
+        ? await prisma.slot.findUnique({ where: { id: Number(b.slotId) } })
+        : await prisma.slot.findFirst({ where: { date, time, unit } });
+
+      if (slot) {
+        const occ = await occupancy(slot.id);
+        if (occ >= slot.capacity) {
+          if (!replicando) return res.status(409).json({ error: "Turma lotada." });
+          pulos.lotada++; continue;
+        }
+        if (replicando) {
+          const dup = await prisma.booking.findFirst({
+            where: { slotId: slot.id, clientName: b.clientName, status: { not: "cancelada" } },
+          });
+          if (dup) { pulos.jaMarcada++; continue; }
+        }
+      } else {
+        slot = await prisma.slot.create({
+          data: { date, time, unit, prof: b.prof || profFor(unit), capacity: SETTINGS.capacidadePadrao },
+        });
+      }
+
+      // Aula experimental: a aula em si é gratuita — o que se cobra é a taxa de
+      // matrícula, devolvida se a aluna não continuar e aproveitada se continuar.
+      // Ao replicar, só a primeira aula é a experimental.
+      const experimental = !!b.firstClass && i === 0;
+      const booking = await prisma.booking.create({
+        data: {
+          clientName: b.clientName,
+          phone: b.phone || "",
+          unit,
+          date: slot.date,
+          time: slot.time,
+          prof: slot.prof,
+          slotId: slot.id,
+          status: "aguardando",
+          value: experimental ? SETTINGS.taxaMatricula : (Number(b.value) || SETTINGS.valorPadrao),
+          paymentMethod: experimental ? "Matrícula" : null,
+        },
       });
+      criadas.push(booking);
+
+      if (!client) client = await ensureClient(b.clientName, b.phone, unit, [], b.cpf, b.email, b.firstClass);
+      if (experimental && client) {
+        await prisma.client.update({
+          where: { id: client.id },
+          data: { matriculaStatus: "pendente", trialDate: slot.date },
+        });
+      }
     }
 
-    // Aula experimental: a aula em si é gratuita — o que se cobra é a taxa de
-    // matrícula, devolvida se a aluna não continuar e aproveitada se continuar.
-    const experimental = !!b.firstClass;
-    const booking = await prisma.booking.create({
-      data: {
-        clientName: b.clientName,
-        phone: b.phone || "",
-        unit,
-        date: slot.date,
-        time: slot.time,
-        prof: slot.prof,
-        slotId: slot.id,
-        status: "aguardando",
-        value: experimental ? SETTINGS.taxaMatricula : (Number(b.value) || SETTINGS.valorPadrao),
-        paymentMethod: experimental ? "Matrícula" : null,
-      },
-    });
-    const client = await ensureClient(b.clientName, b.phone, unit, [], b.cpf, b.email, b.firstClass);
-    if (experimental && client) {
-      await prisma.client.update({
-        where: { id: client.id },
-        data: { matriculaStatus: "pendente", trialDate: slot.date },
-      });
-    }
-    res.json(booking);
+    // compatibilidade: sem replicação, devolve a marcação criada (como antes)
+    if (!replicando) return res.json(criadas[0]);
+    res.json({ created: criadas, pulos });
   })
 );
 

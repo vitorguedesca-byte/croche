@@ -452,6 +452,12 @@ export function BookingForm({ slotId }) {
   const [value, setValue] = useState(meta.valorPadrao);
   const [date, setDate] = useState(slot ? slot.date : todayISO());
   const [time, setTime] = useState(slot ? slot.time : "09:00");
+  // repetição (igual à criação de horários): dias da semana × nº de semanas
+  const [weekdays, setWeekdays] = useState(() => new Set());
+  const [weeks, setWeeks] = useState(4);
+  const toggleWd = (i) => setWeekdays((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
+  const dates = weekdays.size ? datesForWeekdays(date, [...weekdays], weeks) : [date];
+  const repetindo = dates.length > 1;
 
   const pickClient = (v) => {
     if (!v) return;
@@ -462,13 +468,25 @@ export function BookingForm({ slotId }) {
   };
   const save = async () => {
     if (!name.trim()) return toast("Informe o nome.", "error");
-    await run(api.createBooking({ clientName: name.trim(), phone: phone.trim(), unit, value, date, time, slotId: slot ? slot.id : undefined }));
+    const payload = { clientName: name.trim(), phone: phone.trim(), unit, value, date, time, slotId: slot && !repetindo ? slot.id : undefined };
+    if (repetindo) payload.dates = dates;
+    const r = await run(api.createBooking(payload));
     close();
+    if (repetindo) {
+      const p = r?.pulos || {};
+      const puladas = (p.lotada || 0) + (p.jaMarcada || 0);
+      toast(
+        `✅ ${r?.created?.length ?? 0} aula(s) marcada(s).` +
+        (puladas ? `\nPuladas: ${p.lotada || 0} turma(s) lotada(s) · ${p.jaMarcada || 0} já marcada(s).` : "")
+      );
+    }
   };
   return (
     <Modal title="Nova marcação" footer={<>
       <button className="btn ghost" onClick={close}>Cancelar</button>
-      <button className="btn" onClick={save}>Salvar marcação</button>
+      <button className="btn" onClick={save} disabled={!dates.length}>
+        Salvar marcação{repetindo ? ` (${dates.length})` : ""}
+      </button>
     </>}>
       <div className="field"><label>Aluno existente</label>
         <select onChange={(e) => pickClient(e.target.value)}>
@@ -485,10 +503,27 @@ export function BookingForm({ slotId }) {
         <div className="field"><label>Valor (R$)</label><input type="number" value={value} onChange={(e) => setValue(Number(e.target.value))} /></div>
       </div>
       <div className="row2">
-        <div className="field"><label>Data</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
+        <div className="field"><label>{repetindo ? "Semana inicial (a partir de)" : "Data"}</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
         <div className="field"><label>Hora</label><input value={time} onChange={(e) => setTime(e.target.value)} /></div>
       </div>
-      <div className="help">A marcação entra como <b>Aguardando pagamento</b>. Após confirmar o pagamento, ela vira <b>Confirmada</b> na agenda.</div>
+
+      <div className="field">
+        <label>Repetir nos dias da semana <span className="help" style={{ fontWeight: 400 }}>(deixe em branco para marcar só na data)</span></label>
+        <WeekdayChips selected={weekdays} onToggle={toggleWd} />
+        {weekdays.size > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: ".6rem", marginTop: ".7rem" }}>
+            <span style={{ fontSize: ".85rem", color: "var(--muted)" }}>por</span>
+            <input type="number" min="1" max="52" value={weeks} onChange={(e) => setWeeks(Math.max(1, parseInt(e.target.value, 10) || 1))} style={{ width: 70 }} />
+            <span style={{ fontSize: ".85rem", color: "var(--muted)" }}>semana(s)</span>
+          </div>
+        )}
+      </div>
+
+      <div className="help">
+        {repetindo
+          ? <>Serão criadas <b>{dates.length} marcações</b> às {time}, criando a turma quando ela ainda não existir. Turmas lotadas e aulas já marcadas são puladas.</>
+          : <>A marcação entra como <b>Aguardando pagamento</b>. Após confirmar o pagamento, ela vira <b>Confirmada</b> na agenda.</>}
+      </div>
     </Modal>
   );
 }
