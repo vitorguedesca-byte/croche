@@ -3,15 +3,31 @@ import { Modal, useModal, StatusBadge } from "./ui.jsx";
 import { WaIcon } from "./icons.jsx";
 import { useStore } from "./store.jsx";
 import { api } from "./api.js";
-import { toast, confirmModal } from "./toast.jsx";
+import { toast, confirmModal, promptModal } from "./toast.jsx";
 import {
   UNITS, PROFS, TAG_OPTIONS, STATUS, VALOR_PADRAO, CAPACITY_PADRAO,
-  unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize,
+  unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize, faixaHorario,
   slotById, slotBookings, slotCapacity, slotWaitlist, clientAttendance,
   WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays,
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
+
+/* Resultado da criação de horários: as aulas duram 2h, então o servidor recusa
+   turmas que se sobrepõem na mesma unidade — aqui a gente conta o que aconteceu. */
+function avisarCriacao(r, sempre = false) {
+  if (!r) return;
+  const criados = r.created?.length ?? 0;
+  const conflitos = r.conflitos || [];
+  if (conflitos.length) {
+    const lista = conflitos.slice(0, 3).map((c) => `${fmtDate(c.date)} (choca com ${c.conflitaCom})`).join(", ");
+    return toast(
+      `${criados} horário(s) criado(s). ${conflitos.length} recusado(s) por sobreposição: ${lista}${conflitos.length > 3 ? "…" : ""}`,
+      "info",
+    );
+  }
+  if (sempre || criados !== 1) toast(`${criados} horário(s) criado(s).`);
+}
 
 /* ======================= Cartão de horário ======================= */
 export function SlotCard({ slot, showUnit }) {
@@ -85,16 +101,38 @@ export function SlotDetail({ slotId }) {
     run(api.updateSlotCapacity(slotId, capInput));
   };
   const del = async () => {
-    const msg = occ > 0
-      ? `Este horário tem ${occ} reserva(s). Excluir o horário também remove essas reservas. Continuar?`
-      : "Excluir este horário da agenda?";
-    if (!(await confirmModal({ title: "Excluir horário", message: msg, confirmLabel: "Excluir", tone: "danger" }))) return;
-    await run(api.deleteSlot(slotId));
+    // horários criados juntos (replicação) compartilham seriesId; "demais" = os de hoje em diante
+    const t = todayISO();
+    const sibs = slot.seriesId
+      ? data.slots.filter((s) => s.seriesId === slot.seriesId && s.id !== slot.id && s.date >= t)
+      : [];
+    if (!sibs.length) {
+      const msg = occ > 0
+        ? `Este horário tem ${occ} reserva(s). Excluir o horário também remove essas reservas. Continuar?`
+        : "Excluir este horário da agenda?";
+      if (!(await confirmModal({ title: "Excluir horário", message: msg, confirmLabel: "Excluir", tone: "danger" }))) return;
+      await run(api.deleteSlot(slotId));
+      close();
+      return;
+    }
+    const allRes = occ + sibs.reduce((n, s) => n + slotBookings(data, s.id).length, 0);
+    const ans = await confirmModal({
+      title: "Excluir horário replicado",
+      message: `Este horário foi cadastrado de forma replicada: há mais ${sibs.length} horário(s) da mesma série na agenda daqui em diante.` +
+        (occ > 0 ? `\n\nEste horário tem ${occ} reserva(s).` : "") +
+        (allRes > 0 ? `\nExcluindo todos, ${allRes} reserva(s) ao todo serão removidas.` : "") +
+        `\n\nQuer excluir só este horário ou todos da série?`,
+      confirmLabel: `Excluir todos (${sibs.length + 1})`,
+      altLabel: "Só este",
+      tone: "danger",
+    });
+    if (!ans) return;
+    await run(api.deleteSlot(slotId, ans !== "alt"));
     close();
   };
 
   return (
-    <Modal title={`Turma — ${slot.time}`} footer={<>
+    <Modal title={`Turma — ${faixaHorario(slot.time, data.meta?.duracaoAulaMin)}`} footer={<>
       <button className="btn ghost" onClick={() => open(<DayModal date={slot.date} />)}>← Voltar ao dia</button>
       <div style={{ flex: 1 }} />
       <button className="btn sec" onClick={saveCap}>Salvar capacidade</button>
@@ -103,7 +141,7 @@ export function SlotDetail({ slotId }) {
         : <button className="btn" onClick={() => open(<BookingForm slotId={slotId} />)}>＋ Adicionar pessoa</button>}
     </>}>
       <div className="info-line"><b>Unidade</b><span><span className="chip" style={{ borderColor: uc, color: uc }}>{slot.unit}</span></span></div>
-      <div className="info-line"><b>Data / hora</b><span>{fmtDateLong(slot.date)} · {slot.time}</span></div>
+      <div className="info-line"><b>Data / hora</b><span>{fmtDateLong(slot.date)} · {faixaHorario(slot.time, data.meta?.duracaoAulaMin)}</span></div>
       <div className="info-line"><b>Profissional</b><span>{slot.prof || "—"}</span></div>
       <div style={{ display: "flex", gap: ".5rem", marginTop: ".8rem" }}>
         <button className="btn sec sm" onClick={() => open(<ReplicateSlotForm slot={slot} />)}>🔁 Replicar</button>
@@ -193,6 +231,52 @@ export function ManageBooking({ booking }) {
     await run(api.updateBooking(booking.id, { status, attendance, date, time }));
     close();
   };
+  // Libera a vaga aplicando as regras de reposição (mesmo caminho do portal).
+  const liberar = async () => {
+    const motivo = await promptModal({
+      title: "Liberar vaga",
+      message: `Liberar a aula de ${booking.clientName} em ${fmtDate(booking.date)} às ${booking.time}?\n\nA vaga fica livre e o sistema avalia se gera crédito de reposição.`,
+      label: "Motivo informado pela aluna (opcional)",
+      confirmLabel: "Liberar vaga",
+    });
+    if (motivo === null) return;
+    try {
+      const r = await run(api.releaseBooking(booking.id, motivo));
+      toast(r?.credito ? "Vaga liberada e 1 crédito de reposição concedido. 💚"
+        : r?.devolvido ? "Reposição cancelada e o crédito voltou para a aluna."
+        : `Vaga liberada.${r?.motivo ? " " + r.motivo : ""}`, r?.credito ? "success" : "info");
+      close();
+    } catch { /* erro já reportado pelo run */ }
+  };
+  const del = async () => {
+    // aulas marcadas juntas (replicação) compartilham seriesId; "demais" = as de hoje em diante
+    const t = todayISO();
+    const sibs = booking.seriesId
+      ? (data.bookings || []).filter((b) => b.seriesId === booking.seriesId && b.id !== booking.id && b.date >= t)
+      : [];
+    if (!sibs.length) {
+      const msg = `Excluir a aula de ${booking.clientName} em ${fmtDate(booking.date)} às ${booking.time}?` +
+        (booking.paid ? "\n\nAtenção: esta aula consta como paga." : "") +
+        "\n\nA vaga volta a ficar livre na turma.";
+      if (!(await confirmModal({ title: "Excluir aula", message: msg, confirmLabel: "Excluir", tone: "danger" }))) return;
+      await run(api.deleteBooking(booking.id));
+      close();
+      return;
+    }
+    const pagas = (booking.paid ? 1 : 0) + sibs.filter((b) => b.paid).length;
+    const ans = await confirmModal({
+      title: "Excluir aula replicada",
+      message: `Esta aula foi marcada de forma replicada: ${booking.clientName} tem mais ${sibs.length} aula(s) da mesma marcação daqui em diante.` +
+        (pagas > 0 ? `\n\nAtenção: ${pagas} dessas aula(s) consta(m) como paga(s).` : "") +
+        `\n\nQuer excluir só esta aula ou todas da marcação?`,
+      confirmLabel: `Excluir todas (${sibs.length + 1})`,
+      altLabel: "Só esta",
+      tone: "danger",
+    });
+    if (!ans) return;
+    await run(api.deleteBooking(booking.id, ans !== "alt"));
+    close();
+  };
   const genInvoice = async () => {
     setGenBusy(true);
     try {
@@ -215,7 +299,7 @@ export function ManageBooking({ booking }) {
       <div className="info-line"><b>Aluno</b><span>{booking.clientName}</span></div>
       <div className="info-line"><b>Telefone</b><span>{booking.phone || "—"}</span></div>
       <div className="info-line"><b>Unidade</b><span>{booking.unit}</span></div>
-      <div className="info-line"><b>Aula</b><span>{fmtDateLong(booking.date)} · {booking.time}</span></div>
+      <div className="info-line"><b>Aula</b><span>{fmtDateLong(booking.date)} · {faixaHorario(booking.time, data.meta?.duracaoAulaMin)}</span></div>
       <div className="info-line"><b>Valor</b><span>{money(booking.value)}</span></div>
       <div className="info-line"><b>Pagamento</b><span>{booking.paid ? `Pago (${booking.paymentMethod})` : "Pendente"}</span></div>
 
@@ -254,6 +338,17 @@ export function ManageBooking({ booking }) {
       <div className="row2">
         <div className="field"><label>Remarcar — data</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
         <div className="field"><label>Hora</label><input value={time} onChange={(e) => setTime(e.target.value)} /></div>
+      </div>
+      <div style={{ marginTop: "1rem", display: "flex", gap: ".5rem", flexWrap: "wrap" }}>
+        {booking.status !== "cancelada" && (
+          <button className="btn sec sm" onClick={liberar}>🔁 Liberar vaga (a aluna avisou)</button>
+        )}
+        <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir aula</button>
+      </div>
+      <div className="help" style={{ marginTop: ".5rem" }}>
+        <b>Liberar</b> cancela a aula e aplica as regras de reposição — vira crédito só se o aviso vier
+        com 6h de antecedência (ou até 23:59 do dia anterior, se a aula for antes das 10h).
+        <br /><b>Excluir</b> apaga a marcação de vez, sem gerar crédito.
       </div>
     </Modal>
   );
@@ -402,7 +497,7 @@ export function SlotForm({ presetDate }) {
   const save = async () => {
     const r = await run(api.createSlot({ unit, prof, time, capacity, dates }));
     close();
-    if (r && r.created.length !== 1) toast(`${r.created.length} horário(s) criado(s).`);
+    avisarCriacao(r);
   };
   return (
     <Modal title="Novo horário na agenda" footer={<>
@@ -453,9 +548,9 @@ export function ReplicateSlotForm({ slot }) {
   else dates = datesForWeekdays(slot.date, [...weekdays], count).filter((d) => d !== slot.date);
 
   const save = async () => {
-    const r = await run(api.createSlot({ unit: slot.unit, prof: slot.prof, time: slot.time, capacity: slot.capacity, dates }));
+    const r = await run(api.createSlot({ unit: slot.unit, prof: slot.prof, time: slot.time, capacity: slot.capacity, dates, baseSlotId: slot.id }));
     open(<SlotDetail slotId={slot.id} />);
-    toast(`${r?.created?.length ?? 0} horário(s) criado(s).`);
+    avisarCriacao(r, true);
   };
 
   const modes = [["weekly", "Semanal"], ["daily", "Diária"], ["weekdays", "Dias específicos"]];
@@ -498,7 +593,7 @@ export function ReplicateSlotForm({ slot }) {
 /* ======================= Perfil da aluna (histórico) ======================= */
 export function ClientProfile({ client }) {
   const { data, run } = useStore();
-  const { open } = useModal();
+  const { open, close } = useModal();
   const c = data.clients.find((x) => x.id === client.id) || client;
   const at = clientAttendance(data, c.name);
   const hist = data.bookings.filter((b) => b.clientName === c.name).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
@@ -509,11 +604,18 @@ export function ClientProfile({ client }) {
     await run(api.resetPin(c.id));
     toast("PIN redefinido. O(a) aluno(a) criará um novo PIN no próximo acesso. 💚");
   };
+  const del = async () => {
+    if (!(await confirmModal({ title: "Excluir cadastro", message: `Excluir ${c.name}?\n\nAs aulas futuras serão removidas da agenda; o histórico de aulas passadas é mantido.`, confirmLabel: "Excluir", tone: "danger" }))) return;
+    await run(api.deleteClient(c.id));
+    toast("Cadastro excluído.");
+    close();
+  };
   return (
     <Modal title={c.name} footer={<>
       <button className="btn wa" onClick={() => openWa(c.phone, `Olá ${c.name}! 💚`)}><WaIcon /> WhatsApp</button>
       {c.plan === "mensalista" && <button className="btn" onClick={() => open(<BatchBookForm client={c} />)}>📅 Agendar em lote</button>}
       {c.hasPin && <button className="btn ghost" onClick={resetPin}>🔑 Redefinir PIN</button>}
+      <button className="btn ghost" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir</button>
       <div style={{ flex: 1 }} />
       <button className="btn sec" onClick={() => open(<ClientForm client={c} />)}>Editar cadastro</button>
     </>}>
@@ -522,7 +624,11 @@ export function ClientProfile({ client }) {
       <div className="info-line"><b>Nível · Aniversário</b><span>{c.level || "—"}{c.birthday ? " · 🎂 " + fmtDate(c.birthday) : ""}</span></div>
       <div className="info-line"><b>Etiquetas</b><span className="tags" style={{ justifyContent: "flex-end" }}>{(c.tags || []).length ? c.tags.map((t) => <span key={t} className="chip">{t}</span>) : "—"}</span></div>
       <div className="info-line"><b>Acesso ao portal (PIN)</b><span>{c.hasPin ? <span className="badge b-ok">PIN cadastrado</span> : <span className="badge b-muted">Sem PIN ainda</span>}</span></div>
+      <div className="info-line"><b>Inscrição</b><span>{c.status === "cancelado" ? <span className="badge b-danger">Cancelada — rompeu com o curso</span> : <span className="badge b-ok">Ativa</span>}</span></div>
+      <div className="info-line"><b>Plano</b><span>{planoLabel(c, data.meta)}</span></div>
       {c.notes ? <div className="help" style={{ margin: ".7rem 0" }}>{c.notes}</div> : null}
+      <MatriculaBlock client={c} />
+      {c.plan === "mensalista" && <MakeupBlock client={c} />}
       <div className="grid" style={{ gridTemplateColumns: "repeat(3,1fr)", gap: ".6rem", margin: "1rem 0" }}>
         <div className="card stat" style={{ padding: ".8rem 1rem" }}><div className="lbl">Aulas</div><div className="val" style={{ fontSize: "1.6rem" }}>{total}</div></div>
         <div className="card stat" style={{ padding: ".8rem 1rem" }}><div className="lbl">Presenças</div><div className="val" style={{ fontSize: "1.6rem" }}>{at.pres}</div><div className="foot">{at.falt} falta(s)</div></div>
@@ -538,6 +644,249 @@ export function ClientProfile({ client }) {
         )) : <div className="cli-sub" style={{ padding: ".5rem 0" }}>Sem histórico ainda.</div>}
       </div>
     </Modal>
+  );
+}
+
+/* ============ Plano e taxa de matrícula (admin) ============ */
+export function planoLabel(c, meta = {}) {
+  if (c.plan !== "mensalista") return <span className="badge b-muted">Avulso</span>;
+  const valor = c.monthlyValue != null ? c.monthlyValue
+    : c.weeklyFreq === 2 ? (meta.valorPlano2x ?? 200)
+    : c.weeklyFreq === 1 ? (meta.valorPlano1x ?? 120)
+    : (meta.mensalidadeValor ?? 0);
+  const freq = c.weeklyFreq ? `${c.weeklyFreq}x por semana` : "plano antigo";
+  return <><span className="badge b-ok">📅 {freq}</span> <span className="cli-sub">{money(valor)}/mês</span></>;
+}
+
+const MATRICULA_ROTULO = {
+  pendente: ["b-warn", "Taxa pendente"],
+  paga: ["b-ok", "Taxa paga — aguardando decisão"],
+  convertida: ["b-ok", "Virou matrícula"],
+  devolvida: ["b-muted", "Taxa devolvida"],
+};
+
+function MatriculaBlock({ client }) {
+  const { data, run } = useStore();
+  const { open } = useModal();
+  if (client.matriculaStatus === "nao_aplica") return null;
+  const [cls, txt] = MATRICULA_ROTULO[client.matriculaStatus] || ["b-muted", client.matriculaStatus];
+  const taxa = data.meta?.taxaMatricula ?? 20;
+  const podeDevolver = client.matriculaStatus === "paga";
+  const podeConverter = client.plan !== "mensalista" && client.matriculaStatus !== "devolvida";
+
+  const devolver = async () => {
+    if (!(await confirmModal({
+      title: "Devolver a taxa",
+      message: `Confirmar a devolução de ${money(taxa)} para ${client.name}?\n\nO sistema só registra — o Pix de volta você faz por fora.`,
+      confirmLabel: "Registrar devolução", tone: "danger",
+    }))) return;
+    try { await run(api.refundMatricula(client.id)); toast("Devolução registrada."); }
+    catch { /* run já avisou */ }
+  };
+
+  return (
+    <div style={{ margin: "1rem 0" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: ".5rem", gap: ".5rem", flexWrap: "wrap" }}>
+        <b style={{ color: "var(--brown)" }}>🎟️ Matrícula · {money(taxa)}</b>
+        <span className={`badge ${cls}`}>{txt}</span>
+      </div>
+      <div className="cli-sub">
+        {client.trialDate ? <>Aula experimental em <b>{fmtDate(client.trialDate)}</b>. </> : null}
+        {client.matriculaAt ? <>Taxa paga em {fmtDate(client.matriculaAt)}. </> : null}
+        {client.matriculaRefundAt ? <>Devolvida em {fmtDate(client.matriculaRefundAt)}.</> : null}
+      </div>
+      <div style={{ display: "flex", gap: ".5rem", marginTop: ".6rem", flexWrap: "wrap" }}>
+        {podeConverter && <button className="btn sm" onClick={() => open(<EnrollForm client={client} />)}>🧵 Matricular como mensalista</button>}
+        {podeDevolver && <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={devolver}>↩️ Registrar devolução</button>}
+      </div>
+    </div>
+  );
+}
+
+/* Matricular: escolhe o plano e (opcionalmente) já agenda a 1ª aula oficial. */
+export function EnrollForm({ client }) {
+  const { data, run } = useStore();
+  const { open } = useModal();
+  const meta = data.meta || {};
+  const [freq, setFreq] = useState(1);
+  const [slotId, setSlotId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const t = todayISO();
+  const livres = data.slots
+    .filter((s) => s.date >= t && slotBookings(data, s.id).length < slotCapacity(s))
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  const valor = freq === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120);
+
+  const salvar = async () => {
+    if (!(await confirmModal({
+      title: "Confirmar matrícula",
+      message: `Matricular ${client.name} no plano de ${freq}x por semana (${money(valor)}/mês)?\n\n` +
+        (slotId ? "A 1ª aula oficial será agendada e " : "") + "a primeira mensalidade será gerada agora.",
+      confirmLabel: "Matricular",
+    }))) return;
+    setBusy(true);
+    try {
+      const r = await run(api.enroll(client.id, { weeklyFreq: freq, slotId: slotId || undefined }));
+      toast(`Matrícula concluída — ${money(r.valorMensal)}/mês.${r.invoice ? "" : " Atenção: a mensalidade não foi gerada."}`,
+        r.invoice ? "success" : "info");
+      open(<ClientProfile client={client} />);
+    } catch { /* run já avisou */ }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal title="Matricular como mensalista" footer={<>
+      <button className="btn ghost" onClick={() => open(<ClientProfile client={client} />)}>← Voltar ao perfil</button>
+      <div style={{ flex: 1 }} />
+      <button className="btn" onClick={salvar} disabled={busy}>{busy ? "Matriculando…" : "Matricular"}</button>
+    </>}>
+      <div className="help">
+        A taxa de matrícula já paga vira a matrícula da aluna. O sistema gera a 1ª mensalidade e
+        passa a emitir boleto todo mês, com vencimento no dia {meta.vencimentoDia || 10}.
+      </div>
+      <div className="field" style={{ marginTop: "1rem" }}>
+        <label>Plano</label>
+        <select value={freq} onChange={(e) => setFreq(Number(e.target.value))}>
+          <option value={1}>1x por semana — 4 aulas/mês — {money(meta.valorPlano1x ?? 120)}</option>
+          <option value={2}>2x por semana — 8 aulas/mês — {money(meta.valorPlano2x ?? 200)}</option>
+        </select>
+      </div>
+      <div className="field">
+        <label>1ª aula oficial <span style={{ color: "var(--muted)", fontWeight: 400 }}>(opcional)</span></label>
+        <select value={slotId} onChange={(e) => setSlotId(e.target.value)}>
+          <option value="">— agendar depois</option>
+          {livres.slice(0, 60).map((s) => (
+            <option key={s.id} value={s.id}>
+              {fmtDate(s.date)} · {faixaHorario(s.time, meta.duracaoAulaMin)} · {s.unit} ({slotCapacity(s) - slotBookings(data, s.id).length} vaga(s))
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="info-line"><b>Mensalidade</b><span><b style={{ color: "var(--terracota)" }}>{money(valor)}</b>/mês</span></div>
+    </Modal>
+  );
+}
+
+/* ============ Reposição: saldo, histórico e marcação (admin) ============ */
+function MakeupBlock({ client }) {
+  const { data } = useStore();
+  const { open } = useModal();
+  const t = todayISO();
+  // o /api/state já traz todos os créditos; filtra os desta aluna
+  const creditos = (data.makeups || [])
+    .filter((m) => m.clientId === client.id)
+    .map((m) => ({ ...m, situacao: m.usedBookingId ? "usado" : m.expiresOn < t ? "expirado" : "disponivel" }));
+  const saldo = creditos.filter((m) => m.situacao === "disponivel").length;
+  // espelha elegivelReposicao do backend, só para a tela avisar antes de tentar
+  const emAtraso = (data.invoices || []).some((i) => i.clientId === client.id && i.status === "pendente" && i.dueDate < t);
+  const bloqueio = client.status === "cancelado"
+    ? "Inscrição cancelada — sem direito a reposição."
+    : emAtraso ? "Mensalidade em atraso — sem direito a reposição." : "";
+
+  const rotulo = { disponivel: ["b-ok", "disponível"], usado: ["b-muted", "usado"], expirado: ["b-danger", "expirou"] };
+
+  return (
+    <div style={{ margin: "1rem 0" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: ".5rem" }}>
+        <b style={{ color: "var(--brown)" }}>🔁 Reposição · {saldo} crédito(s)</b>
+        <div style={{ display: "flex", gap: ".4rem", flexWrap: "wrap" }}>
+          <button className="btn ghost sm" onClick={() => open(<ExtraBookForm client={client} />)}>
+            ➕ Aula extra ({money(data.meta?.valorAvulsa ?? 40)})
+          </button>
+          <button className="btn sec sm" disabled={!saldo || !!bloqueio} onClick={() => open(<MakeupBookForm client={client} />)}>
+            Marcar reposição
+          </button>
+        </div>
+      </div>
+      {bloqueio
+        ? <div className="help" style={{ color: "var(--danger)" }}>{bloqueio}</div>
+        : <div className="help">Máx. 2 por mês; o crédito vale até o fim do mês seguinte ao da aula liberada.</div>}
+      {creditos.length > 0 && (
+        <div style={{ marginTop: ".6rem" }}>
+          {creditos.slice(0, 6).map((m) => {
+            const [cls, txt] = rotulo[m.situacao];
+            return (
+              <div className="roster-row" key={m.id}>
+                <div className="rr-info">
+                  <b>Liberou {fmtDate(m.originDate)} · {m.originTime}</b>
+                  <div className="cli-sub">{m.competencia} · vale até {fmtDate(m.expiresOn)}{m.usedAt ? ` · usado em ${fmtDate(m.usedAt)}` : ""}</div>
+                </div>
+                <span className={`badge ${cls}`}>{txt}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Escolha de turma para marcar o aluno — só turmas futuras com vaga livre.
+   Serve tanto para a reposição (consome crédito) quanto para a aula extra (paga). */
+function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso }) {
+  const { data, run } = useStore();
+  const { open } = useModal();
+  const t = todayISO();
+  const livres = data.slots
+    .filter((s) => s.date >= t && slotBookings(data, s.id).length < slotCapacity(s))
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  const marcar = async (s) => {
+    if (!(await confirmModal({
+      title: titulo,
+      message: confirmar(s),
+      confirmLabel: titulo,
+    }))) return;
+    try {
+      await run(acao(s)); // run já avisa o erro na tela
+      toast(sucesso);
+      open(<ClientProfile client={client} />);
+    } catch { /* erro já reportado pelo run */ }
+  };
+  return (
+    <Modal title={titulo} footer={<>
+      <button className="btn ghost" onClick={() => open(<ClientProfile client={client} />)}>← Voltar ao perfil</button>
+    </>}>
+      <div className="help">{ajuda}</div>
+      <div style={{ marginTop: ".8rem" }}>
+        {livres.length ? livres.slice(0, 40).map((s) => (
+          <div className="roster-row row-click" key={s.id} onClick={() => marcar(s)}>
+            <div className="rr-info">
+              <b>{fmtDate(s.date)} · {faixaHorario(s.time, data.meta?.duracaoAulaMin)}</b>
+              <div className="cli-sub">{s.unit} · {slotCapacity(s) - slotBookings(data, s.id).length} vaga(s)</div>
+            </div>
+            <button className="btn sec sm">Escolher</button>
+          </div>
+        )) : <div className="empty" style={{ padding: "1.2rem" }}><div className="ic">🪑</div><p>Nenhuma turma com vaga livre no momento.</p></div>}
+      </div>
+    </Modal>
+  );
+}
+
+export function MakeupBookForm({ client }) {
+  return (
+    <SlotPicker
+      client={client}
+      titulo="Marcar reposição"
+      ajuda="Não há vaga reservada para reposição — aparecem só as turmas que já têm vaga livre."
+      confirmar={(s) => `Marcar ${client.name} em reposição?\n\n${s.unit}\n${fmtDateLong(s.date)} às ${s.time}\n\nIsso consome 1 crédito.`}
+      acao={(s) => api.makeupBook(client.id, s.id)}
+      sucesso="Reposição marcada. 💚"
+    />
+  );
+}
+
+export function ExtraBookForm({ client }) {
+  const { data } = useStore();
+  const valor = data.meta?.valorAvulsa ?? 40;
+  return (
+    <SlotPicker
+      client={client}
+      titulo="Marcar aula extra"
+      ajuda={`Aula avulsa de ${money(valor)}, cobrada à parte da mensalidade. Não usa crédito de reposição — a aula fica aguardando pagamento.`}
+      confirmar={(s) => `Marcar ${client.name} em uma aula extra de ${money(valor)}?\n\n${s.unit}\n${fmtDateLong(s.date)} às ${s.time}`}
+      acao={(s) => api.extraBook(client.id, s.id)}
+      sucesso="Aula extra marcada — aguardando pagamento."
+    />
   );
 }
 
@@ -615,15 +964,16 @@ export function ClientForm({ client }) {
   const [birthday, setBirthday] = useState(client?.birthday || "");
   const [level, setLevel] = useState(client?.level || "");
   const [firstClass, setFirstClass] = useState(client ? !!client.firstClass : true);
+  const [status, setStatus] = useState(client?.status || "ativo");
   const toggle = (t) => setTags((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
   const save = async () => {
     if (!name.trim()) return toast("Informe o nome.", "error");
-    const payload = { name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: cpf.trim(), unit, tags, notes: notes.trim(), birthday, level, firstClass };
+    const payload = { name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: cpf.trim(), unit, tags, notes: notes.trim(), birthday, level, firstClass, status };
     await run(client ? api.updateClient(client.id, payload) : api.createClient(payload));
     close();
   };
   const del = async () => {
-    if (await confirmModal({ title: "Excluir aluno", message: "Excluir este aluno?", confirmLabel: "Excluir", tone: "danger" })) { await run(api.deleteClient(client.id)); close(); }
+    if (await confirmModal({ title: "Excluir aluno", message: `Excluir ${client.name}?\n\nAs aulas futuras serão removidas da agenda; o histórico de aulas passadas é mantido.`, confirmLabel: "Excluir", tone: "danger" })) { await run(api.deleteClient(client.id)); close(); }
   };
   return (
     <Modal title={client ? "Editar aluno" : "Novo aluno"} footer={<>
@@ -658,14 +1008,23 @@ export function ClientForm({ client }) {
           </label>
         </div>
       </div>
-      <div className="field"><label>Etiquetas</label>
-        <div className="tags">
-          {TAG_OPTIONS.map((t) => (
-            <label key={t} className="chip" style={{ cursor: "pointer" }}>
-              <input type="checkbox" checked={tags.includes(t)} onChange={() => toggle(t)} style={{ marginRight: ".3rem" }} />{t}
-            </label>
-          ))}
+      {client?.plan !== "mensalista" && (
+        <div className="field"><label>Etiquetas</label>
+          <div className="tags">
+            {TAG_OPTIONS.map((t) => (
+              <label key={t} className="chip" style={{ cursor: "pointer" }}>
+                <input type="checkbox" checked={tags.includes(t)} onChange={() => toggle(t)} style={{ marginRight: ".3rem" }} />{t}
+              </label>
+            ))}
+          </div>
         </div>
+      )}
+      <div className="field"><label>Situação da inscrição</label>
+        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="ativo">Ativa — está fazendo o curso</option>
+          <option value="cancelado">Cancelada — rompeu com o curso</option>
+        </select>
+        <div className="help" style={{ marginTop: ".4rem" }}>Quem rompe com o curso deixa de ganhar e de usar créditos de reposição.</div>
       </div>
       <div className="field"><label>Observações</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
     </Modal>

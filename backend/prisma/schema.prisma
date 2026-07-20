@@ -22,11 +22,41 @@ model Client {
   firstClass Boolean @default(false) // aluna nova / ainda na primeira aula
   // ----- plano / cobrança -----
   plan         String  @default("avulso") @db.VarChar(20) // "avulso" | "mensalista"
-  monthlyValue Float?  // valor individual da mensalidade; null = usa o padrão das Configurações
+  status       String  @default("ativo") @db.VarChar(20) // "ativo" | "cancelado" (rompeu com o curso)
+  weeklyFreq   Int?    // aulas por semana do mensalista: 1 (R$120) ou 2 (R$200); null = plano antigo
+  monthlyValue Float?  // valor individual da mensalidade; null = usa o valor do plano
   billingDay   Int?    // dia de vencimento (1-28); null = usa o padrão
-  makeupCredits Int    @default(0) // créditos de reposição (regra a definir)
+  // ----- taxa de matrícula da aula experimental -----
+  // "nao_aplica" (nunca fez experimental) | "pendente" | "paga" | "convertida" | "devolvida"
+  matriculaStatus String  @default("nao_aplica") @db.VarChar(20)
+  matriculaAt     String? @db.VarChar(10) // quando a taxa foi paga
+  matriculaRefundAt String? @db.VarChar(10) // quando a taxa foi devolvida
+  trialDate       String? @db.VarChar(10) // data da aula experimental
+  makeupCredits Int    @default(0) // LEGADO: não usado — o saldo real vem da tabela MakeupCredit
   createdAt DateTime @default(now())
   invoices  Invoice[]
+  makeups   MakeupCredit[]
+}
+
+// Créditos de reposição do mensalista.
+// Um crédito nasce quando a aluna libera uma aula com a antecedência mínima
+// (ver regrasReposicao no server) e morre no fim do mês seguinte ao da aula liberada.
+model MakeupCredit {
+  id              Int      @id @default(autoincrement())
+  clientId        Int
+  client          Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  competencia     String   @db.VarChar(7) // mês da aula liberada, 'YYYY-MM' — o teto de 2 é por competência
+  expiresOn       String   @db.VarChar(10) // último dia do mês seguinte, 'YYYY-MM-DD'
+  originBookingId Int? // aula liberada que gerou o crédito (sem FK: a aula pode ser excluída)
+  originDate      String   @db.VarChar(10)
+  originTime      String   @db.VarChar(5)
+  usedBookingId   Int? // aula de reposição marcada com este crédito
+  usedAt          String?  @db.VarChar(10)
+  createdAt       DateTime @default(now())
+
+  @@index([clientId])
+  @@index([competencia])
+  @@index([usedBookingId])
 }
 
 // Mensalidades (boletos) dos alunos mensalistas
@@ -55,12 +85,14 @@ model Slot {
   unit      String
   prof      String?
   capacity  Int        @default(4)
+  seriesId  String?    @db.VarChar(40) // horários criados juntos (replicação) compartilham o mesmo id
   createdAt DateTime   @default(now())
   bookings  Booking[]
   waitlist  Waitlist[]
 
   @@index([date])
   @@index([unit])
+  @@index([seriesId])
 }
 
 model Booking {
@@ -73,6 +105,7 @@ model Booking {
   prof          String?
   slotId        Int
   slot          Slot     @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  seriesId      String?  @db.VarChar(40) // aulas marcadas juntas (replicação) compartilham o mesmo id
   status        String   @default("aguardando") // aguardando | confirmada | concluida | cancelada
   attendance    String   @default("") // '' | presente | falta
   absenceReason String   @default("") @db.VarChar(500) // motivo informado pelo aluno
@@ -87,6 +120,7 @@ model Booking {
 
   @@index([slotId])
   @@index([date])
+  @@index([seriesId])
 }
 
 model Waitlist {
@@ -137,6 +171,12 @@ model Settings {
   horarioFunc      String @default("Seg a Sáb, 09h às 17h") @db.VarChar(1000) // texto legado OU JSON com horário por dia da semana
   pixKey           String @default("") @db.VarChar(255)
   pixName          String @default("") @db.VarChar(255)
-  mensalidadeValor Float  @default(0)   // valor padrão da mensalidade
+  mensalidadeValor Float  @default(0)   // legado: usado só quando o aluno não tem plano 1x/2x
   vencimentoDia    Int    @default(10)  // dia de vencimento padrão (1-28)
+  // ----- tabela de preços -----
+  taxaMatricula    Float  @default(20)  // taxa cobrada para agendar a aula experimental
+  valorPlano1x     Float  @default(120) // mensalidade de 1x por semana (4 aulas/mês)
+  valorPlano2x     Float  @default(200) // mensalidade de 2x por semana (8 aulas/mês)
+  valorAvulsa      Float  @default(40)  // aula extra avulsa
+  duracaoAulaMin   Int    @default(120) // duração da aula em minutos
 }

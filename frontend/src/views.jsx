@@ -31,7 +31,14 @@ function Alerts({ open }) {
   const inativas = data.clients.filter((c) => { const l = lastByClient[c.name]; return l && daysSince(l) >= 30; })
     .sort((a, b) => daysSince(lastByClient[b.name]) - daysSince(lastByClient[a.name])).slice(0, 5);
 
-  if (!atrasados.length && !quase.length && !inativas.length) return null;
+  // Fez a experimental, a taxa está paga e ela não virou mensalista: ou converte
+  // ou devolve os R$20. Só cobra atenção depois da aula ter acontecido.
+  const decidirMatricula = data.clients
+    .filter((c) => c.matriculaStatus === "paga" && c.plan !== "mensalista" && c.trialDate && c.trialDate <= t)
+    .sort((a, b) => (a.trialDate || "").localeCompare(b.trialDate || ""))
+    .slice(0, 5);
+
+  if (!atrasados.length && !quase.length && !inativas.length && !decidirMatricula.length) return null;
 
   return (
     <div className="panel">
@@ -46,6 +53,25 @@ function Alerts({ open }) {
                 <button className="btn wa sm" onClick={() => openWa(b.phone, `Olá ${b.clientName}! Vi que sua reserva da aula de ${fmtDate(b.date)} ainda está pendente. Posso te ajudar a confirmar? 💚`)}>Cobrar</button>
               </div>
             ))}
+          </div>
+        )}
+        {decidirMatricula.length > 0 && (
+          <div>
+            <div className="alert-h" style={{ color: "var(--terracota)" }}>🎟️ Matrícula a decidir</div>
+            {decidirMatricula.map((c) => {
+              const dias = daysSince(c.trialDate);
+              return (
+                <div className="alert-row row-click" key={c.id} onClick={() => open(<ClientProfile client={c} />)}>
+                  <div>
+                    <b>{c.name}</b>
+                    <div className="cli-sub">
+                      experimental {dias === 0 ? "hoje" : `há ${dias} dia${dias === 1 ? "" : "s"}`} · matricular ou devolver {money(data.meta?.taxaMatricula ?? 20)}
+                    </div>
+                  </div>
+                  <span className={`badge ${dias >= 7 ? "b-danger" : "b-warn"}`}>{dias >= 7 ? "atrasado" : "decidir"}</span>
+                </div>
+              );
+            })}
           </div>
         )}
         {quase.length > 0 && (
@@ -386,6 +412,11 @@ export function Clientes({ params }) {
     await run(api.resetPin(c.id));
     toast("PIN resetado! A aluna criará um novo no próximo acesso.");
   };
+  const delClient = async (c) => {
+    if (!(await confirmModal({ title: "Excluir cadastro", message: `Excluir ${c.name}?\n\nAs aulas futuras serão removidas da agenda; o histórico de aulas passadas é mantido.`, confirmLabel: "Excluir", tone: "danger" }))) return;
+    await run(api.deleteClient(c.id));
+    toast("Cadastro excluído.");
+  };
   const waMsg = (c) => tab === "lead"
     ? `Olá ${c.name}! Vi que você se interessou pelas aulas de crochê 💚 Posso te ajudar a escolher um horário?`
     : tab === "novato"
@@ -429,7 +460,8 @@ export function Clientes({ params }) {
                     <span className="cli-av">{initials(c.name)}</span>
                     <div>
                       <span className="cli-name">{c.name}</span>
-                      {c.plan === "mensalista" ? <span className="badge b-ok ml">📅 mensalista</span> : null}
+                      {c.plan === "mensalista" ? <span className="badge b-ok ml">📅 {c.weeklyFreq ? `${c.weeklyFreq}x/semana` : "mensalista"}</span> : null}
+                      {c.matriculaStatus === "paga" && c.plan !== "mensalista" ? <span className="badge b-warn ml">🎟️ matrícula a decidir</span> : null}
                       {tab === "novato" ? <span className="badge b-terra ml">✨ 1ª aula</span> : null}
                       {tab === "lead" ? <span className="badge b-warn ml">🌱 lead</span> : null}
                       <div className="cli-sub">{c.phone || "sem telefone"}{c.birthday ? " · 🎂 " + fmtDate(c.birthday) : ""}</div>
@@ -445,6 +477,7 @@ export function Clientes({ params }) {
                   <button className="btn wa sm" title={tab === "lead" ? "Convidar" : "WhatsApp"} onClick={() => openWa(c.phone, waMsg(c))}><WaIcon /></button>
                   {c.hasPin && <button className="btn sec sm" onClick={() => resetPin(c)}>🔒 Resetar PIN</button>}
                   <button className="btn sec sm" onClick={() => open(<ClientForm client={c} />)}>Editar</button>
+                  <button className="btn ghost sm" style={{ color: "var(--danger)" }} title="Excluir" onClick={() => delClient(c)}>🗑</button>
                 </td>
               </tr>
             );

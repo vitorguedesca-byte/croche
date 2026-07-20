@@ -306,6 +306,8 @@
   .modal-f{padding:1rem 1.4rem;border-top:1px solid var(--line);display:flex;gap:.6rem;justify-content:flex-end;flex-wrap:wrap;position:sticky;bottom:0;background:var(--offwhite)}
   /* Diálogo de confirmação (substitui window.confirm) */
   .modal-confirm{width:min(430px,96vw)}
+  /* a confirmação precisa ficar acima do modal global (mesmo z-index, mas montada antes no DOM) */
+  .overlay-top{z-index:150}
   .confirm-msg{white-space:pre-line;color:var(--ink);font-size:.96rem;line-height:1.5;margin:0}
   /* Toast (substitui alert) */
   .toast-host{position:fixed;bottom:20px;right:20px;z-index:200;display:flex;flex-direction:column;gap:.6rem;max-width:min(360px,92vw)}
@@ -495,6 +497,28 @@
   .pt-slot b{font-size:1.3rem;color:var(--green-deep)}
   .pt-slot span{color:var(--muted);font-size:1.02rem}
   .pt-vagas{flex:none;font-weight:800;color:var(--terracota);font-size:.98rem;white-space:nowrap}
+  /* cartão de reposição do portal */
+  .pt-repo{background:#fff;border:2px solid var(--line);border-left:5px solid var(--terracota);border-radius:14px;padding:1.2rem;margin-bottom:1.6rem}
+  .pt-repo-top{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem}
+  .pt-repo-t{font-family:'Fraunces',serif;color:var(--green-deep);font-size:1.2rem;margin-bottom:.25rem}
+  .pt-repo-n{flex:none;min-width:46px;height:46px;border-radius:12px;background:var(--cream);color:var(--muted);display:flex;align-items:center;justify-content:center;font-size:1.5rem;font-weight:800}
+  .pt-repo-n.on{background:var(--terracota);color:#fff}
+  .pt-repo-regras{margin:.8rem 0 0;padding-left:1.1rem;color:var(--muted);font-size:.98rem;line-height:1.6}
+  .pt-repo-regras li{margin-bottom:.45rem}
+  .pt-unit-card.on{border-color:var(--green-mid);background:rgba(140,154,120,.1)}
+  .pt-plano-val{display:block;margin-top:.5rem;font-weight:800;color:var(--terracota);font-size:1.15rem}
+  .pt-slot.on{border-color:var(--green-mid);background:rgba(140,154,120,.12)}
+  /* QR Code do Pix */
+  .pt-qr-wrap{display:flex;flex-direction:column;align-items:center;gap:.7rem;margin:1rem 0}
+  .pt-qr{background:#fff;border:1px solid var(--line);border-radius:14px;padding:10px;display:block;max-width:100%;height:auto}
+  .pt-qr-box{background:var(--cream);border-radius:14px}
+  .pt-qr-legenda{color:var(--muted);font-size:1rem;text-align:center}
+  .pt-pix-det{margin-top:.6rem}
+  .pt-pix-det summary{color:var(--green-deep);font-weight:700;cursor:pointer;font-size:.98rem;padding:.4rem 0}
+  /* tablet da sala */
+  .pt-kiosk-tag{display:inline-block;background:var(--cream);color:var(--muted);border-radius:999px;padding:.3rem .9rem;font-size:.86rem;font-weight:700;margin-bottom:.9rem}
+  .pt-btn-terminei{background:var(--green-deep);color:#fff;border:none;border-radius:12px;padding:.75rem 1.4rem;font-weight:800;font-size:1.02rem;cursor:pointer}
+  .pt-btn-terminei:hover{background:var(--green-mid)}
   .pt-toast{position:fixed;left:50%;transform:translateX(-50%);top:1rem;background:var(--green-deep);color:#fff;padding:.95rem 1.5rem;border-radius:12px;font-weight:700;z-index:80;box-shadow:var(--shadow);max-width:92vw;text-align:center;font-size:1.02rem}
   /* abas do portal */
   .pt-tabs{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;background:var(--cream);border:1px solid var(--line);border-radius:16px;padding:5px;margin-bottom:1.6rem}
@@ -506,6 +530,8 @@
   .pt-pay{background:#fff;border:1px solid var(--line);border-left:6px solid var(--warn);border-radius:14px;padding:1.2rem;margin-bottom:1rem}
   .pt-pay-top{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:.9rem}
   .pt-pay-top b{font-size:1.18rem;text-transform:capitalize}
+  /* o capitalize acima é para datas; textos comuns usam esta classe */
+  .pt-pay-top b.pt-no-caps{text-transform:none}
   .pt-pay-val{font-family:'Fraunces',serif;font-size:1.6rem;color:var(--green-deep);flex:none}
   .pt-pix{background:var(--cream);border:1px dashed var(--beige);border-radius:12px;padding:1rem;margin-bottom:.9rem}
   .pt-pix-row{display:flex;justify-content:space-between;align-items:center;gap:1rem;padding:.35rem 0;font-size:1.02rem}

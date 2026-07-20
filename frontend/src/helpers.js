@@ -2,7 +2,7 @@ export const UNITS = ["Ipatinga", "Timóteo"];
 export const PROFS = ["Inêz", "Equipe FQC"];
 export const VALOR_PADRAO = 80;
 export const CAPACITY_PADRAO = 4;
-export const TAG_OPTIONS = ["Em atendimento", "Em marcação", "Aluna ativa", "Confirmada", "Lead", "Inadimplente", "Lista de espera"];
+export const TAG_OPTIONS = ["Lead"];
 
 export const STATUS = {
   aguardando: { label: "Aguardando pagamento", badge: "b-warn", dot: "var(--warn)" },
@@ -45,6 +45,15 @@ export const fmtDate = (iso) => new Date(iso + "T00:00").toLocaleDateString("pt-
 export const fmtDateLong = (iso) => new Date(iso + "T00:00").toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "long" });
 export const weekdayShort = (iso) => new Date(iso + "T00:00").toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "");
 export const money = (v) => "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Fim da aula a partir do início + duração em minutos (padrão: 2h)
+export function fimDaAula(time, dur = 120) {
+  if (!time) return "";
+  const [h, m] = time.split(":").map(Number);
+  const t = h * 60 + m + (Number(dur) || 0);
+  return `${String(Math.floor(t / 60) % 24).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+// "09:00 às 11:00" — usado na agenda, no portal e nas confirmações
+export const faixaHorario = (time, dur) => (time ? `${time} às ${fimDaAula(time, dur)}` : "");
 export function waLink(phone, msg) {
   const p = (phone || "").replace(/\D/g, "");
   return "https://wa.me/55" + p + "?text=" + encodeURIComponent(msg || "");

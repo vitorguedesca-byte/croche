@@ -32,10 +32,11 @@ export const api = {
 
   createSlot: (data) => req("POST", "/api/slots", data),
   updateSlotCapacity: (id, capacity) => req("PATCH", `/api/slots/${id}`, { capacity }),
-  deleteSlot: (id) => req("DELETE", `/api/slots/${id}`),
+  deleteSlot: (id, series) => req("DELETE", `/api/slots/${id}${series ? "?series=1" : ""}`),
 
   createBooking: (data) => req("POST", "/api/bookings", data),
   updateBooking: (id, data) => req("PATCH", `/api/bookings/${id}`, data),
+  deleteBooking: (id, series) => req("DELETE", `/api/bookings/${id}${series ? "?series=1" : ""}`),
   payBooking: (id, data) => req("POST", `/api/bookings/${id}/pay`, data),
   createInvoice: (id, data) => req("POST", `/api/bookings/${id}/invoice`, data),
 
@@ -45,6 +46,12 @@ export const api = {
 
   // mensalidades (mensalistas)
   batchBook: (clientId, data) => req("POST", `/api/clients/${clientId}/batch-book`, data),
+  getMakeup: (clientId) => req("GET", `/api/clients/${clientId}/makeup`),
+  makeupBook: (clientId, slotId) => req("POST", `/api/clients/${clientId}/makeup-book`, { slotId }),
+  extraBook: (clientId, slotId) => req("POST", `/api/clients/${clientId}/extra-book`, { slotId }),
+  enroll: (clientId, data) => req("POST", `/api/clients/${clientId}/enroll`, data),
+  refundMatricula: (clientId) => req("POST", `/api/clients/${clientId}/matricula/refund`, {}),
+  releaseBooking: (id, reason) => req("POST", `/api/bookings/${id}/release`, { reason: reason || "" }),
   gerarMensalidade: (clientId, competencia) => req("POST", `/api/clients/${clientId}/invoice`, competencia ? { competencia } : {}),
   gerarMensalidadesMes: () => req("POST", "/api/invoices/gerar-mes"),
   payInvoice: (id) => req("POST", `/api/invoices/${id}/pay`),
@@ -92,7 +99,10 @@ export const api = {
 
   portal: {
     get: (phone) => req("GET", `/api/portal/${encodeURIComponent(phone)}`),
-    book: (phone, slotId, name) => req("POST", `/api/portal/${encodeURIComponent(phone)}/book`, { slotId, name }),
+    book: (phone, slotId, name, modo) => req("POST", `/api/portal/${encodeURIComponent(phone)}/book`, {
+      slotId, name, reposicao: modo === "repor", extra: modo === "extra",
+    }),
+    enroll: (phone, data) => req("POST", `/api/portal/${encodeURIComponent(phone)}/enroll`, data),
     cancel: (phone, bookingId) => req("POST", `/api/portal/${encodeURIComponent(phone)}/cancel/${bookingId}`),
     absence: (phone, bookingId, reason) => req("POST", `/api/portal/${encodeURIComponent(phone)}/absence/${bookingId}`, { reason }),
   },
