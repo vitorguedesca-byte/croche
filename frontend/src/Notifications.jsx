@@ -47,7 +47,7 @@ function buildNotifications(data) {
   data.bookings
     .filter((b) => b.status !== "cancelada" && b.createdAt && daysSince(b.createdAt, t) <= 7)
     .forEach((b) => out.push({
-      id: "mk" + b.id, event: true, icon: "🆕", tone: "rgba(63,163,77,.14)",
+      id: "mk" + b.id, event: true, icon: "📅", tone: "rgba(63,163,77,.14)",
       title: `Nova aula marcada — ${b.clientName}`,
       sub: `${b.unit} · ${fmtDate(b.date)} às ${b.time}`,
       time: at(b), nav: (go) => go("marcacoes"),

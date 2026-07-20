@@ -22,14 +22,15 @@ export function ModalProvider({ children }) {
 export const useModal = () => useContext(ModalContext);
 
 /* Estrutura visual padrão de um modal */
-export function Modal({ title, children, footer }) {
+export function Modal({ title, children, footer, size, subheader }) {
   const { close } = useModal();
   return (
-    <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`modal${size ? " modal-" + size : ""}`} onClick={(e) => e.stopPropagation()}>
       <div className="modal-h">
         <h3>{title}</h3>
         <button onClick={close}>×</button>
       </div>
+      {subheader && <div className="modal-sub">{subheader}</div>}
       <div className="modal-b">{children}</div>
       {footer && <div className="modal-f">{footer}</div>}
     </div>
