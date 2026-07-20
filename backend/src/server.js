@@ -426,6 +426,34 @@ app.delete(
     const id = Number(req.params.id);
     const slot = await prisma.slot.findUnique({ where: { id } });
     if (!slot) return res.json({ ok: true, deleted: 0 });
+    // ?match=1: exclusão em lote "pega-tudo" — além dos da mesma série, exclui
+    // TODOS os horários futuros equivalentes (mesma unidade, hora e dia da
+    // semana), mesmo que tenham sido criados em levas separadas ou antes do
+    // seriesId existir. Horários passados ficam para preservar o histórico.
+    if (req.query.match === "1") {
+      const t = todayISO();
+      const dow = new Date(slot.date + "T00:00").getDay();
+      const cands = await prisma.slot.findMany({
+        where: {
+          date: { gte: t },
+          OR: [
+            { unit: slot.unit, time: slot.time },
+            ...(slot.seriesId ? [{ seriesId: slot.seriesId }] : []),
+          ],
+        },
+      });
+      const ids = new Set(
+        cands
+          .filter((s) =>
+            (slot.seriesId && s.seriesId === slot.seriesId) ||
+            (s.unit === slot.unit && s.time === slot.time && new Date(s.date + "T00:00").getDay() === dow)
+          )
+          .map((s) => s.id)
+      );
+      ids.add(id); // inclui o próprio, mesmo que esteja no passado
+      const r = await prisma.slot.deleteMany({ where: { id: { in: [...ids] } } });
+      return res.json({ ok: true, deleted: r.count });
+    }
     // ?series=1: exclui também os demais horários da mesma série (replicados),
     // de hoje em diante — horários passados ficam para preservar o histórico.
     if (req.query.series === "1" && slot.seriesId) {

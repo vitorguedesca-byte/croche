@@ -101,11 +101,15 @@ export function SlotDetail({ slotId }) {
     run(api.updateSlotCapacity(slotId, capInput));
   };
   const del = async () => {
-    // horários criados juntos (replicação) compartilham seriesId; "demais" = os de hoje em diante
+    // Exclusão em lote "pega-tudo": além dos criados juntos (mesma série),
+    // considera TODOS os horários futuros equivalentes — mesma unidade, hora e
+    // dia da semana — mesmo que tenham sido criados em levas separadas.
     const t = todayISO();
-    const sibs = slot.seriesId
-      ? data.slots.filter((s) => s.seriesId === slot.seriesId && s.id !== slot.id && s.date >= t)
-      : [];
+    const dow = new Date(slot.date + "T00:00").getDay();
+    const sibs = data.slots.filter((s) => s.id !== slot.id && s.date >= t && (
+      (slot.seriesId && s.seriesId === slot.seriesId) ||
+      (s.unit === slot.unit && s.time === slot.time && new Date(s.date + "T00:00").getDay() === dow)
+    ));
     if (!sibs.length) {
       const msg = occ > 0
         ? `Este horário tem ${occ} reserva(s). Excluir o horário também remove essas reservas. Continuar?`
@@ -116,18 +120,21 @@ export function SlotDetail({ slotId }) {
       return;
     }
     const allRes = occ + sibs.reduce((n, s) => n + slotBookings(data, s.id).length, 0);
+    const diaSemana = capitalize(new Date(slot.date + "T00:00").toLocaleDateString("pt-BR", { weekday: "long" }));
+    const ultimo = sibs.reduce((m, s) => (s.date > m ? s.date : m), slot.date);
     const ans = await confirmModal({
-      title: "Excluir horário replicado",
-      message: `Este horário foi cadastrado de forma replicada: há mais ${sibs.length} horário(s) da mesma série na agenda daqui em diante.` +
+      title: "Excluir horário em lote",
+      message: `Há mais ${sibs.length} horário(s) de ${diaSemana} às ${slot.time} em ${slot.unit} na agenda daqui em diante (até ${fmtDate(ultimo)}).` +
         (occ > 0 ? `\n\nEste horário tem ${occ} reserva(s).` : "") +
         (allRes > 0 ? `\nExcluindo todos, ${allRes} reserva(s) ao todo serão removidas.` : "") +
-        `\n\nQuer excluir só este horário ou todos da série?`,
+        `\n\nQuer excluir só este horário ou todos?`,
       confirmLabel: `Excluir todos (${sibs.length + 1})`,
       altLabel: "Só este",
       tone: "danger",
     });
     if (!ans) return;
-    await run(api.deleteSlot(slotId, ans !== "alt"));
+    const r = await run(api.deleteSlot(slotId, ans === "alt" ? null : "match"));
+    if (ans !== "alt") toast(`${r?.deleted ?? sibs.length + 1} horário(s) excluído(s).`);
     close();
   };
 

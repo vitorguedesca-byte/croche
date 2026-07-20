@@ -32,7 +32,9 @@ export const api = {
 
   createSlot: (data) => req("POST", "/api/slots", data),
   updateSlotCapacity: (id, capacity) => req("PATCH", `/api/slots/${id}`, { capacity }),
-  deleteSlot: (id, series) => req("DELETE", `/api/slots/${id}${series ? "?series=1" : ""}`),
+  // mode: falsy = só este · "series" = mesmos da série · "match" = todos os
+  // futuros equivalentes (mesma unidade/hora/dia da semana), pega-tudo
+  deleteSlot: (id, mode) => req("DELETE", `/api/slots/${id}${mode === "match" ? "?match=1" : mode ? "?series=1" : ""}`),
 
   createBooking: (data) => req("POST", "/api/bookings", data),
   updateBooking: (id, data) => req("PATCH", `/api/bookings/${id}`, data),
