@@ -972,11 +972,35 @@ export function ClientForm({ client }) {
   const [level, setLevel] = useState(client?.level || "");
   const [firstClass, setFirstClass] = useState(client ? !!client.firstClass : true);
   const [status, setStatus] = useState(client?.status || "ativo");
+  // Plano: "avulso" | "1" | "2" (mensalista 1x/2x por semana)
+  const [plano, setPlano] = useState(client?.plan === "mensalista" ? String(client.weeklyFreq || 1) : "avulso");
   const toggle = (t) => setTags((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
   const save = async () => {
     if (!name.trim()) return toast("Informe o nome.", "error");
     const payload = { name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: cpf.trim(), unit, tags, notes: notes.trim(), birthday, level, firstClass, status };
-    await run(client ? api.updateClient(client.id, payload) : api.createClient(payload));
+
+    const eraMensal = client?.plan === "mensalista";
+    const querMensal = plano !== "avulso";
+    const mudouFreq = eraMensal && querMensal && Number(plano) !== (client.weeklyFreq || 1);
+    const precisaMatricular = querMensal && (!client || !eraMensal || mudouFreq);
+
+    if (precisaMatricular) {
+      const valor = Number(plano) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120);
+      const ok = await confirmModal({
+        title: "Matricular como mensalista",
+        message: `${name.trim()} entrará no plano de ${plano}x por semana (${money(valor)}/mês).\n\nA primeira mensalidade será gerada agora e os boletos passam a sair todo mês.`,
+        confirmLabel: "Salvar e matricular",
+      });
+      if (!ok) return;
+    }
+    if (eraMensal && !querMensal) payload.plan = "avulso"; // voltou a ser avulso
+
+    const saved = await run(client ? api.updateClient(client.id, payload) : api.createClient(payload));
+    if (precisaMatricular) {
+      const id = client ? client.id : saved?.id;
+      if (id) await run(api.enroll(id, { weeklyFreq: Number(plano) }));
+      toast(`📅 Mensalista ${plano}x/semana — 1ª mensalidade gerada.`);
+    }
     close();
   };
   const del = async () => {
@@ -1014,6 +1038,16 @@ export function ClientForm({ client }) {
             Sim, é aluno(a) novo(a)
           </label>
         </div>
+      </div>
+      <div className="field"><label>Plano</label>
+        <select value={plano} onChange={(e) => setPlano(e.target.value)}>
+          <option value="avulso">Avulso — paga por aula</option>
+          <option value="1">📅 Mensalista — 1x por semana ({money(meta.valorPlano1x ?? 120)}/mês)</option>
+          <option value="2">📅 Mensalista — 2x por semana ({money(meta.valorPlano2x ?? 200)}/mês)</option>
+        </select>
+        {plano !== "avulso" && client?.plan !== "mensalista" && (
+          <div className="help" style={{ marginTop: ".4rem" }}>Ao salvar, a matrícula é feita e a 1ª mensalidade é gerada automaticamente.</div>
+        )}
       </div>
       {client?.plan !== "mensalista" && (
         <div className="field"><label>Etiquetas</label>
