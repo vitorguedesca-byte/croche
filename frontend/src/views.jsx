@@ -9,9 +9,9 @@ import {
 } from "./modals.jsx";
 import {
   UNITS, STATUS, unitColor,
-  todayISO, addDays, weekStart, fmtDate, fmtDateLong, weekdayShort, money, waLink, capitalize, faixaHorario,
+  todayISO, addDays, weekStart, fmtDate, fmtDateLong, weekdayShort, money, waLink, capitalize, faixaHorario, hhmm,
   bookingsActive, slotBookings, slotBookingsAll, slotCapacity, slotOccupancy, slotWaitlist, clientAttendance,
-  bookingKind, compAtual, addComp, compLabel, competenciasDoAluno, mensalidadeDe, matriculaISO,
+  bookingKind, BOOKING_KINDS, compAtual, addComp, compLabel, competenciasDoAluno, mensalidadeDe, matriculaISO,
   clientActiveCount, classifyClient, isNewLead,
 } from "./helpers.js";
 
@@ -80,7 +80,7 @@ function Alerts({ open }) {
             <div className="alert-h" style={{ color: "var(--terracota)" }}>🔥 Turmas quase lotando</div>
             {quase.map((s) => (
               <div className="alert-row row-click" key={s.id} onClick={() => open(<SlotDetail slotId={s.id} />)}>
-                <div><b>{fmtDate(s.date)} · {s.time}</b><div className="cli-sub">{s.unit} · 1 vaga restante</div></div>
+                <div><b>{fmtDate(s.date)} · {hhmm(s.time)}</b><div className="cli-sub">{s.unit} · 1 vaga restante</div></div>
                 <span className="badge b-terra">1 vaga</span>
               </div>
             ))}
@@ -243,6 +243,8 @@ export function Agenda() {
           })}
         </div>
         <div className="ag-legend">
+          {Object.values(BOOKING_KINDS).map((t) => <span key={t.key} className="lg"><span className="lgdot" style={{ background: t.color }} />{t.ic} {t.label}</span>)}
+          <span className="lg-sep" />
           {Object.keys(STATUS).map((k) => <span key={k} className="lg"><span className="lgdot" style={{ background: STATUS[k].dot }} />{STATUS[k].label}</span>)}
         </div>
       </div>
@@ -268,7 +270,7 @@ function MonthView({ ref0, agSlots, open, data }) {
     const slots = agSlots(date);
     const evs = slots.slice(0, 3).map((s) => {
       const uc = unitColor(s.unit), cap = slotCapacity(s), occ = slotOccupancy(data, s.id), full = occ >= cap;
-      const txt = occ ? `${s.time} · ${occ}/${cap}` : `${s.time} Livre`;
+      const txt = occ ? `${hhmm(s.time)} · ${occ}/${cap}` : `${hhmm(s.time)} Livre`;
       return <div key={s.id} className={`m-ev ${occ ? "" : "free"} ${full ? "full" : ""}`} style={{ "--uc": uc, ...(occ ? { background: "var(--cream)", color: uc } : {}) }}>{txt}</div>;
     });
     const dots = slots.slice(0, 8).map((s) => <span key={s.id} className="m-dot" style={{ background: slotOccupancy(data, s.id) ? unitColor(s.unit) : "var(--line)", width: 7, height: 7, borderRadius: "50%" }} />);
@@ -339,7 +341,8 @@ function ListView({ data, unit, open, ref0 }) {
             {todas.length ? todas.map((b) => {
               const k = bookingKind(b);
               return (
-                <div className={`ls-al ${b.status === "cancelada" ? "canc" : ""}`} key={b.id}
+                <div className={`ls-al ${b.status === "cancelada" ? "canc" : ""} ${k ? "kinded" : ""}`} key={b.id}
+                  style={k ? { "--kc": k.color } : undefined}
                   onClick={() => open(<ManageBooking booking={b} />)}>
                   <span className="nm">{b.clientName}</span>
                   <span className="sp">

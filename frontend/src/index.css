@@ -647,7 +647,7 @@
   @media(max-width:900px){ .fch-tot{grid-template-columns:1fr 1fr} }
 
   /* ===== Perfil do aluno (dossiê em 2 colunas) ===== */
-  .modal.modal-lg{width:min(1080px,97vw)}
+  .modal.modal-lg{width:min(1180px,96vw)}
   .prof{display:grid;grid-template-columns:308px 1fr;gap:1.1rem;align-items:start}
   .prof-side{display:flex;flex-direction:column;gap:.75rem;min-width:0}
   .prof-main{display:flex;flex-direction:column;gap:.85rem;min-width:0}
@@ -661,8 +661,9 @@
   .prof-dl > div{display:flex;justify-content:space-between;align-items:center;gap:.6rem;font-size:.85rem}
   .prof-dl .k{color:var(--muted);font-weight:600;flex-shrink:0}
   .prof-dl .v{text-align:right;font-weight:600;overflow-wrap:anywhere}
-  .prof-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:.55rem}
-  .prof-kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:.65rem .8rem}
+  .prof-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(136px,1fr));gap:.55rem;min-width:0}
+  .prof-kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:.65rem .8rem;min-width:0}
+  .prof-kpi .v{overflow-wrap:anywhere}
   .prof-kpi .l{font-size:.71rem;color:var(--muted);font-weight:700}
   .prof-kpi .v{font-family:'Fraunces',serif;font-size:1.45rem;color:var(--green-deep);line-height:1.15;margin-top:.1rem}
   .prof-kpi .v.terra{color:var(--terracota)}
@@ -699,17 +700,31 @@
 
   /* ===== Modal com abas no topo e altura fixa (não muda de tamanho entre abas) ===== */
   .modal-sub{padding:0 1.4rem .85rem;background:var(--offwhite);border-bottom:1px solid var(--line)}
-  .modal.modal-lg{width:min(1080px,97vw);max-height:none;overflow:hidden;display:flex;flex-direction:column}
-  .modal.modal-lg .modal-b{height:clamp(380px,58vh,560px);overflow-y:auto;flex:none}
+  .modal.modal-lg{width:min(1180px,96vw);max-height:none;overflow:hidden;display:flex;flex-direction:column}
+  .modal.modal-lg .modal-b{height:clamp(380px,58vh,560px);overflow-y:auto;overflow-x:hidden;flex:none;min-width:0}
   .modal.modal-lg .modal-h{border-bottom:none;padding-bottom:.7rem}
   /* aba "Principal" */
-  .prin{display:grid;grid-template-columns:308px 1fr;gap:1.1rem;align-items:start}
+  .prin{display:grid;grid-template-columns:minmax(0,320px) minmax(0,1fr);gap:1.1rem;align-items:start;min-width:0}
   .prin-main{display:flex;flex-direction:column;gap:.85rem;min-width:0}
   .feed{display:flex;flex-direction:column}
-  .feed-row{display:flex;gap:.6rem;align-items:flex-start;padding:.5rem 0;border-bottom:1px dashed var(--line)}
+  .feed-row{display:flex;gap:.6rem;align-items:flex-start;padding:.5rem 0;border-bottom:1px dashed var(--line);min-width:0}
   .feed-row:last-child{border-bottom:none}
   .feed-ic{width:28px;height:28px;border-radius:9px;background:var(--cream);display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0}
   .feed-t{font-size:.86rem;font-weight:700;line-height:1.25}
   .feed-s{font-size:.76rem;color:var(--muted)}
-  .feed-d{margin-left:auto;font-size:.74rem;color:var(--muted);white-space:nowrap;font-weight:700}
-  @media(max-width:980px){ .prin{grid-template-columns:1fr} }
+  .feed-d{margin-left:auto;font-size:.74rem;color:var(--muted);white-space:nowrap;font-weight:700;flex-shrink:0}
+  @media(max-width:1100px){ .prin{grid-template-columns:minmax(0,1fr)} }
+
+  /* botão de atualizar (barra superior) */
+  .refresh-btn{display:inline-flex;align-items:center;gap:.4rem;background:#fff;border:1px solid var(--line);border-radius:10px;padding:.42rem .7rem;color:var(--muted);font-weight:700;font-size:.82rem;cursor:pointer;transition:.15s;white-space:nowrap}
+  .refresh-btn:hover:not(:disabled){color:var(--green-deep);border-color:var(--green-mid)}
+  .refresh-btn:disabled{cursor:default;opacity:.85}
+  .refresh-btn svg{flex-shrink:0;transition:.15s}
+  .refresh-btn.spin svg{animation:spin 1s linear infinite;color:var(--green-mid)}
+  .refresh-lbl{font-variant-numeric:tabular-nums}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media(max-width:640px){ .refresh-lbl{display:none} .refresh-btn{padding:.42rem .55rem} }
+
+  /* agenda — cor por tipo de aula (azul reposição · vermelho 1ª aula · verde extra) */
+  .ls-al.kinded{border-left:3px solid var(--kc);padding-left:.5rem;border-radius:0 6px 6px 0}
+  .lg-sep{width:1px;align-self:stretch;background:var(--line);margin:0 .2rem}

@@ -6,7 +6,7 @@ import { api } from "./api.js";
 import { toast, confirmModal, promptModal } from "./toast.jsx";
 import {
   UNITS, PROFS, TAG_OPTIONS, STATUS, VALOR_PADRAO, CAPACITY_PADRAO,
-  unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize, faixaHorario,
+  unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize, faixaHorario, hhmm,
   slotById, slotBookings, slotBookingsAll, slotCapacity, slotWaitlist, clientAttendance,
   bookingKind, competenciasDoAluno, compLabel, mensalidadeDe, matriculaISO,
   WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays,
@@ -47,7 +47,7 @@ export function SlotCard({ slot, showUnit }) {
     <div className={`slot ${cls}`} style={{ "--uc": uc, background: occ ? unitSoft(slot.unit) : undefined }}
       onClick={() => open(<SlotDetail slotId={slot.id} />)}>
       <div className="slot-top">
-        <span className="t" style={{ color: occ ? uc : undefined }}>{slot.time}</span>
+        <span className="t" style={{ color: occ ? uc : undefined }}>{hhmm(slot.time)}</span>
         <span className={`occ ${full ? "is-full" : occ > 0 ? "is-part" : ""}`}>{occ}/{cap}</span>
       </div>
       {showUnit && <div className="n"><b style={{ color: uc }}>{slot.unit}</b></div>}
@@ -57,7 +57,7 @@ export function SlotCard({ slot, showUnit }) {
             const k = bookingKind(b);
             return (
               <div key={b.id} className={`sc-al ${b.status === "cancelada" ? "canc" : ""}`} title={`${b.clientName} · ${STATUS[b.status].label}${k ? " · " + k.label : ""}`}>
-                <span className="sc-dot" style={{ background: STATUS[b.status].dot }} />
+                <span className="sc-dot" style={{ background: k ? k.color : STATUS[b.status].dot }} />
                 <span className="sc-nm">{b.clientName.split(" ")[0]}</span>
                 {k && <span className="sc-tag">{k.ic}</span>}
               </div>
@@ -167,6 +167,7 @@ export function SlotDetail({ slotId }) {
       <div className="info-line"><b>Data / hora</b><span>{fmtDateLong(slot.date)} · {faixaHorario(slot.time, data.meta?.duracaoAulaMin)}</span></div>
       <div className="info-line"><b>Profissional</b><span>{slot.prof || "—"}</span></div>
       <div style={{ display: "flex", gap: ".5rem", marginTop: ".8rem" }}>
+        <button className="btn sec sm" onClick={() => open(<EditSlotForm slot={slot} />)}>✏️ Editar turma</button>
         <button className="btn sec sm" onClick={() => open(<ReplicateSlotForm slot={slot} />)}>🔁 Replicar</button>
         <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir horário</button>
       </div>
@@ -362,7 +363,7 @@ export function ManageBooking({ booking, onBack }) {
       </div>
       <div className="row2">
         <div className="field"><label>Remarcar — data</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
-        <div className="field"><label>Hora</label><input value={time} onChange={(e) => setTime(e.target.value)} /></div>
+        <div className="field"><label>Hora</label><input type="time" value={hhmm(time)} onChange={(e) => setTime(e.target.value)} /></div>
       </div>
       <div style={{ marginTop: "1rem", display: "flex", gap: ".5rem", flexWrap: "wrap" }}>
         {booking.status !== "cancelada" && (
@@ -504,7 +505,7 @@ export function BookingForm({ slotId }) {
       </div>
       <div className="row2">
         <div className="field"><label>{repetindo ? "Semana inicial (a partir de)" : "Data"}</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
-        <div className="field"><label>Hora</label><input value={time} onChange={(e) => setTime(e.target.value)} /></div>
+        <div className="field"><label>Hora</label><input type="time" value={hhmm(time)} onChange={(e) => setTime(e.target.value)} /></div>
       </div>
 
       <div className="field">
@@ -545,7 +546,7 @@ export function SlotForm({ presetDate }) {
   const { close } = useModal();
   const meta = data.meta;
   const [unit, setUnit] = useState(meta.units[0]);
-  const [prof, setProf] = useState(meta.profs[0]);
+  const [prof, setProf] = useState(""); // vazio por padrão — a instrutora é escolhida a cada horário
   const [date, setDate] = useState(presetDate || todayISO());
   const [time, setTime] = useState("09:00");
   const [capacity, setCapacity] = useState(meta.capacidadePadrao);
@@ -566,11 +567,16 @@ export function SlotForm({ presetDate }) {
     </>}>
       <div className="row2">
         <div className="field"><label>Unidade</label><select value={unit} onChange={(e) => setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
-        <div className="field"><label>Profissional</label><select value={prof} onChange={(e) => setProf(e.target.value)}>{meta.profs.map((p) => <option key={p}>{p}</option>)}</select></div>
+        <div className="field"><label>Profissional <span style={{ color: "var(--muted)", fontWeight: 400 }}>(opcional)</span></label>
+          <select value={prof} onChange={(e) => setProf(e.target.value)}>
+            <option value="">— sem instrutor definido</option>
+            {meta.profs.map((p) => <option key={p}>{p}</option>)}
+          </select>
+        </div>
       </div>
       <div className="row2">
         <div className="field"><label>{weekdays.size ? "Semana inicial (a partir de)" : "Data"}</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
-        <div className="field"><label>Hora</label><input value={time} onChange={(e) => setTime(e.target.value)} /></div>
+        <div className="field"><label>Hora</label><input type="time" value={hhmm(time)} onChange={(e) => setTime(e.target.value)} /></div>
       </div>
       <div className="field"><label>Capacidade da turma (vagas)</label><input type="number" min="1" value={capacity} onChange={(e) => setCapacity(parseInt(e.target.value, 10) || 1)} /></div>
       <div className="field">
@@ -594,6 +600,61 @@ export function SlotForm({ presetDate }) {
 }
 
 /* ======================= Replicar horário existente ======================= */
+/* ======================= Editar turma (horário/prof/unidade/data) ======================= */
+export function EditSlotForm({ slot }) {
+  const { data, run } = useStore();
+  const { open } = useModal();
+  const meta = data.meta;
+  const bks = slotBookings(data, slot.id);
+  const [unit, setUnit] = useState(slot.unit);
+  const [prof, setProf] = useState(slot.prof || "");
+  const [date, setDate] = useState(slot.date);
+  const [time, setTime] = useState(hhmm(slot.time) || "09:00");
+
+  const mudou = unit !== slot.unit || (prof || "") !== (slot.prof || "") || date !== slot.date || hhmm(slot.time) !== time;
+
+  const save = async () => {
+    if (!time) return toast("Informe o horário.", "error");
+    if (bks.length) {
+      const ok = await confirmModal({
+        title: "Editar turma",
+        message: `Esta turma tem ${bks.length} reserva(s).\n\nAo salvar, todas serão movidas para o novo dia/horário/unidade. Continuar?`,
+        confirmLabel: "Salvar e mover",
+      });
+      if (!ok) return;
+    }
+    await run(api.updateSlot(slot.id, { unit, prof, date, time }));
+    toast("Turma atualizada. 💚");
+    open(<SlotDetail slotId={slot.id} />);
+  };
+
+  return (
+    <Modal title="Editar turma" footer={<>
+      <button className="btn ghost" onClick={() => open(<SlotDetail slotId={slot.id} />)}>← Voltar</button>
+      <button className="btn" onClick={save} disabled={!mudou}>Salvar alterações</button>
+    </>}>
+      <div className="cfg-preview" style={{ marginTop: 0, marginBottom: "1rem" }}>
+        Editando <b>{fmtDateLong(slot.date)}</b> · {faixaHorario(slot.time, meta.duracaoAulaMin)} · {slot.unit}
+        {bks.length ? <> · <b>{bks.length} reserva(s)</b> serão movidas junto</> : null}
+      </div>
+      <div className="row2">
+        <div className="field"><label>Unidade</label><select value={unit} onChange={(e) => setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
+        <div className="field"><label>Profissional</label>
+          <select value={prof} onChange={(e) => setProf(e.target.value)}>
+            <option value="">— sem instrutor definido</option>
+            {meta.profs.map((p) => <option key={p}>{p}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="row2">
+        <div className="field"><label>Data</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
+        <div className="field"><label>Horário</label><input type="time" value={time} onChange={(e) => setTime(e.target.value)} /></div>
+      </div>
+      <div className="help">Só altera <b>esta</b> turma. Para mudar várias de uma vez, exclua e recrie com a replicação, ou use “Replicar”.</div>
+    </Modal>
+  );
+}
+
 export function ReplicateSlotForm({ slot }) {
   const { run } = useStore();
   const { open } = useModal();
@@ -1176,7 +1237,7 @@ export function BatchBookForm({ client }) {
       </div>
       <div className="row2">
         <div className="field"><label>Unidade</label><select value={unit} onChange={(e) => setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
-        <div className="field"><label>Horário</label><input value={time} onChange={(e) => setTime(e.target.value)} placeholder="09:00" /></div>
+        <div className="field"><label>Horário</label><input type="time" value={hhmm(time)} onChange={(e) => setTime(e.target.value)} /></div>
       </div>
       <div className="field">
         <label>Dias da semana</label>

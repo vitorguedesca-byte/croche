@@ -2,15 +2,37 @@ import { useState } from "react";
 import { toast } from "./toast.jsx";
 import { useStore } from "./store.jsx";
 import { api } from "./api.js";
-import { WEEKDAYS_PT, parseHorario, horarioToText, serializeHorario } from "./helpers.js";
+import { WEEKDAYS_PT, DEFAULT_HORARIO, parseHorario, horarioToText, serializeHorario } from "./helpers.js";
 
 export default function Config() {
   const { data, run } = useStore();
   const m = data.meta;
   const [valor, setValor] = useState(m.valorPadrao);
   const [cap, setCap] = useState(m.capacidadePadrao);
-  const [hours, setHours] = useState(() => parseHorario(m.horarioFunc).days);
-  const setDay = (i, patch) => setHours((hs) => hs.map((d, j) => (j === i ? { ...d, ...patch } : d)));
+
+  // Per-unit hours: { [unitName]: 7-day array }
+  // Initialized from m.horarioUnidades (new) falling back to global m.horarioFunc
+  const [unitHours, setUnitHours] = useState(() => {
+    const saved = m.horarioUnidades || {};
+    const globalDays = parseHorario(m.horarioFunc).days;
+    const result = {};
+    for (const unit of m.units || []) {
+      result[unit] = saved[unit]
+        ? parseHorario(saved[unit]).days
+        : globalDays.map((d) => ({ ...d }));
+    }
+    return result;
+  });
+
+  const getUnitDays = (unit) =>
+    unitHours[unit] || DEFAULT_HORARIO.map((d) => ({ ...d }));
+
+  const setUnitDay = (unit, i, patch) =>
+    setUnitHours((prev) => ({
+      ...prev,
+      [unit]: getUnitDays(unit).map((d, j) => (j === i ? { ...d, ...patch } : d)),
+    }));
+
   const [units, setUnits] = useState((m.units || []).join("\n"));
   const [profs, setProfs] = useState((m.profs || []).join("\n"));
   const [pixKey, setPixKey] = useState(m.pixKey || "");
@@ -27,10 +49,21 @@ export default function Config() {
   const [saved, setSaved] = useState(false);
 
   const save = async () => {
+    const unitsList = units.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+    if (!unitsList.length) return toast("Cadastre ao menos uma unidade.", "error");
+    const profsList = profs.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+    if (!profsList.length) return toast("Cadastre ao menos um profissional.", "error");
+
+    // Serialize per-unit schedules — only units currently in the list
+    const horarioUnidades = {};
+    for (const unit of unitsList) {
+      horarioUnidades[unit] = JSON.parse(serializeHorario(getUnitDays(unit)));
+    }
+
     const payload = {
       valorPadrao: Number(valor) || m.valorPadrao,
       capacidadePadrao: Math.max(1, parseInt(cap, 10) || m.capacidadePadrao),
-      horarioFunc: serializeHorario(hours),
+      horarioUnidades,
       pixKey: pixKey.trim(),
       pixName: pixName.trim(),
       mensalidadeValor: Number(mensalidadeValor) || 0,
@@ -40,11 +73,9 @@ export default function Config() {
       valorPlano2x: Number(plano2x) || 0,
       valorAvulsa: Number(avulsa) || 0,
       duracaoAulaMin: Math.min(600, Math.max(15, parseInt(duracao, 10) || 120)),
-      units: units.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
-      profs: profs.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
+      units: unitsList,
+      profs: profsList,
     };
-    if (!payload.units.length) return toast("Cadastre ao menos uma unidade.", "error");
-    if (!payload.profs.length) return toast("Cadastre ao menos um profissional.", "error");
     await run(api.updateSettings(payload));
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
@@ -119,28 +150,44 @@ export default function Config() {
         </div>
       </div>
 
-      {/* HORÁRIO POR DIA */}
-      <div className="panel cfg-sec">
-        <div className="cfg-h"><span className="cfg-ic">🕒</span><div><h2>Horário de funcionamento</h2><p>Defina o horário de cada dia da semana. Exibido para as alunas.</p></div></div>
-        <div className="hf-list">
-          {WEEKDAYS_PT.map((dia, i) => (
-            <div key={dia} className={`hf-row ${hours[i].open ? "" : "off"}`}>
-              <label className="hf-toggle">
-                <input type="checkbox" checked={hours[i].open} onChange={(e) => setDay(i, { open: e.target.checked })} />
-                <span className="hf-day">{dia}</span>
-              </label>
-              {hours[i].open ? (
-                <div className="hf-times">
-                  <input type="time" value={hours[i].from} onChange={(e) => setDay(i, { from: e.target.value })} />
-                  <span className="hf-sep">às</span>
-                  <input type="time" value={hours[i].to} onChange={(e) => setDay(i, { to: e.target.value })} />
-                </div>
-              ) : <span className="hf-closed">Fechado</span>}
-            </div>
-          ))}
+      {/* HORÁRIO POR UNIDADE */}
+      {unitsList.length === 0 && (
+        <div className="panel cfg-sec">
+          <div className="cfg-h"><span className="cfg-ic">🕒</span><div><h2>Horário de funcionamento</h2><p>Cadastre ao menos uma unidade acima para configurar os horários.</p></div></div>
         </div>
-        <div className="cfg-preview" style={{ marginTop: ".9rem" }}>🕒 Alunas verão: <b>{horarioToText(hours)}</b></div>
-      </div>
+      )}
+      {unitsList.map((unit) => {
+        const days = getUnitDays(unit);
+        return (
+          <div key={unit} className="panel cfg-sec">
+            <div className="cfg-h">
+              <span className="cfg-ic">🕒</span>
+              <div>
+                <h2>Horário — {unit}</h2>
+                <p>Dias e horários de funcionamento desta unidade. Exibido para as alunas.</p>
+              </div>
+            </div>
+            <div className="hf-list">
+              {WEEKDAYS_PT.map((dia, i) => (
+                <div key={dia} className={`hf-row ${days[i].open ? "" : "off"}`}>
+                  <label className="hf-toggle">
+                    <input type="checkbox" checked={days[i].open} onChange={(e) => setUnitDay(unit, i, { open: e.target.checked })} />
+                    <span className="hf-day">{dia}</span>
+                  </label>
+                  {days[i].open ? (
+                    <div className="hf-times">
+                      <input type="time" value={days[i].from} onChange={(e) => setUnitDay(unit, i, { from: e.target.value })} />
+                      <span className="hf-sep">às</span>
+                      <input type="time" value={days[i].to} onChange={(e) => setUnitDay(unit, i, { to: e.target.value })} />
+                    </div>
+                  ) : <span className="hf-closed">Fechado</span>}
+                </div>
+              ))}
+            </div>
+            <div className="cfg-preview" style={{ marginTop: ".9rem" }}>🕒 Alunas verão: <b>{horarioToText(days)}</b></div>
+          </div>
+        );
+      })}
 
       </div>
 

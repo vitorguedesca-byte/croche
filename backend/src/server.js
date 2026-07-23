@@ -310,6 +310,7 @@ async function loadSettings() {
     units: JSON.parse(s.units || "[]"),
     profs: JSON.parse(s.profs || "[]"),
     horarioFunc: s.horarioFunc || "",
+    horarioUnidades: s.horarioUnidades ? (() => { try { return JSON.parse(s.horarioUnidades); } catch { return {}; } })() : {},
     pixKey: s.pixKey || "",
     pixName: s.pixName || "",
     mensalidadeValor: s.mensalidadeValor ?? 0,
@@ -327,8 +328,9 @@ async function loadSettings() {
 const valorDoPlano = (freq) => (Number(freq) === 2 ? SETTINGS.valorPlano2x : SETTINGS.valorPlano1x);
 // Fim da aula ('HH:MM'), a partir do início + duração configurada
 function fimDaAula(time, dur = SETTINGS.duracaoAulaMin) {
-  const [h, m] = time.split(":").map(Number);
-  const t = h * 60 + m + (dur || 0);
+  const mm = String(time || "").match(/(\d{1,2}):(\d{2})/);
+  if (!mm) return "";
+  const t = Number(mm[1]) * 60 + Number(mm[2]) + (Number(dur) || 120);
   return `${String(Math.floor(t / 60) % 24).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
 }
 // Duas aulas de mesma unidade/dia se sobrepõem? (compara em minutos)
@@ -400,7 +402,7 @@ app.post(
         continue;
       }
       const slot = await prisma.slot.create({
-        data: { unit, prof: prof || profFor(unit), date: d, time, capacity: cap, seriesId },
+        data: { unit, prof: (prof && String(prof).trim()) || null, date: d, time, capacity: cap, seriesId },
       });
       created.push(slot);
     }
@@ -412,11 +414,35 @@ app.patch(
   "/api/slots/:id",
   wrap(async (req, res) => {
     const id = Number(req.params.id);
-    const cap = Math.max(1, parseInt(req.body.capacity, 10) || 1);
-    const occ = await occupancy(id);
-    if (cap < occ) return res.status(400).json({ error: `Capacidade (${cap}) menor que as ${occ} reservas existentes.` });
-    const slot = await prisma.slot.update({ where: { id }, data: { capacity: cap } });
-    res.json(slot);
+    const slot = await prisma.slot.findUnique({ where: { id } });
+    if (!slot) return res.status(404).json({ error: "Horário não encontrado." });
+    const data = {};
+
+    if (req.body.capacity !== undefined) {
+      const cap = Math.max(1, parseInt(req.body.capacity, 10) || 1);
+      const occ = await occupancy(id);
+      if (cap < occ) return res.status(400).json({ error: `Capacidade (${cap}) menor que as ${occ} reservas existentes.` });
+      data.capacity = cap;
+    }
+    if (req.body.time !== undefined) {
+      const mm = String(req.body.time).match(/(\d{1,2}):(\d{2})/);
+      if (!mm) return res.status(400).json({ error: "Horário inválido." });
+      data.time = `${mm[1].padStart(2, "0")}:${mm[2]}`;
+    }
+    if (req.body.unit !== undefined && req.body.unit) data.unit = String(req.body.unit);
+    if (req.body.date !== undefined && req.body.date) data.date = String(req.body.date);
+    if (req.body.prof !== undefined) data.prof = String(req.body.prof || "").trim() || null;
+
+    const updated = await prisma.slot.update({ where: { id }, data });
+
+    // As reservas guardam data/hora/unidade/prof copiados do horário; ao editar
+    // a turma, movemos junto todas as reservas ativas dela.
+    const propag = {};
+    for (const k of ["time", "unit", "date", "prof"]) if (data[k] !== undefined) propag[k] = updated[k];
+    if (Object.keys(propag).length) {
+      await prisma.booking.updateMany({ where: { slotId: id, status: { not: "cancelada" } }, data: propag });
+    }
+    res.json(updated);
   })
 );
 
@@ -481,7 +507,7 @@ app.get(
     bookings.forEach((b) => { occ[b.slotId] = (occ[b.slotId] || 0) + 1; });
     const available = slots
       .filter((s) => s.date >= t && (!unit || s.unit === unit) && (occ[s.id] || 0) < s.capacity)
-      .map((s) => ({ id: s.id, date: s.date, time: s.time, unit: s.unit, prof: s.prof, vagas: s.capacity - (occ[s.id] || 0) }))
+      .map((s) => ({ id: s.id, date: s.date, time: s.time, unit: s.unit, prof: s.prof || profFor(s.unit), vagas: s.capacity - (occ[s.id] || 0) }))
       .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
     res.json({ available, meta: { units: SETTINGS.units, valorPadrao: SETTINGS.valorPadrao, pixKey: SETTINGS.pixKey, pixName: SETTINGS.pixName } });
   })
@@ -907,7 +933,7 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
   const occ = {}; ativas.forEach((b) => { occ[b.slotId] = (occ[b.slotId] || 0) + 1; });
   const available = slots
     .filter((s) => (occ[s.id] || 0) < (s.capacity || 1))
-    .map((s) => ({ ...s, occupancy: occ[s.id] || 0, free: (s.capacity || 1) - (occ[s.id] || 0) }));
+    .map((s) => ({ ...s, prof: s.prof || profFor(s.unit), occupancy: occ[s.id] || 0, free: (s.capacity || 1) - (occ[s.id] || 0) }));
   const makeup = await resumoReposicao(client);
   res.json({ client: safeClient(client), bookings, available, makeup, meta: { units: SETTINGS.units, valorPadrao: SETTINGS.valorPadrao, pixKey: SETTINGS.pixKey, pixName: SETTINGS.pixName } });
 }));
@@ -1422,7 +1448,7 @@ app.get(
     allBookings.filter((b) => b.status !== "cancelada").forEach((b) => { occ[b.slotId] = (occ[b.slotId] || 0) + 1; });
     const available = slots
       .filter((s) => s.date >= t && (occ[s.id] || 0) < s.capacity)
-      .map((s) => ({ id: s.id, date: s.date, time: s.time, unit: s.unit, prof: s.prof, vagas: s.capacity - (occ[s.id] || 0) }))
+      .map((s) => ({ id: s.id, date: s.date, time: s.time, unit: s.unit, prof: s.prof || profFor(s.unit), vagas: s.capacity - (occ[s.id] || 0) }))
       .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
     res.json({
       found: !!cli || mine.length > 0,
@@ -1492,6 +1518,7 @@ app.put(
     if (Array.isArray(b.units)) data.units = JSON.stringify(b.units.filter((u) => u && u.trim()));
     if (Array.isArray(b.profs)) data.profs = JSON.stringify(b.profs.filter((p) => p && p.trim()));
     if (b.horarioFunc !== undefined) data.horarioFunc = String(b.horarioFunc);
+    if (b.horarioUnidades !== undefined && b.horarioUnidades !== null && typeof b.horarioUnidades === "object") data.horarioUnidades = JSON.stringify(b.horarioUnidades);
     if (b.pixKey !== undefined) data.pixKey = String(b.pixKey);
     if (b.pixName !== undefined) data.pixName = String(b.pixName);
     if (b.mensalidadeValor !== undefined) data.mensalidadeValor = Number(b.mensalidadeValor) || 0;

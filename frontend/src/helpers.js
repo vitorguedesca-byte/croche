@@ -45,15 +45,25 @@ export const fmtDate = (iso) => new Date(iso + "T00:00").toLocaleDateString("pt-
 export const fmtDateLong = (iso) => new Date(iso + "T00:00").toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "long" });
 export const weekdayShort = (iso) => new Date(iso + "T00:00").toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "");
 export const money = (v) => "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Extrai só o "HH:MM" de uma string de hora, mesmo que venha suja
+// (ex.: "09:00 as 11:00" digitado à mão vira "09:00"). Evita cálculos com NaN.
+export const hhmm = (t) => {
+  const m = String(t || "").match(/(\d{1,2}):(\d{2})/);
+  return m ? `${m[1].padStart(2, "0")}:${m[2]}` : "";
+};
 // Fim da aula a partir do início + duração em minutos (padrão: 2h)
 export function fimDaAula(time, dur = 120) {
-  if (!time) return "";
-  const [h, m] = time.split(":").map(Number);
-  const t = h * 60 + m + (Number(dur) || 0);
+  const ini = hhmm(time);
+  if (!ini) return "";
+  const [h, m] = ini.split(":").map(Number);
+  const t = h * 60 + m + (Number(dur) || 120);
   return `${String(Math.floor(t / 60) % 24).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
 }
 // "09:00 às 11:00" — usado na agenda, no portal e nas confirmações
-export const faixaHorario = (time, dur) => (time ? `${time} às ${fimDaAula(time, dur)}` : "");
+export const faixaHorario = (time, dur) => {
+  const ini = hhmm(time);
+  return ini ? `${ini} às ${fimDaAula(ini, dur)}` : "";
+};
 export function waLink(phone, msg) {
   const p = (phone || "").replace(/\D/g, "");
   return "https://wa.me/55" + p + "?text=" + encodeURIComponent(msg || "");
@@ -168,9 +178,17 @@ export function isNewLead(data, booking) {
 /* ================= tipo da aula: reposição / aula extra =================
    O backend marca o tipo no paymentMethod ao criar a reserva:
    "Reposição" = consumiu crédito do MakeupCredit · "Avulsa" = aula extra paga. */
+// Esquema de cores da agenda por tipo de aula:
+//   AZUL = reposição · VERMELHO = 1ª aula (experimental) · VERDE = aula extra
+export const BOOKING_KINDS = {
+  reposicao: { key: "reposicao", label: "Reposição", ic: "🔁", cls: "b-info",   color: "var(--info)" },
+  primeira:  { key: "primeira",  label: "1ª aula",    ic: "🎟️", cls: "b-danger", color: "var(--danger)" },
+  extra:     { key: "extra",     label: "Aula extra", ic: "✨", cls: "b-ok",     color: "var(--green-mid)" },
+};
 export const bookingKind = (b) =>
-  b.paymentMethod === "Reposição" ? { key: "reposicao", label: "Reposição", ic: "🔁", cls: "b-warn" }
-  : b.paymentMethod === "Avulsa" ? { key: "extra", label: "Aula extra", ic: "✨", cls: "b-terra" }
+  b.paymentMethod === "Reposição" ? BOOKING_KINDS.reposicao
+  : b.paymentMethod === "Matrícula" ? BOOKING_KINDS.primeira
+  : b.paymentMethod === "Avulsa" ? BOOKING_KINDS.extra
   : null;
 
 // Reservas do horário INCLUINDO canceladas (a agenda mostra quem desmarcou).

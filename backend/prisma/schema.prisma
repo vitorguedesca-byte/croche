@@ -169,6 +169,7 @@ model Settings {
   units            String @default("[\"Ipatinga\",\"Timóteo\"]") @db.VarChar(1000) // JSON
   profs            String @default("[\"Inêz\",\"Equipe FQC\"]") @db.VarChar(1000) // JSON
   horarioFunc      String @default("Seg a Sáb, 09h às 17h") @db.VarChar(1000) // texto legado OU JSON com horário por dia da semana
+  horarioUnidades  String? @db.Text // JSON: { "Ipatinga": ["HH:MM-HH:MM",...], ... } — horário por unidade cadastrada
   pixKey           String @default("") @db.VarChar(255)
   pixName          String @default("") @db.VarChar(255)
   mensalidadeValor Float  @default(0)   // legado: usado só quando o aluno não tem plano 1x/2x
