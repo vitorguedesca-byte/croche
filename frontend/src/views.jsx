@@ -248,14 +248,14 @@ export function Agenda() {
           {Object.keys(STATUS).map((k) => <span key={k} className="lg"><span className="lgdot" style={{ background: STATUS[k].dot }} />{STATUS[k].label}</span>)}
         </div>
       </div>
-      {view === "month" && <MonthView ref0={ref} agSlots={agSlots} open={open} data={data} />}
+      {view === "month" && <MonthView ref0={ref} agSlots={agSlots} open={open} data={data} unit={unit} />}
       {view === "week" && <WeekView ref0={ref} agSlots={agSlots} unit={unit} />}
       {view === "list" && <ListView data={data} unit={unit} open={open} ref0={ref} />}
     </div>
   );
 }
 
-function MonthView({ ref0, agSlots, open, data }) {
+function MonthView({ ref0, agSlots, open, data, unit }) {
   const refd = new Date(ref0 + "T00:00");
   const y = refd.getFullYear(), m = refd.getMonth(), t = todayISO();
   const firstISO = new Date(y, m, 1).toISOString().slice(0, 10);
@@ -276,7 +276,7 @@ function MonthView({ ref0, agSlots, open, data }) {
     const dots = slots.slice(0, 8).map((s) => <span key={s.id} className="m-dot" style={{ background: slotOccupancy(data, s.id) ? unitColor(s.unit) : "var(--line)", width: 7, height: 7, borderRadius: "50%" }} />);
     const more = slots.length > 3 ? <div className="m-more">+{slots.length - 3} mais</div> : null;
     cells.push(
-      <div key={i} className={`m-cell ${out ? "out" : ""} ${date === t ? "today" : ""}`} onClick={() => open(<DayModal date={date} />)}>
+      <div key={i} className={`m-cell ${out ? "out" : ""} ${date === t ? "today" : ""}`} onClick={() => open(<DayModal date={date} unit={unit} />)}>
         <span className="dn">{dd.getDate()}</span>{evs}{more}<div className="m-dots">{dots}</div>
       </div>
     );
@@ -491,7 +491,7 @@ export function Clientes({ params }) {
         <span className="count">{list.length} de {groups[tab].length}</span>
       </div>
       {list.length ? (
-        <table><thead><tr><th>{tab === "lead" ? "Contato" : "Aluno"}</th><th>Unidade</th><th>Nível</th><th>Etiquetas</th><th>Aulas</th><th>Presença</th><th></th></tr></thead><tbody>
+        <table><thead><tr><th>{tab === "lead" ? "Contato" : "Aluno"}</th><th>Unidade</th><th>Etiquetas</th><th>Aulas</th><th>Presença</th><th></th></tr></thead><tbody>
           {list.map((c) => {
             const cnt = cntOf(c);
             const at = clientAttendance(data, c.name);
@@ -511,7 +511,6 @@ export function Clientes({ params }) {
                   </div>
                 </td>
                 <td><span className="chip">{c.unit}</span></td>
-                <td>{c.level ? <span className="chip">{c.level}</span> : <span className="cli-sub">—</span>}</td>
                 <td><div className="tags">{(c.tags || []).length ? c.tags.map((t) => <span key={t} className="chip">{t}</span>) : <span className="cli-sub">—</span>}</div></td>
                 <td>{cnt}</td>
                 <td><span className="badge b-ok" title="Presenças">✓ {at.pres}</span>{at.falt ? <> <span className="badge b-danger" title="Faltas">✕ {at.falt}</span></> : null}</td>

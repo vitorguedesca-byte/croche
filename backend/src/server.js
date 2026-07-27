@@ -1018,7 +1018,10 @@ app.post("/api/portal/:key/absence/:bookingId", wrap(async (req, res) => {
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const b = await prisma.booking.findUnique({ where: { id: Number(req.params.bookingId) } });
   if (!b || b.clientName !== client.name) return res.status(404).json({ error: "Aula não encontrada." });
-  const r = await liberarAula(client, b, { absenceReason: String(req.body.reason || "").slice(0, 500) });
+  // Sempre grava um motivo: sem texto, fica o registro de que ela avisou —
+  // é isso que diferencia "avisou que não vem" de "cancelou" na tela dela.
+  const reason = String(req.body.reason || "").trim().slice(0, 500) || "Avisou que não poderá ir";
+  const r = await liberarAula(client, b, { absenceReason: reason });
   res.json({ ok: true, ...r });
 }));
 

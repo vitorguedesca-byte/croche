@@ -158,6 +158,11 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   const ativos = data.bookings.filter((b) => b.status !== "cancelada");
   const prox = ativos.filter((b) => b.date >= t).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const passadas = ativos.filter((b) => b.date < t).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  // Aulas que ela liberou (cancelou ou avisou que não vai): continuam visíveis
+  // para ela ter certeza de que o aviso foi registrado.
+  const liberadas = data.bookings
+    .filter((b) => b.status === "cancelada" && b.date >= t)
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const nome = ((data.client && data.client.name) || "").split(" ")[0] || "aluno(a)";
   const meta = data.meta || {};
   const valorAvulsa = meta.valorAvulsa ?? 40;
@@ -277,6 +282,25 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
             )}
           </div>
         )) : <div className="pt-empty">Você não tem aulas marcadas.<br />Toque em <b>Marcar nova aula</b> para começar. 🧶</div>}
+
+        {liberadas.length > 0 && (<>
+          <h2 className="pt-h2">Aulas que você liberou</h2>
+          {liberadas.map((b) => {
+            const avisou = !!(b.absenceReason || "").trim();
+            return (
+              <div className="pt-aula pt-liberada" key={b.id}>
+                <div className="pt-when"><b>{fmtDateLong(b.date)}</b><span>{b.time} · {b.unit}</span></div>
+                <div className={`pt-status ${avisou ? "avisou" : "cancelada"}`}>
+                  {avisou ? "🔔 Você avisou que não poderá ir" : "✕ Aula cancelada por você"}
+                </div>
+                {avisou && b.absenceReason !== "Avisou que não poderá ir" && (
+                  <div className="pt-lib-motivo">“{b.absenceReason}”</div>
+                )}
+                <div className="pt-lib-ok">✓ Registrado — a Inêz já foi avisada e a vaga ficou livre.</div>
+              </div>
+            );
+          })}
+        </>)}
 
         {passadas.length > 0 && (<>
           <h2 className="pt-h2">Aulas anteriores</h2>

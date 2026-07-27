@@ -199,6 +199,22 @@
   .wd-chip:hover{border-color:var(--green-deep)}
   .wd-chip.on{background:var(--green-deep);color:#fff;border-color:var(--green-deep)}
 
+  /* Agendar em lote — cartões das turmas existentes */
+  .bb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.6rem;margin-top:.3rem}
+  .bb-card{position:relative;text-align:left;background:#fff;border:1.5px solid var(--line);border-radius:12px;padding:.7rem .75rem;cursor:pointer;transition:.14s;font-family:inherit}
+  .bb-card:hover:not(:disabled){border-color:var(--green-deep);box-shadow:var(--shadow);transform:translateY(-1px)}
+  .bb-card.on{border-color:var(--uc,var(--green-deep));background:rgba(45,90,61,.06);box-shadow:0 0 0 2px rgba(45,90,61,.12)}
+  .bb-card.off,.bb-card:disabled{opacity:.45;cursor:not-allowed}
+  .bb-top{display:flex;align-items:baseline;gap:.4rem;margin-bottom:.25rem}
+  .bb-dia{font-family:'Fraunces',serif;font-size:1.05rem;font-weight:700;color:var(--green-deep)}
+  .bb-hora{font-size:.95rem;font-weight:800;color:var(--ink)}
+  .bb-check{margin-left:auto;color:var(--green-deep);font-weight:900}
+  .bb-prof{font-size:.72rem;color:var(--muted);margin-bottom:.4rem}
+  .bb-vagas{margin-bottom:.4rem}
+  .bb-foot{font-size:.75rem;color:var(--muted);line-height:1.35}
+  .bb-foot b{color:var(--ink);font-size:.85rem}
+  .bb-skip{font-size:.68rem;color:var(--muted);opacity:.85}
+
   /* Agenda calendar */
   .agenda{display:grid;grid-template-columns:repeat(var(--cols,5),1fr);gap:.6rem}
   .day-col{background:var(--offwhite);border:1px solid var(--line);border-radius:12px;padding:.5rem;min-height:120px}
@@ -496,6 +512,13 @@
   .pt-btn-danger{flex:1;min-width:120px;background:#fff;border:2px solid var(--danger);color:var(--danger);border-radius:12px;padding:.9rem;font-weight:800;font-size:1.02rem;cursor:pointer}
   .pt-btn-danger:hover{background:var(--danger);color:#fff}
   .pt-past{border-left-color:var(--beige);opacity:.92}
+  /* Aulas liberadas pela aluna (cancelou ou avisou que não vai) */
+  .pt-status.avisou{background:rgba(217,164,65,.18);color:#9a7011}
+  .pt-status.cancelada{background:rgba(198,74,60,.14);color:#a03b2e}
+  .pt-liberada{border-left-color:var(--warn);background:rgba(217,164,65,.05)}
+  .pt-liberada .pt-when b{text-decoration:line-through;opacity:.75}
+  .pt-lib-motivo{margin-top:.55rem;font-size:.95rem;font-style:italic;color:var(--brown);background:var(--cream);border-radius:10px;padding:.5rem .75rem}
+  .pt-lib-ok{margin-top:.55rem;font-size:.88rem;font-weight:700;color:#1f6b3a}
   .pt-empty{background:#fff;border:1px dashed var(--line);border-radius:14px;padding:1.7rem;text-align:center;color:var(--muted);font-size:1.08rem;line-height:1.55}
   .pt-day{margin-bottom:1.3rem}
   .pt-day-h{font-family:'Fraunces',serif;color:var(--green-deep);font-size:1.2rem;text-transform:capitalize;margin-bottom:.6rem}
@@ -728,3 +751,4 @@
   /* agenda — cor por tipo de aula (azul reposição · vermelho 1ª aula · verde extra) */
   .ls-al.kinded{border-left:3px solid var(--kc);padding-left:.5rem;border-radius:0 6px 6px 0}
   .lg-sep{width:1px;align-self:stretch;background:var(--line);margin:0 .2rem}
+  .day-sub{font-size:.85rem;color:var(--muted);font-weight:600}

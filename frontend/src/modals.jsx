@@ -73,19 +73,22 @@ export function SlotCard({ slot, showUnit }) {
 }
 
 /* ======================= Modal do dia ======================= */
-export function DayModal({ date }) {
+export function DayModal({ date, unit = "Todas" }) {
   const { data } = useStore();
   const { open, close } = useModal();
-  const slots = data.slots.filter((s) => s.date === date).sort((a, b) => a.time.localeCompare(b.time));
+  const todas = unit === "Todas";
+  const slots = data.slots
+    .filter((s) => s.date === date && (todas || s.unit === unit))
+    .sort((a, b) => a.time.localeCompare(b.time));
   const title = capitalize(new Date(date + "T00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" }));
   return (
-    <Modal title={title} footer={<>
+    <Modal title={title} subheader={!todas ? <div className="day-sub">📍 Unidade: <b>{unit}</b></div> : undefined} footer={<>
       <button className="btn ghost" onClick={close}>Fechar</button>
-      <button className="btn" onClick={() => open(<SlotForm presetDate={date} />)}>＋ Novo horário</button>
+      <button className="btn" onClick={() => open(<SlotForm presetDate={date} presetUnit={unit} />)}>＋ Novo horário</button>
     </>}>
       {slots.length
-        ? <div className="day-view" style={{ maxWidth: "none" }}>{slots.map((s) => <SlotCard key={s.id} slot={s} showUnit />)}</div>
-        : <div className="empty"><div className="ic">🧶</div><p>Nenhum horário cadastrado neste dia.</p></div>}
+        ? <div className="day-view" style={{ maxWidth: "none" }}>{slots.map((s) => <SlotCard key={s.id} slot={s} showUnit={todas} />)}</div>
+        : <div className="empty"><div className="ic">🧶</div><p>Nenhum horário{todas ? "" : ` de ${unit}`} cadastrado neste dia.</p></div>}
     </Modal>
   );
 }
@@ -156,7 +159,7 @@ export function SlotDetail({ slotId }) {
 
   return (
     <Modal title={`Turma — ${faixaHorario(slot.time, data.meta?.duracaoAulaMin)}`} footer={<>
-      <button className="btn ghost" onClick={() => open(<DayModal date={slot.date} />)}>← Voltar ao dia</button>
+      <button className="btn ghost" onClick={() => open(<DayModal date={slot.date} unit={slot.unit} />)}>← Voltar ao dia</button>
       <div style={{ flex: 1 }} />
       <button className="btn sec" onClick={saveCap}>Salvar capacidade</button>
       {full
@@ -541,11 +544,11 @@ function WeekdayChips({ selected, onToggle }) {
 }
 
 /* ======================= Novo horário (com recorrência) ======================= */
-export function SlotForm({ presetDate }) {
+export function SlotForm({ presetDate, presetUnit }) {
   const { data, run } = useStore();
   const { close } = useModal();
   const meta = data.meta;
-  const [unit, setUnit] = useState(meta.units[0]);
+  const [unit, setUnit] = useState(presetUnit && presetUnit !== "Todas" ? presetUnit : meta.units[0]);
   const [prof, setProf] = useState(""); // vazio por padrão — a instrutora é escolhida a cada horário
   const [date, setDate] = useState(presetDate || todayISO());
   const [time, setTime] = useState("09:00");
@@ -865,7 +868,6 @@ export function ClientProfile({ client, initialTab }) {
           <div><span className="k">Telefone</span><span className="v">{c.phone || "—"}</span></div>
           {c.cpf ? <div><span className="k">CPF</span><span className="v">{c.cpf}</span></div> : null}
           {c.email ? <div><span className="k">Email</span><span className="v">{c.email}</span></div> : null}
-          <div><span className="k">Nível</span><span className="v">{c.level || "—"}</span></div>
           <div><span className="k">Aniversário</span><span className="v">{c.birthday ? "🎂 " + fmtDate(c.birthday) : "—"}</span></div>
           <div><span className="k">Plano</span><span className="v">{planoLabel(c, data.meta)}</span></div>
           <div><span className="k">Portal (PIN)</span><span className="v">{c.hasPin ? <span className="badge b-ok">cadastrado</span> : <span className="badge b-muted">sem PIN</span>}</span></div>
@@ -1203,55 +1205,158 @@ export function BatchBookForm({ client }) {
   const { open, close } = useModal();
   const meta = data.meta;
   const [unit, setUnit] = useState(client.unit || meta.units[0]);
-  const [time, setTime] = useState("09:00");
-  const [weekdays, setWeekdays] = useState(() => new Set());
   const [weeks, setWeeks] = useState(4);
+  // turmas escolhidas: chave "dow|HH:MM"
+  const [picked, setPicked] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
-  const toggleWd = (i) => setWeekdays((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
 
-  const dates = weekdays.size ? datesForWeekdays(todayISO(), [...weekdays], weeks) : [];
-  // pré-visualização: quantas dessas datas já têm turma nessa unidade/horário
-  const comTurma = dates.filter((d) => data.slots.some((s) => s.date === d && s.time === time && s.unit === unit));
+  const t = todayISO();
+
+  /* Turmas recorrentes que EXISTEM nesta unidade: agrupadas por dia da semana + horário.
+     Para cada grupo mostramos, dentro do período escolhido, quantas datas dão certo
+     e quantas seriam puladas (lotada / já agendada). */
+  const grupos = (() => {
+    const map = new Map();
+    data.slots
+      .filter((s) => s.unit === unit && s.date >= t)
+      .forEach((s) => {
+        const dow = dowMon(s.date);
+        const key = `${dow}|${s.time}`;
+        if (!map.has(key)) map.set(key, { key, dow, time: s.time, slots: [] });
+        map.get(key).slots.push(s);
+      });
+
+    const minhas = data.bookings.filter((b) => b.clientName === client.name && b.status !== "cancelada");
+
+    return [...map.values()]
+      .map((g) => {
+        const noPeriodo = new Set(datesForWeekdays(t, [g.dow], weeks));
+        const relevantes = g.slots.filter((s) => noPeriodo.has(s.date));
+        let ok = 0, cheias = 0, jaAgendadas = 0;
+        relevantes.forEach((s) => {
+          if (minhas.some((b) => b.date === s.date && b.time === s.time && b.unit === s.unit)) jaAgendadas++;
+          else if (slotBookings(data, s.id).length >= slotCapacity(s)) cheias++;
+          else ok++;
+        });
+        // vagas da próxima ocorrência, para dar uma noção de lotação
+        const prox = relevantes.sort((a, b) => a.date.localeCompare(b.date))[0];
+        const proxVagas = prox ? slotCapacity(prox) - slotBookings(data, prox.id).length : null;
+        const proxCap = prox ? slotCapacity(prox) : null;
+        const prof = prox?.prof || g.slots[0]?.prof || "";
+        return { ...g, total: relevantes.length, ok, cheias, jaAgendadas, prox, proxVagas, proxCap, prof, datas: relevantes.map((s) => s.date) };
+      })
+      .filter((g) => g.total > 0)
+      .sort((a, b) => a.dow - b.dow || a.time.localeCompare(b.time));
+  })();
+
+  const toggle = (key) => setPicked((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  const escolhidos = grupos.filter((g) => picked.has(g.key));
+  const totalAgendar = escolhidos.reduce((n, g) => n + g.ok, 0);
 
   const save = async () => {
-    if (!dates.length) return toast("Marque ao menos um dia da semana.", "error");
+    if (!escolhidos.length) return toast("Escolha ao menos uma turma.", "error");
     setBusy(true);
     try {
-      const r = await run(api.batchBook(client.id, { unit, time, dates }));
-      const p = r?.pulos || {};
+      // a API agenda um horário por chamada — agrupamos as datas por horário
+      const porHorario = new Map();
+      escolhidos.forEach((g) => {
+        if (!porHorario.has(g.time)) porHorario.set(g.time, []);
+        porHorario.get(g.time).push(...g.datas);
+      });
+      let agendadas = 0;
+      const p = { semTurma: 0, cheia: 0, jaAgendado: 0 };
+      for (const [time, datas] of porHorario) {
+        const r = await run(api.batchBook(client.id, { unit, time, dates: [...new Set(datas)] }));
+        agendadas += r?.agendadas ?? 0;
+        const rp = r?.pulos || {};
+        p.semTurma += rp.semTurma || 0; p.cheia += rp.cheia || 0; p.jaAgendado += rp.jaAgendado || 0;
+      }
       close();
       toast(
-        `✅ ${r?.agendadas ?? 0} aula(s) agendada(s).\n` +
-        `Puladas: ${p.semTurma || 0} sem turma · ${p.cheia || 0} lotada(s) · ${p.jaAgendado || 0} já agendada(s).`
+        `✅ ${agendadas} aula(s) agendada(s).\n` +
+        `Puladas: ${p.semTurma} sem turma · ${p.cheia} lotada(s) · ${p.jaAgendado} já agendada(s).`
       );
     } finally { setBusy(false); }
   };
 
+  const uc = unitColor(unit);
+
   return (
     <Modal title={`Agendar em lote — ${client.name}`} footer={<>
       <button className="btn ghost" onClick={() => open(<ClientProfile client={client} />)}>← Voltar</button>
-      <button className="btn" onClick={save} disabled={busy || !comTurma.length}>Agendar {comTurma.length} aula(s)</button>
+      <button className="btn" onClick={save} disabled={busy || !totalAgendar}>Agendar {totalAgendar} aula(s)</button>
     </>}>
       <div className="cfg-preview" style={{ marginTop: 0, marginBottom: "1rem" }}>
-        Agenda o(a) mensalista <b>{client.name}</b> nas turmas <b>já existentes</b> que baterem com o dia/horário. Não cria turmas novas.
+        Escolha abaixo as <b>turmas que já existem</b> em que o(a) mensalista <b>{client.name}</b> vai entrar. Não cria turmas novas.
       </div>
+
       <div className="row2">
-        <div className="field"><label>Unidade</label><select value={unit} onChange={(e) => setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
-        <div className="field"><label>Horário</label><input type="time" value={hhmm(time)} onChange={(e) => setTime(e.target.value)} /></div>
+        <div className="field">
+          <label>Unidade</label>
+          <select value={unit} onChange={(e) => { setUnit(e.target.value); setPicked(new Set()); }}>
+            {meta.units.map((u) => <option key={u}>{u}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label>Por quantas semanas</label>
+          <input type="number" min="1" max="52" value={weeks}
+            onChange={(e) => setWeeks(Math.max(1, Math.min(52, parseInt(e.target.value, 10) || 1)))} />
+        </div>
       </div>
+
       <div className="field">
-        <label>Dias da semana</label>
-        <WeekdayChips selected={weekdays} onToggle={toggleWd} />
+        <label>Turmas disponíveis em {unit} <span className="cfg-count">{grupos.length}</span></label>
+        {grupos.length === 0 ? (
+          <div className="empty" style={{ padding: "1.6rem 1rem" }}>
+            <div className="ic">🧶</div>
+            <p>Nenhuma turma cadastrada em <b>{unit}</b> nas próximas {weeks} semana(s).<br />
+              Crie os horários na Agenda antes de agendar em lote.</p>
+          </div>
+        ) : (
+          <div className="bb-grid">
+            {grupos.map((g) => {
+              const on = picked.has(g.key);
+              const lotadaSempre = g.ok === 0;
+              return (
+                <button key={g.key} type="button"
+                  className={`bb-card ${on ? "on" : ""} ${lotadaSempre ? "off" : ""}`}
+                  style={on ? { "--uc": uc } : undefined}
+                  onClick={() => !lotadaSempre && toggle(g.key)}
+                  disabled={lotadaSempre}>
+                  <div className="bb-top">
+                    <span className="bb-dia">{WEEKDAYS_SHORT[g.dow]}</span>
+                    <span className="bb-hora">{hhmm(g.time)}</span>
+                    {on && <span className="bb-check">✓</span>}
+                  </div>
+                  {g.prof && <div className="bb-prof">com {g.prof}</div>}
+                  <div className="bb-vagas">
+                    {g.proxVagas != null && (
+                      <span className={`badge ${g.proxVagas === 0 ? "b-danger" : g.proxVagas <= 1 ? "b-warn" : "b-ok"}`}>
+                        {g.proxVagas}/{g.proxCap} vaga(s)
+                      </span>
+                    )}
+                  </div>
+                  <div className="bb-foot">
+                    <b>{g.ok}</b> de {g.total} data(s) livre(s)
+                    {(g.cheias > 0 || g.jaAgendadas > 0) && (
+                      <div className="bb-skip">
+                        {g.cheias > 0 && <>· {g.cheias} lotada(s) </>}
+                        {g.jaAgendadas > 0 && <>· {g.jaAgendadas} já agendada(s)</>}
+                      </div>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
-      <div className="field">
-        <label>Por quantas semanas</label>
-        <input type="number" min="1" max="52" value={weeks} onChange={(e) => setWeeks(Math.max(1, parseInt(e.target.value, 10) || 1))} style={{ width: 90 }} />
-      </div>
-      <div className="help">
-        {weekdays.size
-          ? `${dates.length} data(s) no período · ${comTurma.length} com turma existente (serão agendadas). As demais são puladas.`
-          : "Marque os dias da semana para ver quantas aulas serão agendadas."}
-      </div>
+
+      {escolhidos.length > 0 && (
+        <div className="cfg-preview" style={{ marginTop: ".2rem" }}>
+          📅 {escolhidos.map((g) => `${WEEKDAYS_SHORT[g.dow]} ${hhmm(g.time)}`).join(" · ")} — <b>{totalAgendar} aula(s)</b> nas próximas {weeks} semana(s).
+        </div>
+      )}
     </Modal>
   );
 }
@@ -1270,7 +1375,6 @@ function useClientForm(client, onDone) {
   const [tags, setTags] = useState(client?.tags || []);
   const [notes, setNotes] = useState(client?.notes || "");
   const [birthday, setBirthday] = useState(client?.birthday || "");
-  const [level, setLevel] = useState(client?.level || "");
   const [firstClass, setFirstClass] = useState(client ? !!client.firstClass : true);
   const [status, setStatus] = useState(client?.status || "ativo");
   // Plano: "avulso" | "1" | "2" (mensalista 1x/2x por semana)
@@ -1279,7 +1383,7 @@ function useClientForm(client, onDone) {
 
   const save = async () => {
     if (!name.trim()) return toast("Informe o nome.", "error");
-    const payload = { name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: cpf.trim(), unit, tags, notes: notes.trim(), birthday, level, firstClass, status };
+    const payload = { name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: cpf.trim(), unit, tags, notes: notes.trim(), birthday, firstClass, status };
 
     const eraMensal = client?.plan === "mensalista";
     const querMensal = plano !== "avulso";
@@ -1309,7 +1413,7 @@ function useClientForm(client, onDone) {
   };
 
   return { meta, client, name, setName, phone, setPhone, email, setEmail, cpf, setCpf,
-    unit, setUnit, tags, toggle, notes, setNotes, birthday, setBirthday, level, setLevel,
+    unit, setUnit, tags, toggle, notes, setNotes, birthday, setBirthday,
     firstClass, setFirstClass, status, setStatus, plano, setPlano, save };
 }
 
@@ -1325,15 +1429,7 @@ function ClientFormFields({ f }) {
         <div className="field"><label>CPF <span style={{ color: "var(--muted)", fontWeight: 400 }}>(login do portal)</span></label><input value={f.cpf} onChange={(e) => f.setCpf(e.target.value)} placeholder="000.000.000-00" inputMode="numeric" /></div>
         <div className="field"><label>Email</label><input value={f.email} onChange={(e) => f.setEmail(e.target.value)} placeholder="aluno@email.com" inputMode="email" /></div>
       </div>
-      <div className="row2">
-        <div className="field"><label>Unidade</label><select value={f.unit} onChange={(e) => f.setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
-        <div className="field"><label>Nível de crochê</label>
-          <select value={f.level} onChange={(e) => f.setLevel(e.target.value)}>
-            <option value="">— não informado</option>
-            {["Iniciante", "Intermediário", "Avançado"].map((l) => <option key={l}>{l}</option>)}
-          </select>
-        </div>
-      </div>
+      <div className="field"><label>Unidade</label><select value={f.unit} onChange={(e) => f.setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
       <div className="row2">
         <div className="field"><label>Aniversário</label><input type="date" value={f.birthday} onChange={(e) => f.setBirthday(e.target.value)} /></div>
         <div className="field"><label>Primeira aula?</label>
