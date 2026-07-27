@@ -933,6 +933,8 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
   const occ = {}; ativas.forEach((b) => { occ[b.slotId] = (occ[b.slotId] || 0) + 1; });
   const available = slots
     .filter((s) => (occ[s.id] || 0) < (s.capacity || 1))
+    // Restringe à unidade da aluna, se cadastrada — Inêz pode alterar pelo painel admin
+    .filter((s) => !client.unit || s.unit === client.unit)
     .map((s) => ({ ...s, prof: s.prof || profFor(s.unit), occupancy: occ[s.id] || 0, free: (s.capacity || 1) - (occ[s.id] || 0) }));
   const makeup = await resumoReposicao(client);
   res.json({ client: safeClient(client), bookings, available, makeup, meta: { units: SETTINGS.units, valorPadrao: SETTINGS.valorPadrao, pixKey: SETTINGS.pixKey, pixName: SETTINGS.pixName } });
