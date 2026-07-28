@@ -773,14 +773,8 @@
   @media(max-width:1100px){ .prin{grid-template-columns:minmax(0,1fr)} }
 
   /* botão de atualizar (barra superior) */
-  .refresh-btn{display:inline-flex;align-items:center;gap:.4rem;background:#fff;border:1px solid var(--line);border-radius:10px;padding:.42rem .7rem;color:var(--muted);font-weight:700;font-size:.82rem;cursor:pointer;transition:.15s;white-space:nowrap}
-  .refresh-btn:hover:not(:disabled){color:var(--green-deep);border-color:var(--green-mid)}
-  .refresh-btn:disabled{cursor:default;opacity:.85}
-  .refresh-btn svg{flex-shrink:0;transition:.15s}
-  .refresh-btn.spin svg{animation:spin 1s linear infinite;color:var(--green-mid)}
-  .refresh-lbl{font-variant-numeric:tabular-nums}
+  /* o botão de atualizar saiu da barra do topo — a atualização é automática */
   @keyframes spin{to{transform:rotate(360deg)}}
-  @media(max-width:640px){ .refresh-lbl{display:none} .refresh-btn{padding:.42rem .55rem} }
 
   /* agenda — cor por tipo de aula (azul reposição · vermelho 1ª aula · verde extra) */
   .ls-al.kinded{border-left:3px solid var(--kc);padding-left:.5rem;border-radius:0 6px 6px 0}

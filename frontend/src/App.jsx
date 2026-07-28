@@ -12,30 +12,8 @@ import ClientPortal from "./ClientPortal.jsx";
 import FirstClassBooking from "./FirstClassBooking.jsx";
 import { Notifications } from "./Notifications.jsx";
 
-// Botão de atualizar + relógio de "atualizado há X". O painel também se
-// recarrega sozinho a cada 25s (ver store.jsx).
-function RefreshButton() {
-  const { reload, refreshing, lastUpdated } = useStore();
-  const [, tick] = useState(0);
-  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
-  const ago = () => {
-    if (!lastUpdated) return "—";
-    const s = Math.floor((Date.now() - lastUpdated) / 1000);
-    if (s < 5) return "agora";
-    if (s < 60) return `há ${s}s`;
-    const m = Math.floor(s / 60);
-    return `há ${m} min`;
-  };
-  return (
-    <button className={`refresh-btn ${refreshing ? "spin" : ""}`} onClick={() => reload()} disabled={refreshing}
-      title="Atualizar agora">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" />
-      </svg>
-      <span className="refresh-lbl">{refreshing ? "Atualizando…" : ago()}</span>
-    </button>
-  );
-}
+// O painel se atualiza sozinho a cada 25s e sempre que a aba volta ao foco
+// (ver store.jsx) — por isso não há botão de atualizar na barra do topo.
 
 // marca o aparelho como tablet da sala (quiosque), persistindo entre recargas
 const KIOSK_KEY = "fqc_kiosk";
@@ -137,7 +115,7 @@ export default function App() {
             <button className="menu-btn" onClick={() => setSidebarOpen((o) => !o)}>☰</button>
             <div><h1>{TITLES[view][0]}</h1><div className="sub">{TITLES[view][1]}</div></div>
           </div>
-          <div className="topbar-right">{actions[view]}<RefreshButton /><Notifications go={go} /></div>
+          <div className="topbar-right">{actions[view]}<Notifications go={go} /></div>
         </div>
         <div className="content">
           <Body go={go} params={viewParams} />
