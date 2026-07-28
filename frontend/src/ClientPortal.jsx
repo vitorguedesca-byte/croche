@@ -1,15 +1,23 @@
 import { useState, useEffect } from "react";
-import { toast, confirmModal } from "./toast.jsx";
+// "toast" abaixo é o aviso de erro global — apelidado porque o portal tem um
+// estado local com o mesmo nome (que antes escondia esta função e quebrava os
+// avisos de erro silenciosamente).
+import { toast as toastErro, confirmModal } from "./toast.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
 import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario } from "./helpers.js";
 
 const CPF_KEY = "fqc_portal_cpf";
-const INEZ_WA = "5531000000000"; // número da Inêz (ajustável)
+// WhatsApp da Inêz: (31) 98496-6403 — sem o "55", que o waLink já acrescenta
+const INEZ_WA = "31984966403";
 const getStored = () => { try { return localStorage.getItem(CPF_KEY) || ""; } catch { return ""; } };
 // chave do portal: prioriza CPF, cai para telefone, depois id
 const portalKey = (c) => (c?.cpf || "").replace(/\D/g, "") || (c?.phone || "").replace(/\D/g, "") || String(c?.id || "");
+
+// Dias inteiros entre duas datas 'YYYY-MM-DD' (sem fuso atrapalhar a conta)
+const diasEntre = (de, ate) =>
+  Math.round((new Date(ate + "T12:00:00Z") - new Date(de + "T12:00:00Z")) / 86400000);
 
 function statusText(b) {
   if (b.status === "aguardando") return "Aguardando pagamento";
@@ -61,6 +69,13 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   const [payBooking, setPayBooking] = useState(null);
   const [absenceFor, setAbsenceFor] = useState(null);
   const [absenceText, setAbsenceText] = useState("");
+  // Aulas que a aluna acabou de liberar nesta tela. A aula sai da lista na hora,
+  // sem depender do recarregamento — se a resposta do servidor demorar (ou vier
+  // atrasada), ela não fica olhando para uma aula que já cancelou.
+  const [liberadasAgora, setLiberadasAgora] = useState({});
+  // true = ela está escolhendo uma aula de reposição no calendário
+  const [repondo, setRepondo] = useState(false);
+  const marcarLiberada = (id, campos) => setLiberadasAgora((m) => ({ ...m, [id]: { status: "cancelada", ...campos } }));
 
   const load = async (p) => {
     setLoading(true); setErr("");
@@ -98,7 +113,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   const disconnect = () => {
     try { localStorage.removeItem(CPF_KEY); } catch {}
     setPhone(""); setData(null); setScreen("home"); setInput("");
-    setAuthStep("phone"); setPin(""); setPinConfirm(""); setErr("");
+    setAuthStep("phone"); setPin(""); setPinConfirm(""); setErr(""); setLiberadasAgora({});
   };
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 3500); };
 
@@ -155,17 +170,19 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
 
   /* ---------- conectado ---------- */
   const t = todayISO();
-  const ativos = data.bookings.filter((b) => b.status !== "cancelada");
+  // O que ela liberou agora vale por cima do que veio do servidor, até o
+  // recarregamento trazer o mesmo estado.
+  const bookings = data.bookings.map((b) => (liberadasAgora[b.id] ? { ...b, ...liberadasAgora[b.id] } : b));
+  const ativos = bookings.filter((b) => b.status !== "cancelada");
   const prox = ativos.filter((b) => b.date >= t).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const passadas = ativos.filter((b) => b.date < t).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
   // Aulas que ela liberou (cancelou ou avisou que não vai): continuam visíveis
   // para ela ter certeza de que o aviso foi registrado.
-  const liberadas = data.bookings
+  const liberadas = bookings
     .filter((b) => b.status === "cancelada" && b.date >= t)
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const nome = ((data.client && data.client.name) || "").split(" ")[0] || "aluno(a)";
   const meta = data.meta || {};
-  const valorAvulsa = meta.valorAvulsa ?? 40;
   const cliente = data.client || {};
   // quem já fez a experimental e ainda não virou mensalista vê o convite de continuar
   const podeConverter = cliente.plan !== "mensalista" && cliente.matriculaStatus !== "devolvida";
@@ -180,24 +197,31 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   const doCancel = async (b) => {
     if (!(await confirmModal({ title: "Cancelar aula", message: `Cancelar a sua aula de ${fmtDateLong(b.date)} às ${b.time}?\n\nA vaga ficará livre para outra pessoa.`, confirmLabel: "Cancelar aula", cancelLabel: "Voltar", tone: "danger" }))) return;
     setBusy(true);
-    try { const r = await api.portal.cancel(phone, b.id); flash(avisoLiberacao(r, "Aula cancelada.")); await load(phone); }
-    catch (e) { toast(e.message, "error"); } finally { setBusy(false); }
+    try {
+      const r = await api.portal.cancel(phone, b.id);
+      marcarLiberada(b.id, {});           // sai da lista na hora
+      setAbsenceFor((f) => (f === b.id ? null : f));
+      flash(avisoLiberacao(r, "Aula cancelada."));
+      await load(phone);
+    } catch (e) { toastErro(e.message, "error"); } finally { setBusy(false); }
   };
   const doAbsence = async (b) => {
     setBusy(true);
+    const motivo = absenceText.trim();
     try {
-      const r = await api.portal.absence(phone, b.id, absenceText.trim());
+      const r = await api.portal.absence(phone, b.id, motivo);
+      marcarLiberada(b.id, { absenceReason: motivo || "Avisou que não poderá ir" });
       flash(avisoLiberacao(r, "Aviso enviado. Obrigada por avisar! 💚"));
       setAbsenceFor(null); setAbsenceText("");
       await load(phone);
-    } catch (e) { toast(e.message, "error"); } finally { setBusy(false); }
+    } catch (e) { toastErro(e.message, "error"); } finally { setBusy(false); }
   };
   const doBook = async (slot) => {
-    const modo = screen === "repor" ? "repor" : screen === "extra" ? "extra" : "normal";
+    // A aula extra saiu daqui: agora é pedida no WhatsApp e marcada pela Inêz.
+    const modo = repondo ? "repor" : "normal";
     const quando = `${slot.unit}\n${fmtDateLong(slot.date)} às ${slot.time}`;
     const cfg = {
       repor: { title: "Confirmar reposição", message: `Usar 1 crédito de reposição nesta aula?\n\n${quando}`, confirmLabel: "Usar crédito", okMsg: "Reposição marcada! Te espero lá. 💚" },
-      extra: { title: "Confirmar aula extra", message: `Marcar uma aula extra por ${money(valorAvulsa)}?\n\n${quando}\n\nO pagamento é feito à parte da sua mensalidade.`, confirmLabel: `Marcar por ${money(valorAvulsa)}`, okMsg: "Aula extra marcada! Toque em “Pagar reserva” para confirmar. 💚" },
       normal: { title: "Confirmar marcação", message: `Marcar aula em ${quando}?`, confirmLabel: "Marcar", okMsg: "Aula marcada! Toque em “Pagar reserva” para confirmar. 💚" },
     }[modo];
     if (!(await confirmModal({ title: cfg.title, message: cfg.message, confirmLabel: cfg.confirmLabel }))) return;
@@ -205,8 +229,13 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
     try {
       await api.portal.book(phone, slot.id, data.client && data.client.name, modo);
       flash(cfg.okMsg);
-      setScreen("home"); await load(phone);
-    } catch (e) { toast(e.message, "error"); } finally { setBusy(false); }
+      setRepondo(false); setScreen("home"); await load(phone);
+    } catch (e) { toastErro(e.message, "error"); } finally { setBusy(false); }
+  };
+  // Leva a aluna até o calendário (que agora é onde se marca a aula)
+  const irParaAgenda = () => {
+    setScreen("home");
+    setTimeout(() => document.getElementById("pt-agenda")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
   };
   const openPay = (b) => { setPayBooking(b); setScreen("pay"); };
 
@@ -227,36 +256,51 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
         </div>
       </div>
 
-      {screen === "book" || screen === "repor" || screen === "extra" ? (
-        <BookScreen data={data} busy={busy} modo={screen} onBack={() => setScreen("home")} onBook={doBook} />
-      ) : screen === "enroll" ? (
+      {screen === "enroll" ? (
         <EnrollScreen data={data} phone={phone} busy={busy} setBusy={setBusy} flash={flash} kiosk={kiosk}
           onBack={() => setScreen("home")} onDone={async () => { setScreen("home"); await load(phone); }} />
       ) : screen === "pay" && payBooking ? (
         <PaymentScreen booking={payBooking} meta={data.meta || {}} onBack={() => setScreen("home")} flash={flash} />
       ) : (<>
+        <ProximaAulaCard booking={prox[0]} meta={meta} />
+
         <div className="pt-actions">
-          <button className="pt-big" onClick={() => setScreen("book")}>📅<span>Marcar nova aula</span></button>
+          <button className="pt-big" onClick={() => { setRepondo(false); irParaAgenda(); }}>📅<span>Marcar nova aula</span></button>
           <a className="pt-big pt-big-wa" href={waLink(INEZ_WA, `Olá Inêz! Sou ${(data.client && data.client.name) || ""} e gostaria de falar sobre as minhas aulas. 💚`)} target="_blank" rel="noreferrer"><WaIcon size={26} /><span>Falar com a Inêz</span></a>
         </div>
 
         {podeConverter && <ContinuarCard cliente={cliente} meta={meta} onContinuar={() => setScreen("enroll")} />}
 
-        <RepoCard makeup={data.makeup} onRepor={() => setScreen("repor")} />
+        <RepoCard makeup={data.makeup} onRepor={() => { setRepondo(true); irParaAgenda(); }} />
 
+        {/* Aula extra: por enquanto é combinada no WhatsApp e a Inêz marca pelo
+            painel — a aluna não escolhe o horário sozinha nem paga por aqui. */}
         {cliente.plan === "mensalista" && cliente.status !== "cancelado" && (
           <div className="pt-repo" style={{ borderLeftColor: "var(--green-mid)" }}>
             <div className="pt-repo-top">
               <div>
                 <div className="pt-repo-t">➕ Aula extra</div>
-                <div className="pt-sub2">Quer praticar mais? Marque uma aula avulsa por <b>{money(valorAvulsa)}</b>, além das do seu plano.</div>
+                <div className="pt-sub2">Quer praticar mais, além das aulas do seu plano? Chame a Inêz no WhatsApp que ela marca para você.</div>
               </div>
             </div>
-            <button className="pt-btn" style={{ marginTop: ".8rem" }} onClick={() => setScreen("extra")}>Marcar aula extra</button>
+            <a className="pt-btn pt-btn-wa" style={{ marginTop: ".8rem" }} target="_blank" rel="noreferrer"
+              href={waLink(INEZ_WA, `Olá Inêz! Sou ${(data.client && data.client.name) || ""} e gostaria de marcar uma aula extra. 💚`)}>
+              <WaIcon size={20} /> Pedir aula extra no WhatsApp
+            </a>
           </div>
         )}
 
-        <MiniAgenda bookings={ativos} unit={data.client && data.client.unit} />
+        <MiniAgenda
+          bookings={ativos}
+          available={data.available}
+          unit={data.client && data.client.unit}
+          meta={meta}
+          busy={busy}
+          modo={repondo ? "repor" : "normal"}
+          saldo={(data.makeup && data.makeup.saldo) || 0}
+          onBook={doBook}
+          onSairRepor={() => setRepondo(false)}
+        />
 
         <h2 className="pt-h2">Minhas próximas aulas</h2>
         {prox.length ? prox.map((b) => (
@@ -362,14 +406,25 @@ function PaymentScreen({ booking, meta, onBack, flash }) {
   </>);
 }
 
-function MiniAgenda({ bookings, unit }) {
+/* Calendário do portal: consulta e marcação no mesmo lugar.
+   Cada dia mostra se ela tem aula e se sobrou vaga; ao tocar no dia, aparecem
+   as aulas dela e os horários livres para marcar. */
+function MiniAgenda({ bookings, available, unit, meta, busy, modo, saldo, onBook, onSairRepor }) {
+  const t = todayISO();
   const [off, setOff] = useState(0);
+  const [dia, setDia] = useState(null);
+
+  const aulasPorDia = {};
+  bookings.forEach((b) => { (aulasPorDia[b.date] = aulasPorDia[b.date] || []).push(b); });
+  const vagasPorDia = {};
+  (available || []).forEach((s) => { (vagasPorDia[s.date] = vagasPorDia[s.date] || []).push(s); });
+  Object.values(vagasPorDia).forEach((a) => a.sort((x, y) => x.time.localeCompare(y.time)));
+  Object.values(aulasPorDia).forEach((a) => a.sort((x, y) => x.time.localeCompare(y.time)));
+
   const base = new Date();
   base.setDate(1);
   base.setMonth(base.getMonth() + off);
-  const y = base.getFullYear(), m = base.getMonth(), t = todayISO();
-  const byDate = {};
-  bookings.forEach((b) => { (byDate[b.date] = byDate[b.date] || []).push(b); });
+  const y = base.getFullYear(), m = base.getMonth();
   const firstISO = new Date(y, m, 1).toISOString().slice(0, 10);
   const startDow = (new Date(firstISO + "T00:00").getDay() + 6) % 7;
   const gridStart = addDays(firstISO, -startDow);
@@ -379,31 +434,94 @@ function MiniAgenda({ bookings, unit }) {
     const date = addDays(gridStart, i);
     const dd = new Date(date + "T00:00");
     const out = dd.getMonth() !== m;
-    const has = byDate[date];
-    const future = date >= t;
+    // dias de outro mês ficam só de enfeite na grade: sem marca e sem clique
+    const minhas = out ? null : aulasPorDia[date];
+    const vagas = !out && date >= t ? vagasPorDia[date] : null;
+    const clicavel = !!(minhas || vagas);
+    const titulo = [
+      minhas ? `Sua aula: ${minhas.map((b) => b.time).join(", ")}` : "",
+      vagas ? `${vagas.length} horário(s) com vaga` : "",
+    ].filter(Boolean).join(" · ");
     cells.push(
-      <div className={`mini-cell ${out ? "out" : ""} ${date === t ? "today" : ""}`} key={i} title={has ? `${has.length} aula(s) · ${has.map((b) => b.time).join(", ")}` : ""}>
+      <div
+        className={`mini-cell ${out ? "out" : ""} ${date === t ? "today" : ""} ${clicavel ? "clicavel" : ""} ${dia === date ? "sel" : ""}`}
+        key={i} title={titulo}
+        role={clicavel ? "button" : undefined} tabIndex={clicavel ? 0 : undefined}
+        onClick={clicavel ? () => setDia(dia === date ? null : date) : undefined}
+        onKeyDown={clicavel ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setDia(dia === date ? null : date); } } : undefined}
+      >
         <span>{dd.getDate()}</span>
-        {has ? <span className={`mini-dot ${future ? "up" : "past"}`} /> : null}
+        <span className="mini-marks">
+          {minhas ? <span className={`mini-dot ${date >= t ? "up" : "past"}`} /> : null}
+          {vagas ? <span className="mini-dot livre" /> : null}
+        </span>
       </div>
     );
   }
   const label = base.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+  const minhasDoDia = dia ? aulasPorDia[dia] || [] : [];
+  const vagasDoDia = dia && dia >= t ? vagasPorDia[dia] || [] : [];
+  const repondo = modo === "repor";
+
   return (
-    <div className="mini-agenda">
+    <div className="mini-agenda" id="pt-agenda">
       <div className="mini-head">
-        <button className="mini-nav" onClick={() => setOff(off - 1)} aria-label="Mês anterior">←</button>
+        <button className="mini-nav" onClick={() => { setOff(off - 1); setDia(null); }} aria-label="Mês anterior">←</button>
         <b>Minha agenda{unit ? ` · ${unit}` : ""} — {label.charAt(0).toUpperCase() + label.slice(1)}</b>
-        <button className="mini-nav" onClick={() => setOff(off + 1)} aria-label="Próximo mês">→</button>
+        <button className="mini-nav" onClick={() => { setOff(off + 1); setDia(null); }} aria-label="Próximo mês">→</button>
       </div>
+
+      {repondo && (
+        <div className="mini-repo-aviso">
+          🔁 Escolhendo a sua <b>aula de reposição</b> — você tem {saldo} crédito{saldo === 1 ? "" : "s"}.
+          <button className="pt-link" onClick={onSairRepor}>Deixar para depois</button>
+        </div>
+      )}
+
       <div className="mini-grid">
         {dows.map((d, i) => <div className="mini-dow" key={i}>{d}</div>)}
         {cells}
       </div>
       <div className="mini-legend">
-        <span><span className="mini-dot up" /> Próxima aula</span>
+        <span><span className="mini-dot up" /> Sua aula</span>
         <span><span className="mini-dot past" /> Aula realizada</span>
+        <span><span className="mini-dot livre" /> Tem vaga</span>
       </div>
+
+      {dia ? (
+        <div className="mini-dia">
+          <div className="mini-dia-h">{fmtDateLong(dia)}</div>
+          {minhasDoDia.length > 0 && (
+            <div className="mini-dia-bloco">
+              <div className="mini-dia-t">Sua aula neste dia</div>
+              {minhasDoDia.map((b) => (
+                <div className="mini-minha" key={b.id}>
+                  <b>{faixaHorario(b.time, meta.duracaoAulaMin)}</b>
+                  <span>{b.unit}{b.prof ? ` · com ${b.prof}` : ""} · {statusText(b)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="mini-dia-bloco">
+            <div className="mini-dia-t">{vagasDoDia.length ? "Horários com vaga" : "Sem vaga livre neste dia"}</div>
+            {vagasDoDia.length ? (
+              <div className="mini-vagas">
+                {vagasDoDia.map((s) => (
+                  <button className="pt-time" key={s.id} onClick={() => onBook(s)} disabled={busy}>
+                    {faixaHorario(s.time, meta.duracaoAulaMin)}
+                    <small>{s.unit} · com {s.prof} · {s.free} vaga{s.free === 1 ? "" : "s"}</small>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="pt-sub2">Toque em outro dia marcado com o ponto verde ou fale com a Inêz. 💚</div>
+            )}
+          </div>
+          <button className="pt-link" onClick={() => setDia(null)}>Fechar o dia</button>
+        </div>
+      ) : (
+        <div className="mini-dica">Toque em um dia do calendário para ver a sua aula e os horários com vaga.</div>
+      )}
     </div>
   );
 }
@@ -536,6 +654,34 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
   </>);
 }
 
+/* Contagem para a próxima aula — o primeiro cartão que ela vê ao entrar. */
+function ProximaAulaCard({ booking, meta }) {
+  if (!booking) {
+    return (
+      <div className="pt-next pt-next-off">
+        <div className="pt-next-l">Nenhuma aula marcada</div>
+        <div className="pt-next-d">Escolha um dia no calendário abaixo e garanta a sua vaga. 🧶</div>
+      </div>
+    );
+  }
+  const dias = diasEntre(todayISO(), booking.date);
+  const chamada = dias <= 0 ? "É hoje!" : dias === 1 ? "É amanhã!" : `Faltam ${dias} dias`;
+  const complemento = dias <= 0 ? "Te espero lá! 💚" : dias === 1 ? "Já pode separar o material. 💚" : "Se programe! 💚";
+  return (
+    <div className="pt-next">
+      <div className="pt-next-n">{dias <= 0 ? "hoje" : dias}</div>
+      <div>
+        <div className="pt-next-l">{chamada} para a sua próxima aula</div>
+        <div className="pt-next-d">
+          <b>{fmtDateLong(booking.date)}</b> · {faixaHorario(booking.time, meta.duracaoAulaMin)}
+          {booking.unit ? <> · 📍 {booking.unit}</> : null}
+        </div>
+        <div className="pt-next-s">{complemento}</div>
+      </div>
+    </div>
+  );
+}
+
 /* Saldo e regras de reposição — só aparece para quem é mensalista. */
 function RepoCard({ makeup, onRepor }) {
   const [abrir, setAbrir] = useState(false);
@@ -546,6 +692,9 @@ function RepoCard({ makeup, onRepor }) {
   const { saldo, elegivel, motivo, regras } = makeup;
   const disponiveis = (makeup.creditos || []).filter((c) => c.situacao === "disponivel");
   const proximo = disponiveis.map((c) => c.expiresOn).sort()[0];
+  // Mesmo com crédito na mão, são no máximo 2 reposições dentro do mesmo mês.
+  const mes = makeup.mes || {};
+  const noLimite = (mes.restantes ?? regras.maxPorMes) <= 0;
 
   return (
     <div className="pt-repo">
@@ -560,11 +709,14 @@ function RepoCard({ makeup, onRepor }) {
               : motivo}
           </div>
           {elegivel && proximo && <div className="pt-sub2">Usar até <b>{fmtDate(proximo)}</b>.</div>}
+          {elegivel && saldo > 0 && noLimite && (
+            <div className="pt-sub2">Você já marcou as <b>{regras.maxPorMes} reposições deste mês</b>. Guarde o crédito para o mês que vem ou fale com a Inêz. 💚</div>
+          )}
         </div>
         <div className={`pt-repo-n ${saldo > 0 && elegivel ? "on" : ""}`}>{elegivel ? saldo : "—"}</div>
       </div>
 
-      {elegivel && saldo > 0 && (
+      {elegivel && saldo > 0 && !noLimite && (
         <button className="pt-btn" style={{ marginTop: ".8rem" }} onClick={onRepor}>Marcar aula de reposição</button>
       )}
 
@@ -576,7 +728,7 @@ function RepoCard({ makeup, onRepor }) {
           <li>A reposição não é obrigatória e não temos vagas reservadas para ela.</li>
           <li>A vaga só existe quando outra aluna libera a aula dela com antecedência.</li>
           <li>Para o seu aviso virar crédito: avise com no mínimo <b>{regras.horasMin} horas</b> de antecedência. Se a aula for de manhã (antes das {regras.manhaAte}), avise até <b>23:59 do dia anterior</b>.</li>
-          <li>São até <b>{regras.maxPorMes} reposições por mês</b>, mesmo que você libere mais aulas.</li>
+          <li>São até <b>{regras.maxPorMes} reposições por mês</b>: no máximo {regras.maxPorMes} créditos por mês e no máximo {regras.maxPorMes} aulas de reposição marcadas dentro do mesmo mês.</li>
           <li>O crédito vale até o <b>fim do mês seguinte</b> ao da aula que você liberou.</li>
           <li>É preciso estar com o curso em dia — mensalidade paga e inscrição ativa.</li>
         </ul>
@@ -585,32 +737,6 @@ function RepoCard({ makeup, onRepor }) {
   );
 }
 
-function BookScreen({ data, busy, modo, onBack, onBook }) {
-  const meta = data.meta || {};
-  const byDay = {};
-  data.available.forEach((s) => { (byDay[s.date] = byDay[s.date] || []).push(s); });
-  const days = Object.keys(byDay).sort();
-  const saldo = (data.makeup && data.makeup.saldo) || 0;
-  const titulo = { repor: "Escolha a aula de reposição", extra: "Escolha a aula extra", book: "Horários disponíveis" }[modo];
-  const ajuda = {
-    repor: <>Você tem <b>{saldo}</b> crédito{saldo === 1 ? "" : "s"}. Estes são os horários com vaga livre hoje — não há vaga reservada para reposição.</>,
-    extra: <>Aula avulsa de <b>{money(meta.valorAvulsa ?? 40)}</b>, cobrada à parte da mensalidade. Não usa crédito de reposição.</>,
-    book: "Toque no horário que você quer marcar.",
-  }[modo];
-  return (<>
-    <button className="pt-link" onClick={onBack}>← Voltar</button>
-    <h2 className="pt-h2">{titulo}</h2>
-    <p className="pt-sub2" style={{ marginBottom: "1rem" }}>{ajuda}</p>
-    {days.length ? days.map((d) => (
-      <div className="pt-day" key={d}>
-        <div className="pt-day-h">{fmtDateLong(d)}</div>
-        {byDay[d].map((s) => (
-          <button className="pt-slot" key={s.id} onClick={() => onBook(s)} disabled={busy}>
-            <div><b>{faixaHorario(s.time, meta.duracaoAulaMin)}</b><span> · {s.unit} · com {s.prof}</span></div>
-            <span className="pt-vagas">{s.free} vaga{s.free === 1 ? "" : "s"}</span>
-          </button>
-        ))}
-      </div>
-    )) : <div className="pt-empty">Não há horários livres no momento.<br />Fale com a Inêz no WhatsApp. 💚</div>}
-  </>);
-}
+/* A antiga tela de lista de horários saiu: a marcação passou a acontecer no
+   próprio calendário (MiniAgenda), sem trocar de tela — assim o "voltar" nunca
+   tira a aluna do portal. */

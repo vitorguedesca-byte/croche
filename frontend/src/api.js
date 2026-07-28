@@ -15,6 +15,9 @@ async function req(method, url, body) {
   const res = await fetch(url, {
     method,
     headers,
+    // sem cache: depois de cancelar/marcar uma aula, a tela precisa ler o estado
+    // novo do servidor, nunca uma resposta guardada pelo navegador
+    cache: "no-store",
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {

@@ -467,6 +467,9 @@
   .pt-btn{background:var(--green-deep);color:#fff;border:none;border-radius:14px;font-weight:800;font-size:1.2rem;padding:1.05rem 1.4rem;width:100%;margin-top:1.4rem;cursor:pointer;transition:.15s}
   .pt-btn:hover{background:var(--green-mid)}
   .pt-btn:disabled{opacity:.6;cursor:default}
+  /* botão do WhatsApp dentro de um card (ex.: pedir aula extra) */
+  .pt-btn-wa{background:#25D366;display:flex;align-items:center;justify-content:center;gap:.6rem;text-decoration:none;box-sizing:border-box;font-size:1.1rem}
+  .pt-btn-wa:hover{background:#1eb558}
   .pt-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1.6rem;gap:1rem}
   .pt-hello{font-family:'Fraunces',serif;font-size:1.8rem;color:var(--green-deep)}
   .pt-sub2{color:var(--muted);font-size:1.02rem}
@@ -480,8 +483,17 @@
   .pt-big-wa{background:#25D366}
   .pt-big-wa:hover{background:#1eb558}
 
+  /* contagem para a próxima aula (topo do portal) */
+  .pt-next{display:flex;align-items:center;gap:1.1rem;background:var(--cream);border:1px solid var(--line);border-left:6px solid var(--terracota);border-radius:16px;padding:1.1rem 1.2rem;margin-bottom:1.4rem}
+  .pt-next-n{flex:none;min-width:74px;height:74px;border-radius:16px;background:var(--terracota);color:#fff;display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-size:2.1rem;font-weight:600;line-height:1;padding:0 .5rem;text-align:center}
+  .pt-next-l{font-family:'Fraunces',serif;font-size:1.25rem;color:var(--green-deep);line-height:1.2}
+  .pt-next-d{color:var(--ink);margin-top:.35rem;font-size:1.02rem;line-height:1.45}
+  .pt-next-s{color:var(--muted);margin-top:.25rem;font-size:.95rem}
+  .pt-next-off{border-left-color:var(--beige)}
+  .pt-next-off .pt-next-l{color:var(--brown)}
+
   /* mini agenda do portal */
-  .mini-agenda{background:#fff;border:1px solid var(--line);border-radius:16px;padding:1.1rem 1.2rem;margin-bottom:1.8rem}
+  .mini-agenda{background:#fff;border:1px solid var(--line);border-radius:16px;padding:1.1rem 1.2rem;margin-bottom:1.8rem;scroll-margin-top:1rem}
   .mini-head{display:flex;justify-content:space-between;align-items:center;gap:.6rem;margin-bottom:.8rem}
   .mini-head b{font-family:'Fraunces',serif;font-weight:500;color:var(--green-deep);font-size:1.05rem;text-align:center;line-height:1.2}
   .mini-nav{width:40px;height:40px;flex:none;border-radius:11px;border:1px solid var(--line);background:#fff;font-size:1.15rem;color:var(--brown);cursor:pointer}
@@ -495,9 +507,29 @@
   .mini-dot{width:8px;height:8px;border-radius:50%;display:block}
   .mini-dot.up{background:var(--green-mid)}
   .mini-dot.past{background:var(--beige)}
-  .mini-legend{display:flex;gap:1.4rem;justify-content:center;margin-top:.9rem;font-size:.92rem;color:var(--muted)}
+  .mini-dot.livre{background:var(--terracota)}
+  .mini-marks{display:flex;gap:3px;min-height:8px;align-items:center}
+  /* dia clicável: tem aula dela ou vaga livre */
+  .mini-cell.clicavel{cursor:pointer;border:1px solid var(--line);background:#fff}
+  .mini-cell.clicavel:hover{border-color:var(--green-mid);background:rgba(140,154,120,.08)}
+  .mini-cell.sel{background:var(--green-deep);border-color:var(--green-deep)}
+  .mini-cell.sel span{color:#fff}
+  .mini-cell.sel .mini-dot.past{background:#fff}
+  .mini-legend{display:flex;gap:1.2rem;justify-content:center;flex-wrap:wrap;margin-top:.9rem;font-size:.92rem;color:var(--muted)}
   .mini-legend span{display:inline-flex;align-items:center;gap:.4rem}
   .mini-legend .mini-dot{width:10px;height:10px}
+  .mini-dica{margin-top:.9rem;text-align:center;color:var(--muted);font-size:.95rem}
+  .mini-repo-aviso{background:var(--cream);border:1px solid var(--line);border-radius:12px;padding:.7rem .9rem;margin-bottom:.8rem;font-size:.98rem;color:var(--brown);line-height:1.4}
+  .mini-repo-aviso .pt-link{margin-left:.5rem;font-size:.95rem}
+  /* painel do dia escolhido */
+  .mini-dia{margin-top:1rem;border-top:1px solid var(--line);padding-top:1rem}
+  .mini-dia-h{font-family:'Fraunces',serif;font-size:1.15rem;color:var(--green-deep);margin-bottom:.7rem}
+  .mini-dia-bloco{margin-bottom:1rem}
+  .mini-dia-t{font-size:.78rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:.5rem}
+  .mini-minha{background:var(--cream);border-left:4px solid var(--green-mid);border-radius:10px;padding:.6rem .8rem;margin-bottom:.5rem;line-height:1.4}
+  .mini-minha span{display:block;color:var(--muted);font-size:.93rem}
+  .mini-vagas{display:flex;flex-wrap:wrap;gap:.6rem}
+  .mini-vagas .pt-time:disabled{opacity:.5;cursor:default}
   .pt-h2{font-family:'Fraunces',serif;font-weight:500;color:var(--green-deep);font-size:1.5rem;margin:1.7rem 0 .9rem}
   .pt-aula{background:#fff;border:1px solid var(--line);border-left:6px solid var(--green-mid);border-radius:14px;padding:1.1rem 1.2rem;margin-bottom:.9rem}
   .pt-aula .pt-when b{font-size:1.22rem;color:var(--ink);text-transform:capitalize;display:block;line-height:1.25}
@@ -634,7 +666,9 @@
   .pt-pin-box{width:58px;height:66px;text-align:center;font-size:1.8rem;font-weight:800;border:2px solid var(--line);border-radius:14px;color:var(--ink);background:#fff}
   .pt-pin-box:focus{outline:none;border-color:var(--green-mid)}
 
-  @media(max-width:520px){ .pt-actions{grid-template-columns:1fr} .pt-card{padding:1.4rem} .pt-big{font-size:1.3rem} .pt-tab{font-size:1rem;padding:.85rem .5rem} }
+  @media(max-width:520px){ .pt-actions{grid-template-columns:1fr} .pt-card{padding:1.4rem} .pt-big{font-size:1.3rem} .pt-tab{font-size:1rem;padding:.85rem .5rem}
+    .pt-next{gap:.85rem;padding:1rem} .pt-next-n{min-width:60px;height:60px;font-size:1.7rem} .pt-next-l{font-size:1.12rem}
+    .mini-agenda{padding:.9rem .7rem} .mini-cell{font-size:.95rem} .mini-vagas .pt-time{flex:1 1 100%} }
 
   /* ===== Agenda: alunas dentro do horário ===== */
   .sc-roster{display:flex;flex-direction:column;gap:.18rem;margin-top:.3rem}

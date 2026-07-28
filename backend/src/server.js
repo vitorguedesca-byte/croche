@@ -77,7 +77,10 @@ app.use((req, res, next) => {
   return res.status(401).json({ error: "Acesso restrito ao painel. Faça login." });
 });
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
+// "hoje" pelo relógio de Brasília (o servidor pode rodar em UTC): com
+// toISOString, das 21h à meia-noite o dia já virava e as aulas da noite eram
+// tratadas como passadas. ('sv-SE' formata como YYYY-MM-DD.)
+const todayISO = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
 function addDays(iso, n) {
   const d = new Date(iso + "T00:00");
   d.setDate(d.getDate() + n);
@@ -110,7 +113,10 @@ async function occupancy(slotId) {
       - aula antes das 10:00 → até 23:59 do dia anterior;
       - demais horários      → no mínimo 6 horas antes.
    3. No máximo 2 créditos por mês (competência da aula liberada), mesmo que
-      a aluna libere 3 ou mais.
+      a aluna libere 3 ou mais — e, do outro lado, no máximo 2 aulas de
+      reposição MARCADAS dentro do mesmo mês. Sem esse segundo teto, quem
+      juntasse créditos do mês anterior (que valem até o fim do mês seguinte)
+      conseguiria repor 4 vezes num mês só.
    4. O crédito vale até o fim do mês seguinte ao da aula liberada.
    5. Só para mensalista ativa e com mensalidade em dia.
    6. Quem rompe com o curso (status "cancelado") não ganha nem usa crédito. */
@@ -167,12 +173,28 @@ async function elegivelReposicao(client) {
 
 const creditoValido = (t) => ({ usedBookingId: null, expiresOn: { gte: t } });
 
+// Quantas aulas de reposição a aluna já tem marcadas no mês 'YYYY-MM'.
+// Conta pela data da aula reposta (é assim que ela enxerga "duas por mês");
+// aula cancelada não conta, então liberar a reposição devolve a vaga do mês.
+async function reposicoesNoMes(client, comp) {
+  return prisma.booking.count({
+    where: {
+      clientName: client.name,
+      paymentMethod: "Reposição",
+      status: { not: "cancelada" },
+      date: { gte: `${comp}-01`, lte: `${comp}-31` },
+    },
+  });
+}
+
 // Saldo + histórico, já classificando cada crédito para a tela
 async function resumoReposicao(client) {
   const t = todayISO();
-  const [eleg, creditos] = await Promise.all([
+  const compAtual = t.slice(0, 7);
+  const [eleg, creditos, marcadasNoMes] = await Promise.all([
     elegivelReposicao(client),
     prisma.makeupCredit.findMany({ where: { clientId: client.id }, orderBy: { createdAt: "desc" } }),
+    reposicoesNoMes(client, compAtual),
   ]);
   const marcados = creditos.map((c) => ({
     ...c,
@@ -183,6 +205,12 @@ async function resumoReposicao(client) {
     motivo: eleg.motivo,
     saldo: marcados.filter((c) => c.situacao === "disponivel").length,
     creditos: marcados,
+    // teto do mês corrente, para a tela avisar antes de a aluna tentar marcar
+    mes: {
+      competencia: compAtual,
+      marcadas: marcadasNoMes,
+      restantes: Math.max(0, REPO_MAX_MES - marcadasNoMes),
+    },
     regras: {
       maxPorMes: REPO_MAX_MES,
       horasMin: REPO_HORAS_MIN,
@@ -235,6 +263,13 @@ async function marcarReposicao(client, slotId) {
   const slot = await prisma.slot.findUnique({ where: { id: Number(slotId) } });
   if (!slot) throw Object.assign(new Error("Horário não encontrado."), { code: 404 });
   if (slot.date < t) throw Object.assign(new Error("Não dá para repor em uma aula que já passou."), { code: 400 });
+  // Teto de reposições dentro do mês da aula escolhida
+  const compAula = slot.date.slice(0, 7);
+  if ((await reposicoesNoMes(client, compAula)) >= REPO_MAX_MES)
+    throw Object.assign(
+      new Error(`Você já tem ${REPO_MAX_MES} aulas de reposição marcadas em ${compPorExtenso(compAula)}. Escolha uma data do mês seguinte ou fale com a Inêz.`),
+      { code: 409 }
+    );
   const dup = await prisma.booking.findFirst({
     where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } },
   });
@@ -258,8 +293,10 @@ async function marcarReposicao(client, slotId) {
   return booking;
 }
 
-/* Aula extra avulsa: caminho separado da reposição — sempre paga, não consome
-   nem gera crédito. Nasce "aguardando" para a aluna pagar. */
+/* Aula extra: caminho separado da reposição — não consome nem gera crédito.
+   Por ora é combinada no WhatsApp e marcada pela Inêz no painel, como cortesia:
+   nasce confirmada, com valor 0, para a aluna não ver cobrança no portal.
+   (Para voltar a cobrar, é só trocar por status "aguardando" + SETTINGS.valorAvulsa.) */
 async function marcarAulaExtra(client, slotId) {
   if (client.status === "cancelado")
     throw Object.assign(new Error("Inscrição cancelada. Fale com a Inêz."), { code: 403 });
@@ -277,8 +314,8 @@ async function marcarAulaExtra(client, slotId) {
     data: {
       clientName: client.name, phone: client.phone || "", unit: slot.unit,
       date: slot.date, time: slot.time, prof: slot.prof || profFor(slot.unit),
-      slotId: slot.id, status: "aguardando", value: SETTINGS.valorAvulsa, paid: false,
-      paymentMethod: "Avulsa",
+      slotId: slot.id, status: "confirmada", value: 0, paid: true,
+      paymentMethod: "Avulsa", paymentDate: t,
     },
   });
 }

@@ -30,7 +30,10 @@ export function unitSoft(u) {
   return c.startsWith("#") ? c + "30" : "rgba(0,0,0,.05)";
 }
 
-export const todayISO = () => new Date().toISOString().slice(0, 10);
+// "hoje" pelo relógio de Brasília, não pelo UTC: com toISOString, das 21h à
+// meia-noite o sistema já achava que era o dia seguinte e a aula da noite
+// sumia das "próximas aulas". ('sv-SE' formata como YYYY-MM-DD.)
+export const todayISO = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
 export function addDays(iso, n) {
   const d = new Date(iso + "T00:00");
   d.setDate(d.getDate() + n);

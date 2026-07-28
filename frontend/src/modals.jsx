@@ -1087,9 +1087,16 @@ function MakeupBlock({ client }) {
   const saldo = creditos.filter((m) => m.situacao === "disponivel").length;
   // espelha elegivelReposicao do backend, só para a tela avisar antes de tentar
   const emAtraso = (data.invoices || []).some((i) => i.clientId === client.id && i.status === "pendente" && i.dueDate < t);
+  // teto de 2 reposições marcadas dentro do mês corrente (o backend também barra)
+  const comp = t.slice(0, 7);
+  const reposNoMes = (data.bookings || []).filter(
+    (b) => b.clientName === client.name && b.paymentMethod === "Reposição" && b.status !== "cancelada" && (b.date || "").slice(0, 7) === comp
+  ).length;
+  const noLimite = reposNoMes >= 2;
   const bloqueio = client.status === "cancelado"
     ? "Inscrição cancelada — sem direito a reposição."
-    : emAtraso ? "Mensalidade em atraso — sem direito a reposição." : "";
+    : emAtraso ? "Mensalidade em atraso — sem direito a reposição."
+    : noLimite ? `Já são ${reposNoMes} reposições marcadas neste mês — o limite é 2.` : "";
 
   const rotulo = { disponivel: ["b-ok", "disponível"], usado: ["b-muted", "usado"], expirado: ["b-danger", "expirou"] };
 
@@ -1099,7 +1106,7 @@ function MakeupBlock({ client }) {
         <b style={{ color: "var(--brown)" }}>🔁 Reposição · {saldo} crédito(s)</b>
         <div style={{ display: "flex", gap: ".4rem", flexWrap: "wrap" }}>
           <button className="btn ghost sm" onClick={() => open(<ExtraBookForm client={client} />)}>
-            ➕ Aula extra ({money(data.meta?.valorAvulsa ?? 40)})
+            ➕ Aula extra
           </button>
           <button className="btn sec sm" disabled={!saldo || !!bloqueio} onClick={() => open(<MakeupBookForm client={client} />)}>
             Marcar reposição
@@ -1108,7 +1115,7 @@ function MakeupBlock({ client }) {
       </div>
       {bloqueio
         ? <div className="help" style={{ color: "var(--danger)" }}>{bloqueio}</div>
-        : <div className="help">Máx. 2 por mês; o crédito vale até o fim do mês seguinte ao da aula liberada.</div>}
+        : <div className="help">Máx. 2 créditos por mês e 2 reposições marcadas por mês ({reposNoMes}/2 neste mês); o crédito vale até o fim do mês seguinte ao da aula liberada.</div>}
       {creditos.length > 0 && (
         <div style={{ marginTop: ".6rem" }}>
           {creditos.slice(0, 6).map((m) => {
@@ -1175,7 +1182,7 @@ export function MakeupBookForm({ client }) {
     <SlotPicker
       client={client}
       titulo="Marcar reposição"
-      ajuda="Não há vaga reservada para reposição — aparecem só as turmas que já têm vaga livre."
+      ajuda="Não há vaga reservada para reposição — aparecem só as turmas que já têm vaga livre. Máximo de 2 reposições dentro do mesmo mês."
       confirmar={(s) => `Marcar ${client.name} em reposição?\n\n${s.unit}\n${fmtDateLong(s.date)} às ${s.time}\n\nIsso consome 1 crédito.`}
       acao={(s) => api.makeupBook(client.id, s.id)}
       sucesso="Reposição marcada. 💚"
@@ -1183,17 +1190,17 @@ export function MakeupBookForm({ client }) {
   );
 }
 
+// Aula extra: a aluna pede pelo WhatsApp e você marca aqui. Por enquanto é
+// cortesia — entra confirmada, sem cobrança e sem consumir crédito.
 export function ExtraBookForm({ client }) {
-  const { data } = useStore();
-  const valor = data.meta?.valorAvulsa ?? 40;
   return (
     <SlotPicker
       client={client}
       titulo="Marcar aula extra"
-      ajuda={`Aula avulsa de ${money(valor)}, cobrada à parte da mensalidade. Não usa crédito de reposição — a aula fica aguardando pagamento.`}
-      confirmar={(s) => `Marcar ${client.name} em uma aula extra de ${money(valor)}?\n\n${s.unit}\n${fmtDateLong(s.date)} às ${s.time}`}
+      ajuda="Aula além das do plano, combinada no WhatsApp. Por enquanto sem cobrança: entra já confirmada e não usa crédito de reposição."
+      confirmar={(s) => `Marcar ${client.name} em uma aula extra (sem cobrança)?\n\n${s.unit}\n${fmtDateLong(s.date)} às ${s.time}`}
       acao={(s) => api.extraBook(client.id, s.id)}
-      sucesso="Aula extra marcada — aguardando pagamento."
+      sucesso="Aula extra marcada. 💚"
     />
   );
 }
