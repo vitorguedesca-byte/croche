@@ -19,7 +19,7 @@ async function main() {
   await prisma.adminUser.create({
     data: {
       username: "inez",
-      pass: await bcrypt.hash("65432", 10),
+      pass: await bcrypt.hash("654321", 10),
     },
   });
 
