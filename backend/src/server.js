@@ -1590,7 +1590,7 @@ app.post("/api/admin/setup", wrap(async (req, res) => {
   const username = String(req.body.username || "").trim().toLowerCase();
   const password = String(req.body.password || "");
   if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
-  if (password.length < 6) return res.status(400).json({ error: "Senha deve ter ao menos 6 caracteres." });
+  if (password.length < 4) return res.status(400).json({ error: "Senha deve ter ao menos 4 caracteres." });
   await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10) } });
   hasAdmin = true;
   const token = genToken(); adminTokens.add(token);
@@ -1604,7 +1604,7 @@ app.post("/api/admin/register", wrap(async (req, res) => {
   const username = String(req.body.username || "").trim().toLowerCase();
   const password = String(req.body.password || "");
   if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
-  if (password.length < 6) return res.status(400).json({ error: "Senha deve ter ao menos 6 caracteres." });
+  if (password.length < 4) return res.status(400).json({ error: "Senha deve ter ao menos 4 caracteres." });
   if (await prisma.adminUser.findFirst({ where: { username } })) return res.status(409).json({ error: "Usuário já existe. Use o login." });
   await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10) } });
   hasAdmin = true;
@@ -1634,7 +1634,7 @@ app.post("/api/admin/users", wrap(async (req, res) => {
   const username = String(req.body.username || "").trim().toLowerCase();
   const password = String(req.body.password || "");
   if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
-  if (password.length < 6) return res.status(400).json({ error: "Senha deve ter ao menos 6 caracteres." });
+  if (password.length < 4) return res.status(400).json({ error: "Senha deve ter ao menos 4 caracteres." });
   if (await prisma.adminUser.findFirst({ where: { username } })) return res.status(409).json({ error: "Usuário já existe." });
   await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10) } });
   res.json({ ok: true, username });

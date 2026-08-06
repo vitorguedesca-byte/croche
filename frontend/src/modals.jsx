@@ -56,8 +56,8 @@ export function SlotCard({ slot, showUnit }) {
           {todas.slice(0, 5).map((b) => {
             const k = bookingKind(b);
             return (
-              <div key={b.id} className={`sc-al ${b.status === "cancelada" ? "canc" : ""}`} title={`${b.clientName} · ${STATUS[b.status].label}${k ? " · " + k.label : ""}`}>
-                <span className="sc-dot" style={{ background: k ? k.color : STATUS[b.status].dot }} />
+              <div key={b.id} className={`sc-al ${b.status === "cancelada" ? "canc" : ""}`} title={`${b.clientName}${k ? " · " + k.label : ""}`}>
+                <span className="sc-dot" style={{ background: k ? k.color : "var(--pink)" }} />
                 <span className="sc-nm">{b.clientName.split(" ")[0]}</span>
                 {k && <span className="sc-tag">{k.ic}</span>}
               </div>
@@ -190,7 +190,7 @@ export function SlotDetail({ slotId }) {
           <div className="rr-info">
             <b>{b.clientName}</b>
             {tag && <span className={`badge ${tag.cls} ml`}>{tag.label}</span>}
-            <div className="cli-sub">{b.phone || "sem telefone"} · {STATUS[b.status].label}</div>
+            <div className="cli-sub">{b.phone || "sem telefone"}</div>
           </div>
           <div className="att" title="Marcar presença">
             <button className={`att-btn ${b.attendance === "presente" ? "on-pres" : ""}`} onClick={() => mark(b, "presente")} title="Presente">✓</button>
@@ -495,17 +495,14 @@ export function BookingForm({ slotId }) {
       <div className="field"><label>Aluno existente</label>
         <select onChange={(e) => pickClient(e.target.value)}>
           <option value="">— Novo / digitar —</option>
-          {data.clients.map((c) => <option key={c.id} value={`${c.name}|${c.phone || ""}`}>{c.name} ({c.unit})</option>)}
+          {data.clients.map((c) => <option key={c.id} value={`${c.name}|${c.phone || ""}`}>{c.name}</option>)}
         </select>
       </div>
       <div className="row2">
         <div className="field"><label>Nome</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
         <div className="field"><label>Telefone (DDD)</label><input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="31988880000" /></div>
       </div>
-      <div className="row2">
-        <div className="field"><label>Unidade</label><select value={unit} onChange={(e) => setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
-        <div className="field"><label>Valor (R$)</label><input type="number" value={value} onChange={(e) => setValue(Number(e.target.value))} /></div>
-      </div>
+      <div className="field"><label>Unidade</label><select value={unit} onChange={(e) => setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
       <div className="row2">
         <div className="field"><label>{repetindo ? "Semana inicial (a partir de)" : "Data"}</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
         <div className="field"><label>Hora</label><input type="time" value={hhmm(time)} onChange={(e) => setTime(e.target.value)} /></div>
@@ -523,11 +520,11 @@ export function BookingForm({ slotId }) {
         )}
       </div>
 
-      <div className="help">
-        {repetindo
-          ? <>Serão criadas <b>{dates.length} marcações</b> às {time}, criando a turma quando ela ainda não existir. Turmas lotadas e aulas já marcadas são puladas.</>
-          : <>A marcação entra como <b>Aguardando pagamento</b>. Após confirmar o pagamento, ela vira <b>Confirmada</b> na agenda.</>}
-      </div>
+      {repetindo && (
+        <div className="help">
+          Serão criadas <b>{dates.length} marcações</b> às {time}, criando a turma quando ela ainda não existir. Turmas lotadas e aulas já marcadas são puladas.
+        </div>
+      )}
     </Modal>
   );
 }

@@ -27,7 +27,7 @@ export default function AdminLogin() {
     const u = username.trim();
     const isCreate = mode === "setup" || mode === "register";
     if (u.length < 3) return setErr("Usuário deve ter ao menos 3 caracteres.");
-    if (password.length < 6) return setErr("Senha deve ter ao menos 6 caracteres.");
+    if (password.length < 4) return setErr("Senha deve ter ao menos 4 caracteres.");
     if (isCreate && password !== password2) return setErr("As senhas não conferem.");
     setBusy(true);
     try {

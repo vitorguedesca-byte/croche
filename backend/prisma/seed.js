@@ -1,4 +1,5 @@
 import { prisma, UNITS, VALOR_PADRAO, CAPACITY_PADRAO, profFor } from "../src/prismaClient.js";
+import bcrypt from "bcryptjs";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 function addDays(iso, n) {
@@ -13,6 +14,14 @@ async function main() {
   await prisma.booking.deleteMany();
   await prisma.slot.deleteMany();
   await prisma.client.deleteMany();
+  await prisma.adminUser.deleteMany();
+
+  await prisma.adminUser.create({
+    data: {
+      username: "inez",
+      pass: await bcrypt.hash("65432", 10),
+    },
+  });
 
   const t = todayISO();
 

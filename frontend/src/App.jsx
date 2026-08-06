@@ -92,6 +92,7 @@ export default function App() {
 
   return (
     <div className="app">
+      {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="brand">
           <img src="/logo-1.PNG" alt="Fios que Curam" />
