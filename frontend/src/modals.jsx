@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Modal, useModal, StatusBadge } from "./ui.jsx";
 import { WaIcon } from "./icons.jsx";
 import { useStore } from "./store.jsx";
@@ -444,12 +444,157 @@ export function PaymentRegister() {
   );
 }
 
+/* ======================= Busca de Alunas (Combobox Autocomplete) ======================= */
+function getInitials(name) {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+export function StudentSearchCombobox({ clients, selectedClient, onSelect, onClear }) {
+  const [query, setQuery] = useState("");
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const filtered = (clients || []).filter((c) => {
+    if (!query.trim()) return true;
+    const q = query.toLowerCase().trim();
+    const qDigits = q.replace(/\D/g, "");
+    const nameMatch = (c.name || "").toLowerCase().includes(q);
+    const phoneMatch = qDigits ? (c.phone || "").replace(/\D/g, "").includes(qDigits) : false;
+    const unitMatch = (c.unit || "").toLowerCase().includes(q);
+    return nameMatch || phoneMatch || unitMatch;
+  });
+
+  if (selectedClient) {
+    return (
+      <div className="student-selected-card">
+        <div className="student-avatar">{getInitials(selectedClient.name)}</div>
+        <div className="student-info">
+          <div className="student-name">{selectedClient.name}</div>
+          <div className="student-meta">
+            {selectedClient.phone && <span>📱 {selectedClient.phone}</span>}
+            {selectedClient.unit && (
+              <span
+                className="student-unit-pill"
+                style={{ background: unitSoft(selectedClient.unit), color: unitColor(selectedClient.unit) }}
+              >
+                {selectedClient.unit}
+              </span>
+            )}
+          </div>
+        </div>
+        <button type="button" className="btn-trocar-aluna" onClick={onClear} title="Trocar aluna selecionada">
+          Trocar aluna ✕
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="student-search-container" ref={containerRef}>
+      <div className="student-search-input-wrap">
+        <span className="search-icon">🔍</span>
+        <input
+          type="text"
+          className="student-search-input"
+          placeholder="Buscar aluna por nome, telefone ou unidade..."
+          value={query}
+          onFocus={() => setIsOpen(true)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setIsOpen(true);
+          }}
+        />
+        {query && (
+          <button
+            type="button"
+            className="search-clear-btn"
+            onClick={() => setQuery("")}
+            title="Limpar busca"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+
+      {isOpen && (
+        <div className="student-search-dropdown">
+          <div className="student-dropdown-header">
+            Alunas cadastradas ({filtered.length})
+          </div>
+          <div className="student-dropdown-list">
+            {filtered.length === 0 ? (
+              <div className="student-dropdown-empty">
+                Nenhuma aluna encontrada para "{query}"
+              </div>
+            ) : (
+              filtered.slice(0, 12).map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className="student-dropdown-item"
+                  onClick={() => {
+                    onSelect(c);
+                    setIsOpen(false);
+                    setQuery("");
+                  }}
+                >
+                  <div className="student-avatar">{getInitials(c.name)}</div>
+                  <div className="student-item-details">
+                    <div className="student-item-name">{c.name}</div>
+                    <div className="student-item-sub">
+                      {c.phone && <span>📱 {c.phone}</span>}
+                      {c.unit && (
+                        <span
+                          className="student-unit-pill"
+                          style={{ background: unitSoft(c.unit), color: unitColor(c.unit) }}
+                        >
+                          {c.unit}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+          <div className="student-dropdown-footer">
+            <button
+              type="button"
+              className="student-manual-btn"
+              onClick={() => {
+                onClear();
+                setIsOpen(false);
+              }}
+            >
+              ＋ Digitar dados de nova aluna manualmente
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ======================= Nova marcação ======================= */
 export function BookingForm({ slotId }) {
   const { data, run } = useStore();
   const { close } = useModal();
   const slot = slotId ? slotById(data, slotId) : null;
   const meta = data.meta;
+  const [selectedClient, setSelectedClient] = useState(null);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [unit, setUnit] = useState(slot ? slot.unit : meta.units[0]);
@@ -463,13 +608,19 @@ export function BookingForm({ slotId }) {
   const dates = weekdays.size ? datesForWeekdays(date, [...weekdays], weeks) : [date];
   const repetindo = dates.length > 1;
 
-  const pickClient = (v) => {
-    if (!v) return;
-    const [n, p] = v.split("|");
-    setName(n); setPhone(p);
-    const c = data.clients.find((c) => c.name === n);
-    if (c && c.unit) setUnit(c.unit);
+  const handleSelectClient = (c) => {
+    setSelectedClient(c);
+    setName(c.name);
+    setPhone(c.phone || "");
+    if (c.unit) setUnit(c.unit);
   };
+
+  const handleClearClient = () => {
+    setSelectedClient(null);
+    setName("");
+    setPhone("");
+  };
+
   const save = async () => {
     if (!name.trim()) return toast("Informe o nome.", "error");
     const payload = { clientName: name.trim(), phone: phone.trim(), unit, value, date, time, slotId: slot && !repetindo ? slot.id : undefined };
@@ -485,6 +636,7 @@ export function BookingForm({ slotId }) {
       );
     }
   };
+
   return (
     <Modal title="Nova marcação" footer={<>
       <button className="btn ghost" onClick={close}>Cancelar</button>
@@ -492,37 +644,85 @@ export function BookingForm({ slotId }) {
         Salvar marcação{repetindo ? ` (${dates.length})` : ""}
       </button>
     </>}>
-      <div className="field"><label>Aluno existente</label>
-        <select onChange={(e) => pickClient(e.target.value)}>
-          <option value="">— Novo / digitar —</option>
-          {data.clients.map((c) => <option key={c.id} value={`${c.name}|${c.phone || ""}`}>{c.name}</option>)}
+      <div className="field">
+        <label>Buscar aluna cadastrada</label>
+        <StudentSearchCombobox
+          clients={data.clients}
+          selectedClient={selectedClient}
+          onSelect={handleSelectClient}
+          onClear={handleClearClient}
+        />
+      </div>
+      <div className="row2">
+        <div className="field">
+          <label>Nome</label>
+          <input
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              if (selectedClient && e.target.value !== selectedClient.name) {
+                setSelectedClient(null);
+              }
+            }}
+            placeholder="Nome da aluna"
+          />
+        </div>
+        <div className="field">
+          <label>Telefone (DDD)</label>
+          <input
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="31988880000"
+          />
+        </div>
+      </div>
+      <div className="field">
+        <label>Unidade</label>
+        <select value={unit} onChange={(e) => setUnit(e.target.value)}>
+          {meta.units.map((u) => <option key={u}>{u}</option>)}
         </select>
       </div>
       <div className="row2">
-        <div className="field"><label>Nome</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
-        <div className="field"><label>Telefone (DDD)</label><input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="31988880000" /></div>
-      </div>
-      <div className="field"><label>Unidade</label><select value={unit} onChange={(e) => setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
-      <div className="row2">
-        <div className="field"><label>{repetindo ? "Semana inicial (a partir de)" : "Data"}</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
-        <div className="field"><label>Hora</label><input type="time" value={hhmm(time)} onChange={(e) => setTime(e.target.value)} /></div>
+        <div className="field">
+          <label>{repetindo ? "Semana inicial (a partir de)" : "Data"}</label>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </div>
+        <div className="field">
+          <label>Hora</label>
+          <input type="time" value={hhmm(time)} onChange={(e) => setTime(e.target.value)} />
+        </div>
       </div>
 
       <div className="field">
-        <label>Repetir nos dias da semana <span className="help" style={{ fontWeight: 400 }}>(deixe em branco para marcar só na data)</span></label>
+        <label>
+          Repetir nos dias da semana{" "}
+          <span className="field-subtext">(deixe em branco para marcar só na data)</span>
+        </label>
         <WeekdayChips selected={weekdays} onToggle={toggleWd} />
         {weekdays.size > 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: ".6rem", marginTop: ".7rem" }}>
-            <span style={{ fontSize: ".85rem", color: "var(--muted)" }}>por</span>
-            <input type="number" min="1" max="52" value={weeks} onChange={(e) => setWeeks(Math.max(1, parseInt(e.target.value, 10) || 1))} style={{ width: 70 }} />
-            <span style={{ fontSize: ".85rem", color: "var(--muted)" }}>semana(s)</span>
+          <div className="repeat-weeks-row">
+            <span>por</span>
+            <input
+              type="number"
+              min="1"
+              max="52"
+              value={weeks}
+              onChange={(e) => setWeeks(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              className="weeks-input"
+            />
+            <span>semana(s)</span>
           </div>
         )}
       </div>
 
       {repetindo && (
-        <div className="help">
-          Serão criadas <b>{dates.length} marcações</b> às {time}, criando a turma quando ela ainda não existir. Turmas lotadas e aulas já marcadas são puladas.
+        <div className="repeat-info-box">
+          <div className="repeat-info-title">
+            <span>📅</span> <b>{dates.length} marcações recorrentes agendadas</b>
+          </div>
+          <div className="repeat-info-desc">
+            Serão criadas aulas às <b>{time}</b> a partir de <b>{fmtDate(date)}</b>. Turmas lotadas e aulas já marcadas serão puladas automaticamente.
+          </div>
         </div>
       )}
     </Modal>
@@ -533,9 +733,20 @@ export function BookingForm({ slotId }) {
 function WeekdayChips({ selected, onToggle }) {
   return (
     <div className="wd-chips">
-      {WEEKDAYS_SHORT.map((lbl, i) => (
-        <button key={lbl} type="button" className={`wd-chip ${selected.has(i) ? "on" : ""}`} onClick={() => onToggle(i)}>{lbl}</button>
-      ))}
+      {WEEKDAYS_SHORT.map((lbl, i) => {
+        const active = selected.has(i);
+        return (
+          <button
+            key={lbl}
+            type="button"
+            className={`wd-chip ${active ? "on" : ""}`}
+            onClick={() => onToggle(i)}
+          >
+            {active && <span className="chip-check">✓</span>}
+            {lbl}
+          </button>
+        );
+      })}
     </div>
   );
 }
