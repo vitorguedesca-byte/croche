@@ -1584,10 +1584,12 @@ app.get("/api/admin/exists", wrap(async (_req, res) => {
   res.json({ exists: n > 0 });
 }));
 
+const cleanUsername = (u) => String(u || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
 // Criar o PRIMEIRO administrador (só funciona enquanto não houver nenhum)
 app.post("/api/admin/setup", wrap(async (req, res) => {
   if ((await prisma.adminUser.count()) > 0) return res.status(409).json({ error: "Já existe um administrador. Use o login." });
-  const username = String(req.body.username || "").trim().toLowerCase();
+  const username = cleanUsername(req.body.username);
   const password = String(req.body.password || "");
   if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
   if (password.length < 4) return res.status(400).json({ error: "Senha deve ter ao menos 4 caracteres." });
@@ -1601,7 +1603,7 @@ app.post("/api/admin/setup", wrap(async (req, res) => {
 // Por enquanto: permite apenas 1 único usuário no sistema.
 app.post("/api/admin/register", wrap(async (req, res) => {
   if ((await prisma.adminUser.count()) > 0) return res.status(409).json({ error: "Já existe um acesso cadastrado. Use o login." });
-  const username = String(req.body.username || "").trim().toLowerCase();
+  const username = cleanUsername(req.body.username);
   const password = String(req.body.password || "");
   if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
   if (password.length < 4) return res.status(400).json({ error: "Senha deve ter ao menos 4 caracteres." });
@@ -1614,7 +1616,7 @@ app.post("/api/admin/register", wrap(async (req, res) => {
 
 // Login
 app.post("/api/admin/login", wrap(async (req, res) => {
-  const username = String(req.body.username || "").trim().toLowerCase();
+  const username = cleanUsername(req.body.username);
   const password = String(req.body.password || "");
   const user = await prisma.adminUser.findFirst({ where: { username } });
   if (!user || !(await bcrypt.compare(password, user.pass))) return res.status(401).json({ error: "Usuário ou senha inválidos." });
@@ -1631,7 +1633,7 @@ app.post("/api/admin/logout", wrap(async (req, res) => {
 
 // Adicionar novo usuário do painel (protegido — só admin logado) — equipe da Inêz
 app.post("/api/admin/users", wrap(async (req, res) => {
-  const username = String(req.body.username || "").trim().toLowerCase();
+  const username = cleanUsername(req.body.username);
   const password = String(req.body.password || "");
   if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
   if (password.length < 4) return res.status(400).json({ error: "Senha deve ter ao menos 4 caracteres." });
