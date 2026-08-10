@@ -89,7 +89,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const [email, setEmail] = useState("");
 
   const [booking, setBooking] = useState(null);
-  const [pix, setPix] = useState(null);   // { code } da Cora, ou null (fallback chave estática)
+  const [pix, setPix] = useState(null);   // { code } do Sicredi, ou null (fallback chave estática)
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 3800); };
@@ -107,7 +107,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
 
   const stepNum = { unit: 1, cal1: 2, pay: 3, done: 4 }[step];
 
-  // Passo 3: gera a cobrança da matrícula (Cora) e cria a reserva provisória
+  // Passo 3: gera a cobrança da matrícula (Sicredi) e cria a reserva provisória
   const gerarPix = async () => {
     if (!name.trim() || phone.replace(/\D/g, "").length < 10) return flash("Preencha seu nome e WhatsApp com DDD.");
     if (cpf.replace(/\D/g, "").length !== 11) return flash("Informe um CPF válido (11 números).");

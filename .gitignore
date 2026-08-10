@@ -7,7 +7,7 @@ node_modules/
 !.env.example
 
 # ===== Credenciais e certificados (NUNCA versionar) =====
-# Certificado + chave privada mTLS da CORA e afins
+# Certificado + chave privada mTLS do Sicredi e afins
 backend/certs/
 *.pem
 *.key

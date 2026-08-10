@@ -68,14 +68,15 @@ model Invoice {
   amountCents   Int      // valor em centavos
   dueDate       String   @db.VarChar(10) // 'YYYY-MM-DD'
   status        String   @default("pendente") @db.VarChar(20) // pendente | pago | cancelado
-  coraInvoiceId String?  @db.VarChar(80)
-  boletoUrl     String?  @db.VarChar(500)
+  txid          String?  @db.VarChar(40) // id da cobrança Pix no Sicredi (padrão BACEN)
+  boletoUrl     String?  @db.VarChar(500) // legado da Cora; Pix puro não gera boleto
   pixCode       String?  @db.Text
   paidAt        String?  @db.VarChar(30)
   createdAt     DateTime @default(now())
 
   @@index([clientId])
   @@index([competencia])
+  @@index([txid])
 }
 
 model Slot {
@@ -113,14 +114,15 @@ model Booking {
   paid          Boolean  @default(false)
   paymentMethod String?
   paymentDate   String?
-  coraInvoiceId String?  @db.VarChar(80) // id da cobrança na Cora
-  pixCode       String?  @db.Text // Pix copia-e-cola (EMV) devolvido pela Cora
-  boletoUrl     String?  @db.VarChar(500) // link do boleto/fatura na Cora
+  txid          String?  @db.VarChar(40) // id da cobrança Pix no Sicredi (padrão BACEN)
+  pixCode       String?  @db.Text // Pix copia-e-cola (EMV) devolvido pelo Sicredi
+  boletoUrl     String?  @db.VarChar(500) // legado da Cora; Pix puro não gera boleto
   createdAt     DateTime @default(now())
 
   @@index([slotId])
   @@index([date])
   @@index([seriesId])
+  @@index([txid])
 }
 
 model Waitlist {

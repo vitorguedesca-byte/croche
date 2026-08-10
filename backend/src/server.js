@@ -14,7 +14,7 @@ import {
   CAPACITY_PADRAO,
   profFor,
 } from "./prismaClient.js";
-import { coraConfigured, createInvoice, getInvoice } from "./cora.js";
+import { sicrediConfigured, sicrediMissing, createCharge, getCharge, isPaidStatus, extractPix } from "./sicredi.js";
 import { waConfigured, waVerify, sendWaText, sendWaButtons, sendWaList, parseIncoming, normalizePhone } from "./wa.js";
 
 // pasta de fotos de depoimentos (servida estaticamente pelo Vite via frontend/public)
@@ -65,7 +65,8 @@ const PUBLIC_API = [
   ["GET", /^\/api\/testimonials$/],
   ["GET", /^\/api\/settings$/],
   [null, /^\/api\/wa\/webhook$/],
-  [null, /^\/api\/cora\/webhook$/],
+  // o Sicredi acrescenta "/pix" à URL cadastrada na hora de notificar
+  [null, /^\/api\/sicredi\/webhook(\/pix)?$/],
 ];
 const isPublicApi = (req) => PUBLIC_API.some(([m, re]) => (!m || m === req.method) && re.test(req.path));
 app.use((req, res, next) => {
@@ -732,15 +733,24 @@ app.post(
   })
 );
 
-/* ---------- COBRANÇA VIA CORA (Pix com confirmação automática) ---------- */
-// Extração defensiva do retorno da Cora — os nomes exatos dos campos precisam
-// ser confirmados no primeiro teste em stage; por isso cobrimos várias formas.
-const extractPix = (inv) =>
-  inv?.pix?.emv || inv?.pix?.qr_code || inv?.payment?.pix?.emv ||
-  inv?.qr_code?.emv || (typeof inv?.qr_code === "string" ? inv.qr_code : null) || inv?.emv || null;
-const extractBoletoUrl = (inv) =>
-  inv?.payment_options?.bank_slip?.url || inv?.bank_slip?.url || inv?.pdf || inv?.url || inv?.link || null;
-const isPaidStatus = (s) => ["PAID", "SETTLED", "PAYED", "CONFIRMED", "RECEIVED"].includes(String(s || "").toUpperCase());
+/* ---------- COBRANÇA VIA SICREDI (Pix com confirmação automática) ---------- */
+// O txid é o identificador da cobrança no padrão BACEN e ele é NOSSO: precisa
+// casar com /^[a-zA-Z0-9]{26,35}$/ — nada de hífen. Como é derivado do id da
+// reserva (ou do aluno + competência), o mesmo registro sempre gera o mesmo txid,
+// e o PUT /cob/{txid} do Sicredi é idempotente: reenviar não duplica cobrança.
+const txidBooking = (id) => `FQCB${String(id).padStart(22, "0")}`;
+const txidMensalidade = (clientId, comp) =>
+  `FQCM${String(clientId).padStart(16, "0")}${comp.replace("-", "")}`;
+// Caminho inverso: o webhook só nos entrega o txid, então precisamos saber a que
+// ele se refere quando a busca direta no banco não acha (ex.: cobrança recriada).
+const parseTxid = (txid) => {
+  let m = /^FQCB(\d{22})$/.exec(txid || "");
+  if (m) return { tipo: "booking", id: Number(m[1]) };
+  m = /^FQCM(\d{16})(\d{4})(\d{2})$/.exec(txid || "");
+  if (m) return { tipo: "mensalidade", clientId: Number(m[1]), competencia: `${m[2]}-${m[3]}` };
+  return null;
+};
+
 async function clientCpfByName(name) {
   if (!name) return "";
   const c = await prisma.client.findFirst({ where: { name } });
@@ -751,81 +761,109 @@ async function clientCpfByName(name) {
 app.post(
   "/api/bookings/:id/invoice",
   wrap(async (req, res) => {
-    if (!coraConfigured()) return res.status(400).json({ error: "Cora não configurada no servidor (falta certificado + client_id)." });
+    if (!sicrediConfigured()) {
+      return res.status(400).json({ error: `Sicredi não configurado no servidor — falta: ${sicrediMissing().join(", ")}.` });
+    }
     const id = Number(req.params.id);
     const booking = await prisma.booking.findUnique({ where: { id } });
     if (!booking) return res.status(404).json({ error: "Marcação não encontrada" });
-    if (booking.coraInvoiceId) {
-      return res.json({ invoiceId: booking.coraInvoiceId, pixCode: booking.pixCode, boletoUrl: booking.boletoUrl, reused: true });
+    if (booking.txid && booking.pixCode) {
+      return res.json({ txid: booking.txid, pixCode: booking.pixCode, reused: true });
     }
     const cpf = (req.body.cpf || "").replace(/\D/g, "") || (await clientCpfByName(booking.clientName));
     if (!cpf) return res.status(400).json({ error: "CPF do pagador é obrigatório. Cadastre o CPF da aluna antes de gerar a cobrança." });
     const amountCents = Math.round((booking.value || SETTINGS.valorPadrao) * 100);
-    const inv = await createInvoice({
-      code: `fqc-booking-${id}`,
+    const txid = txidBooking(id);
+    const cob = await createCharge({
+      txid,
       name: req.body.name || booking.clientName,
       cpf,
-      email: req.body.email || undefined,
       amountCents,
       dueDate: req.body.dueDate || addDays(todayISO(), 2),
       description: `Reserva de aula — ${booking.unit} · ${booking.date} ${booking.time}`,
     });
-    const invoiceId = inv?.id || inv?.invoice_id || null;
-    const pixCode = extractPix(inv);
-    const boletoUrl = extractBoletoUrl(inv);
+    const pixCode = extractPix(cob);
     await prisma.booking.update({
       where: { id },
-      data: {
-        coraInvoiceId: invoiceId ? String(invoiceId) : booking.coraInvoiceId,
-        pixCode: pixCode || booking.pixCode,
-        boletoUrl: boletoUrl || booking.boletoUrl,
-      },
+      data: { txid, pixCode: pixCode || booking.pixCode },
     });
-    res.json({ invoiceId, pixCode, boletoUrl });
+    res.json({ txid, pixCode });
   })
 );
 
-// Webhook da Cora — apenas um GATILHO. A verdade vem de getInvoice (chamada mTLS
-// autenticada à Cora), então um webhook forjado não confirma nada sozinho.
+// Confirma (se de fato pago) a reserva ou a mensalidade por trás de um txid.
+// Consulta o Sicredi com mTLS antes de dar qualquer baixa — é isso que faz um
+// webhook forjado não conseguir marcar nada como pago sozinho.
+async function confirmarPagamentoPorTxid(txid) {
+  if (!sicrediConfigured() || !txid) return false;
+  const cob = await getCharge(txid);
+  if (!isPaidStatus(cob?.status)) return false;
+  const ref = parseTxid(txid);
+
+  let booking = await prisma.booking.findFirst({ where: { txid } });
+  if (!booking && ref?.tipo === "booking") {
+    booking = await prisma.booking.findUnique({ where: { id: ref.id } });
+  }
+  if (booking && !booking.paid) {
+    await prisma.booking.update({
+      where: { id: booking.id },
+      data: {
+        paid: true, status: "confirmada", paymentDate: todayISO(),
+        paymentMethod: booking.paymentMethod === "Matrícula" ? "Matrícula" : "Pix",
+      },
+    });
+    await registrarMatriculaPaga({ ...booking, paymentDate: todayISO() });
+    console.log(`[sicredi] pagamento confirmado — reserva ${booking.id}`);
+    return true;
+  }
+
+  let invoice = await prisma.invoice.findFirst({ where: { txid } });
+  if (!invoice && ref?.tipo === "mensalidade") {
+    invoice = await prisma.invoice.findFirst({ where: { clientId: ref.clientId, competencia: ref.competencia } });
+  }
+  if (invoice && invoice.status !== "pago") {
+    await prisma.invoice.update({ where: { id: invoice.id }, data: { status: "pago", paidAt: todayISO() } });
+    console.log(`[sicredi] mensalidade confirmada — invoice ${invoice.id}`);
+    return true;
+  }
+  return false;
+}
+
+// Webhook do Sicredi — apenas um GATILHO. O corpo chega como { pix: [ { txid, ... } ] }
+// e nada dele é levado em conta além do txid; quem decide é confirmarPagamentoPorTxid.
+// O banco chama a URL cadastrada com "/pix" no final, por isso as duas rotas.
 app.post(
-  "/api/cora/webhook",
+  ["/api/sicredi/webhook", "/api/sicredi/webhook/pix"],
   wrap(async (req, res) => {
     const b = req.body || {};
-    const invoiceId = b?.resource?.id || b?.invoice?.id || b?.data?.id || b?.id || b?.invoice_id || null;
-    const code = b?.resource?.code || b?.invoice?.code || b?.code || null;
-    if (coraConfigured() && invoiceId) {
-      const inv = await getInvoice(invoiceId);
-      if (isPaidStatus(inv?.status)) {
-        const realId = String(inv?.id || invoiceId);
-        let booking = await prisma.booking.findFirst({ where: { coraInvoiceId: realId } });
-        if (!booking && code) {
-          const m = String(code).match(/^fqc-booking-(\d+)$/);
-          if (m) booking = await prisma.booking.findUnique({ where: { id: Number(m[1]) } });
-        }
-        if (booking && !booking.paid) {
-          await prisma.booking.update({
-            where: { id: booking.id },
-            data: {
-              paid: true, status: "confirmada", paymentDate: todayISO(),
-              paymentMethod: booking.paymentMethod === "Matrícula" ? "Matrícula" : "Pix",
-            },
-          });
-          await registrarMatriculaPaga({ ...booking, paymentDate: todayISO() });
-          console.log(`[cora] pagamento confirmado — reserva ${booking.id}`);
-        }
-        // mensalidade? (código fqc-mensalidade-<clientId>-<YYYY-MM>)
-        let invoice = await prisma.invoice.findFirst({ where: { coraInvoiceId: realId } });
-        if (!invoice && code) {
-          const mm = String(code).match(/^fqc-mensalidade-(\d+)-(\d{4}-\d{2})$/);
-          if (mm) invoice = await prisma.invoice.findFirst({ where: { clientId: Number(mm[1]), competencia: mm[2] } });
-        }
-        if (invoice && invoice.status !== "pago") {
-          await prisma.invoice.update({ where: { id: invoice.id }, data: { status: "pago", paidAt: todayISO() } });
-          console.log(`[cora] mensalidade confirmada — invoice ${invoice.id}`);
-        }
+    const itens = Array.isArray(b.pix) ? b.pix : b.txid ? [b] : [];
+    let falhou = false;
+    for (const item of itens) {
+      try {
+        await confirmarPagamentoPorTxid(item?.txid);
+      } catch (e) {
+        // Não deixa um txid problemático abortar os outros do mesmo lote.
+        falhou = true;
+        console.error(`[sicredi] falha ao confirmar txid ${item?.txid}: ${e.message}`);
       }
     }
+    // 200 = recebido. Se alguma verificação falhou, devolvemos 500 de propósito para
+    // o Sicredi reenviar a notificação mais tarde em vez de dar o Pix por perdido.
+    if (falhou) return res.status(500).json({ ok: false });
     res.json({ ok: true });
+  })
+);
+
+// Rede de segurança: reconsulta o Sicredi sob demanda. Serve para homologação
+// (antes do webhook existir) e para destravar um pagamento que não chegou.
+app.post(
+  "/api/sicredi/verificar/:txid",
+  wrap(async (req, res) => {
+    if (!sicrediConfigured()) {
+      return res.status(400).json({ error: `Sicredi não configurado no servidor — falta: ${sicrediMissing().join(", ")}.` });
+    }
+    const confirmado = await confirmarPagamentoPorTxid(req.params.txid);
+    res.json({ confirmado });
   })
 );
 
@@ -861,32 +899,30 @@ async function gerarMensalidade(clientId, competencia) {
   const valor = mensalidadeValorDe(client);
   if (!valor) throw Object.assign(new Error("Defina o valor da mensalidade (no aluno ou nas Configurações)."), { code: 400 });
   const dueDate = vencimentoDe(client, comp);
-  let coraInvoiceId = null, pixCode = null, boletoUrl = null;
-  if (coraConfigured()) {
+  let txid = null, pixCode = null;
+  if (sicrediConfigured()) {
     const cpf = (client.cpf || "").replace(/\D/g, "");
-    if (!cpf) throw Object.assign(new Error("Cadastre o CPF do aluno antes de gerar o boleto."), { code: 400 });
-    // Se a Cora falhar, a mensalidade ainda precisa existir aqui — senão a aluna
-    // fica sem cobrança nenhuma. Fica sem Pix/boleto e a tela oferece gerar de novo.
+    if (!cpf) throw Object.assign(new Error("Cadastre o CPF do aluno antes de gerar a cobrança."), { code: 400 });
+    // Se o Sicredi falhar, a mensalidade ainda precisa existir aqui — senão a aluna
+    // fica sem cobrança nenhuma. Fica sem Pix e a tela oferece gerar de novo.
     try {
-      const inv = await createInvoice({
-        code: `fqc-mensalidade-${clientId}-${comp}`,
+      txid = txidMensalidade(clientId, comp);
+      const cob = await createCharge({
+        txid,
         name: client.name,
         cpf,
-        email: client.email || undefined,
         amountCents: Math.round(valor * 100),
         dueDate,
         description: `Mensalidade ${comp} — Fios que Curam`,
       });
-      coraInvoiceId = (inv?.id || inv?.invoice_id || null);
-      coraInvoiceId = coraInvoiceId ? String(coraInvoiceId) : null;
-      pixCode = extractPix(inv);
-      boletoUrl = extractBoletoUrl(inv);
+      pixCode = extractPix(cob);
     } catch (e) {
-      console.warn(`[mensalidade] Cora falhou para ${client.name} (${comp}): ${e.message}. Boleto registrado sem Pix.`);
+      console.warn(`[mensalidade] Sicredi falhou para ${client.name} (${comp}): ${e.message}. Mensalidade registrada sem Pix.`);
+      txid = null;
     }
   }
   return prisma.invoice.create({
-    data: { clientId, competencia: comp, amountCents: Math.round(valor * 100), dueDate, status: "pendente", coraInvoiceId, pixCode, boletoUrl },
+    data: { clientId, competencia: comp, amountCents: Math.round(valor * 100), dueDate, status: "pendente", txid, pixCode },
   });
 }
 

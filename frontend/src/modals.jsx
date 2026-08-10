@@ -309,7 +309,7 @@ export function ManageBooking({ booking, onBack }) {
     try {
       const r = await api.createInvoice(booking.id, {});
       setPix(r.pixCode || "");
-      if (!r.pixCode) toast("Cobrança criada na Cora, mas o código Pix não veio no formato esperado — preciso ajustar o parser com o retorno real (teste em stage).", "info");
+      if (!r.pixCode) toast("Cobrança criada no Sicredi, mas o código Pix não veio na resposta. Tente gerar de novo.", "info");
     } catch (e) { toast("Erro ao gerar cobrança: " + e.message, "error"); }
     setGenBusy(false);
   };
@@ -342,10 +342,10 @@ export function ManageBooking({ booking, onBack }) {
                 <button className="btn sec sm" onClick={() => navigator.clipboard?.writeText(pix)}>📋 Copiar Pix</button>
                 <button className="btn wa sm" onClick={() => openWa(booking.phone, `Olá ${booking.clientName}! 💚 Para confirmar sua reserva de ${fmtDate(booking.date)} às ${booking.time}, é só pagar o Pix abaixo:\n\n${pix}`)}><WaIcon /> Enviar no WhatsApp</button>
               </div>
-              <div className="help" style={{ marginTop: ".4rem" }}>Quando a Cora confirmar o pagamento, a reserva vira <b>Confirmada</b> automaticamente.</div>
+              <div className="help" style={{ marginTop: ".4rem" }}>Assim que o Pix cair no Sicredi, a reserva vira <b>Confirmada</b> automaticamente.</div>
             </>
           ) : (
-            <button className="btn terra sm" onClick={genInvoice} disabled={genBusy}>{genBusy ? "Gerando…" : "💠 Gerar cobrança Pix (Cora)"}</button>
+            <button className="btn terra sm" onClick={genInvoice} disabled={genBusy}>{genBusy ? "Gerando…" : "💠 Gerar cobrança Pix"}</button>
           )}
         </div>
       )}
@@ -1078,6 +1078,7 @@ export function ClientProfile({ client, initialTab }) {
           {c.email ? <div><span className="k">Email</span><span className="v">{c.email}</span></div> : null}
           <div><span className="k">Aniversário</span><span className="v">{c.birthday ? "🎂 " + fmtDate(c.birthday) : "—"}</span></div>
           <div><span className="k">Plano</span><span className="v">{planoLabel(c, data.meta)}</span></div>
+          <div><span className="k">Vencimento boleto/PIX</span><span className="v">{c.billingDay ? `Dia ${c.billingDay}` : `Dia ${data.meta?.vencimentoDia || 10} (padrão)`}</span></div>
           <div><span className="k">Portal (PIN)</span><span className="v">{c.hasPin ? <span className="badge b-ok">cadastrado</span> : <span className="badge b-muted">sem PIN</span>}</span></div>
           {(c.tags || []).length ? <div><span className="k">Etiquetas</span><span className="v tags" style={{ justifyContent: "flex-end" }}>{c.tags.map((x) => <span key={x} className="chip">{x}</span>)}</span></div> : null}
         </div>
@@ -1592,13 +1593,17 @@ function useClientForm(client, onDone) {
   const [birthday, setBirthday] = useState(client?.birthday || "");
   const [firstClass, setFirstClass] = useState(client ? !!client.firstClass : true);
   const [status, setStatus] = useState(client?.status || "ativo");
+  const [billingDay, setBillingDay] = useState(client?.billingDay != null ? String(client.billingDay) : "");
   // Plano: "avulso" | "1" | "2" (mensalista 1x/2x por semana)
   const [plano, setPlano] = useState(client?.plan === "mensalista" ? String(client.weeklyFreq || 1) : "avulso");
   const toggle = (t) => setTags((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
 
   const save = async () => {
     if (!name.trim()) return toast("Informe o nome.", "error");
-    const payload = { name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: cpf.trim(), unit, tags, notes: notes.trim(), birthday, firstClass, status };
+    const payload = {
+      name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: cpf.trim(), unit, tags, notes: notes.trim(),
+      birthday, firstClass, status, billingDay: billingDay === "" ? null : Number(billingDay)
+    };
 
     const eraMensal = client?.plan === "mensalista";
     const querMensal = plano !== "avulso";
@@ -1629,7 +1634,7 @@ function useClientForm(client, onDone) {
 
   return { meta, client, name, setName, phone, setPhone, email, setEmail, cpf, setCpf,
     unit, setUnit, tags, toggle, notes, setNotes, birthday, setBirthday,
-    firstClass, setFirstClass, status, setStatus, plano, setPlano, save };
+    firstClass, setFirstClass, status, setStatus, plano, setPlano, billingDay, setBillingDay, save };
 }
 
 function ClientFormFields({ f }) {
@@ -1684,6 +1689,16 @@ function ClientFormFields({ f }) {
           </select>
           <div className="help" style={{ marginTop: ".4rem" }}>Quem rompe deixa de ganhar e de usar créditos de reposição.</div>
         </div>
+      </div>
+      <div className="field">
+        <label>Dia de vencimento (Boleto / PIX)</label>
+        <select value={f.billingDay} onChange={(e) => f.setBillingDay(e.target.value)}>
+          <option value="">Dia {meta.vencimentoDia || 10} (padrão do sistema)</option>
+          {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+            <option key={d} value={d}>Dia {d} de cada mês</option>
+          ))}
+        </select>
+        <div className="help" style={{ marginTop: ".4rem" }}>Dia do mês em que vence a mensalidade para a emissão do boleto ou PIX.</div>
       </div>
       {client?.plan !== "mensalista" && (
         <div className="field"><label>Etiquetas</label>
