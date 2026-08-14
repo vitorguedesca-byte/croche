@@ -4,10 +4,13 @@ import https from "https";
 
 const TOKEN = process.env.WA_TOKEN || "";
 const PHONE_ID = process.env.WA_PHONE_ID || "";
+const WABA_ID = process.env.WA_WABA_ID || ""; // conta do WhatsApp — só para gerenciar templates
 const VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || "";
-const GRAPH_VERSION = process.env.WA_GRAPH_VERSION || "v21.0";
+const GRAPH_VERSION = process.env.WA_GRAPH_VERSION || "v26.0";
 
 export const waConfigured = () => !!(TOKEN && PHONE_ID);
+// Templates são criados/listados na WABA, não no número.
+export const waTemplatesConfigured = () => !!(TOKEN && WABA_ID);
 
 // Verificação do webhook (GET) exigida pela Meta ao registrar a URL.
 export function waVerify(mode, token, challenge) {
@@ -95,6 +98,81 @@ export function sendWaList(to, body, buttonText, rows, header) {
       },
     },
   });
+}
+
+/* ===================== TEMPLATES (mensagens fora da janela de 24h) =====================
+   Regra da Meta: mensagem livre (texto, botões, lista) só sai DENTRO da janela de 24h
+   aberta pela última mensagem da aluna. Fora dela, só template aprovado.
+
+   Por isso lembrete de aula, cobrança e confirmação proativa precisam passar por aqui —
+   as funções acima falham com o erro 131047 ("Re-engagement message") fora da janela. */
+
+// A Meta rejeita parâmetro com quebra de linha, tab ou 4+ espaços seguidos (erro 132000).
+// Normaliza em vez de deixar o envio quebrar em produção.
+export function sanitizeParam(v) {
+  return String(v ?? "").replace(/[\r\n\t]+/g, " ").replace(/\s{4,}/g, "   ").trim();
+}
+
+const textParams = (arr) => arr.map((v) => ({ type: "text", text: sanitizeParam(v) }));
+
+/* Envia um template aprovado.
+     sendWaTemplate(to, "lembrete_aula", { body: ["Maria", "sex 15/08 às 14:00", "Timóteo"] })
+
+   Opções:
+     lang    código do idioma do template (padrão pt_BR)
+     header  variáveis do cabeçalho, quando o template tiver {{1}} no header
+     body    variáveis do corpo, na ordem em que aparecem ({{1}}, {{2}}, ...)
+     buttons [{ index, payload }] — só para botões de resposta rápida com variável   */
+export function sendWaTemplate(to, name, { lang = "pt_BR", header = [], body = [], buttons = [] } = {}) {
+  const components = [];
+  if (header.length) components.push({ type: "header", parameters: textParams(header) });
+  if (body.length) components.push({ type: "body", parameters: textParams(body) });
+  for (const b of buttons) {
+    components.push({
+      type: "button",
+      sub_type: "quick_reply",
+      index: String(b.index ?? 0),
+      parameters: [{ type: "payload", payload: sanitizeParam(b.payload) }],
+    });
+  }
+  return graph("POST", `/${PHONE_ID}/messages`, {
+    messaging_product: "whatsapp",
+    to: normalizePhone(to),
+    type: "template",
+    template: {
+      name,
+      language: { code: lang },
+      ...(components.length ? { components } : {}),
+    },
+  });
+}
+
+/* Tenta enviar texto livre; se a janela de 24h estiver fechada, cai para o template.
+   Evita espalhar try/catch pelo server.js toda vez que o sistema fala primeiro. */
+export async function sendWaTextOrTemplate(to, text, fallback) {
+  try {
+    return await sendWaText(to, text);
+  } catch (e) {
+    const code = e?.body?.error?.code;
+    // 131047 = fora da janela; 131026 = número não recebe mensagem livre
+    if (!fallback || (code !== 131047 && code !== 131026)) throw e;
+    return sendWaTemplate(to, fallback.name, fallback);
+  }
+}
+
+// Lista os templates da conta e o status de aprovação de cada um.
+export function listWaTemplates() {
+  if (!WABA_ID) return Promise.reject(new Error("WA_WABA_ID não configurado"));
+  return graph("GET", `/${WABA_ID}/message_templates?limit=100&fields=name,status,language,category,components,rejected_reason`);
+}
+
+/* Submete um template para aprovação.
+     createWaTemplate({ name, category: "UTILITY", language: "pt_BR", components: [...] })
+   category: UTILITY (confirmação, lembrete, cobrança) | MARKETING | AUTHENTICATION.
+   Classificar como UTILITY é o que mantém o custo baixo — ver a política de preços. */
+export function createWaTemplate({ name, category = "UTILITY", language = "pt_BR", components }) {
+  if (!WABA_ID) return Promise.reject(new Error("WA_WABA_ID não configurado"));
+  return graph("POST", `/${WABA_ID}/message_templates`, { name, category, language, components });
 }
 
 // Extrai a primeira mensagem recebida de um payload de webhook do WhatsApp.
