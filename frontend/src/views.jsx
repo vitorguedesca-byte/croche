@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { toast, confirmModal } from "./toast.jsx";
 import { useStore } from "./store.jsx";
-import { useModal, StatusBadge } from "./ui.jsx";
+import { useModal, StatusBadge, Select } from "./ui.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import {
@@ -475,19 +475,34 @@ export function Clientes({ params }) {
       <div className="seg-hint">{hint}</div>
       <div className="filters">
         <input className="grow" placeholder="🔍 Buscar por nome ou telefone..." value={search} onChange={(e) => setSearch(e.target.value)} />
-        <select value={unitF} onChange={(e) => setUnitF(e.target.value)}>
-          <option>Todas</option>
-          {data.meta.units.map((u) => <option key={u}>{u}</option>)}
-        </select>
-        <select value={planF} onChange={(e) => setPlanF(e.target.value)}>
-          <option>Todos</option>
-          <option>Mensalistas</option>
-          <option>Avulsos</option>
-        </select>
-        <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-          <option value="nome">Ordenar: Nome</option>
-          <option value="aulas">Ordenar: Mais aulas</option>
-        </select>
+        <Select
+          compact
+          value={unitF}
+          onChange={setUnitF}
+          options={[
+            { value: "Todas", label: "Todas as unidades", icon: "📍" },
+            ...data.meta.units.map((u) => ({ value: u, label: u, icon: "📍" })),
+          ]}
+        />
+        <Select
+          compact
+          value={planF}
+          onChange={setPlanF}
+          options={[
+            { value: "Todos", label: "Todos os planos", icon: "🧶" },
+            { value: "Mensalistas", label: "Mensalistas", icon: "📅" },
+            { value: "Avulsos", label: "Avulsos", icon: "🧺" },
+          ]}
+        />
+        <Select
+          compact
+          value={sortBy}
+          onChange={setSortBy}
+          options={[
+            { value: "nome", label: "Ordenar: Nome", icon: "🔤" },
+            { value: "aulas", label: "Ordenar: Mais aulas", icon: "📈" },
+          ]}
+        />
         <span className="count">{list.length} de {groups[tab].length}</span>
       </div>
       {list.length ? (

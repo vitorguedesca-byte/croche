@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Modal, useModal, StatusBadge } from "./ui.jsx";
+import { Modal, useModal, StatusBadge, Select } from "./ui.jsx";
 import { WaIcon } from "./icons.jsx";
 import { useStore } from "./store.jsx";
 import { api } from "./api.js";
@@ -13,6 +13,16 @@ import {
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
+
+/* Opções reaproveitadas pelos seletores (<Select> em ui.jsx) */
+const FORMAS_PAGAMENTO = [
+  { value: "Pix", label: "Pix", icon: "⚡" },
+  { value: "Dinheiro", label: "Dinheiro", icon: "💵" },
+  { value: "Cartão", label: "Cartão", icon: "💳" },
+  { value: "Transferência", label: "Transferência", icon: "🏦" },
+];
+const unitOptions = (meta) => meta.units.map((u) => ({ value: u, label: u, icon: "📍" }));
+const profOptions = (meta) => meta.profs.map((p) => ({ value: p, label: p, icon: "👩‍🏫" }));
 
 /* Resultado da criação de horários: as aulas duram 2h, então o servidor recusa
    turmas que se sobrepõem na mesma unidade — aqui a gente conta o que aconteceu. */
@@ -352,16 +362,22 @@ export function ManageBooking({ booking, onBack }) {
 
       <div className="row2" style={{ marginTop: "1rem" }}>
         <div className="field"><label>Alterar status</label>
-          <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            {Object.keys(STATUS).map((k) => <option key={k} value={k}>{STATUS[k].label}</option>)}
-          </select>
+          <Select
+            value={status}
+            onChange={setStatus}
+            options={Object.keys(STATUS).map((k) => ({ value: k, label: STATUS[k].label, dot: STATUS[k].dot }))}
+          />
         </div>
         <div className="field"><label>Presença</label>
-          <select value={attendance} onChange={(e) => setAttendance(e.target.value)}>
-            <option value="">— não marcado</option>
-            <option value="presente">✓ Presente</option>
-            <option value="falta">✕ Faltou</option>
-          </select>
+          <Select
+            value={attendance}
+            onChange={setAttendance}
+            defaultOption={{ label: "Não marcado", icon: "○" }}
+            options={[
+              { value: "presente", label: "Presente", dot: "var(--ok)" },
+              { value: "falta", label: "Faltou", dot: "var(--danger)" },
+            ]}
+          />
         </div>
       </div>
       <div className="row2">
@@ -401,9 +417,7 @@ export function ConfirmPayment({ booking }) {
     </>}>
       <div className="help">Ao confirmar o pagamento, a aula passa a <b>Confirmada</b> e aparece reservada na agenda.</div>
       <div className="field" style={{ marginTop: "1rem" }}><label>Forma de pagamento</label>
-        <select value={method} onChange={(e) => setMethod(e.target.value)}>
-          {["Pix", "Dinheiro", "Cartão", "Transferência"].map((m) => <option key={m}>{m}</option>)}
-        </select>
+        <Select value={method} onChange={setMethod} options={FORMAS_PAGAMENTO} />
       </div>
       <div className="field"><label>Data do pagamento</label><input type="date" value={pdate} onChange={(e) => setPdate(e.target.value)} /></div>
       <div className="field"><label>Valor</label><input type="number" value={value} onChange={(e) => setValue(Number(e.target.value))} /></div>
@@ -430,13 +444,21 @@ export function PaymentRegister() {
       <button className="btn" onClick={save}>Registrar</button>
     </>}>
       <div className="field"><label>Marcação aguardando pagamento</label>
-        <select value={id} onChange={(e) => setId(Number(e.target.value))}>
-          {pend.length ? pend.map((b) => <option key={b.id} value={b.id}>{b.clientName} · {fmtDate(b.date)} {b.time} · {money(b.value)}</option>)
-            : <option value="">Nenhuma pendente</option>}
-        </select>
+        <Select
+          value={id}
+          onChange={(v) => setId(Number(v))}
+          placeholder="Nenhuma pendente"
+          options={pend.map((b) => ({
+            value: b.id,
+            label: b.clientName,
+            hint: `${fmtDate(b.date)} · ${b.time}`,
+            icon: "🧶",
+            meta: money(b.value),
+          }))}
+        />
       </div>
       <div className="row2">
-        <div className="field"><label>Forma</label><select value={method} onChange={(e) => setMethod(e.target.value)}>{["Pix", "Dinheiro", "Cartão", "Transferência"].map((m) => <option key={m}>{m}</option>)}</select></div>
+        <div className="field"><label>Forma</label><Select value={method} onChange={setMethod} options={FORMAS_PAGAMENTO} /></div>
         <div className="field"><label>Data</label><input type="date" value={pdate} onChange={(e) => setPdate(e.target.value)} /></div>
       </div>
       <div className="help">Confirmar aqui marca a reserva como paga e confirma a aula na agenda.</div>
@@ -678,9 +700,7 @@ export function BookingForm({ slotId }) {
       </div>
       <div className="field">
         <label>Unidade</label>
-        <select value={unit} onChange={(e) => setUnit(e.target.value)}>
-          {meta.units.map((u) => <option key={u}>{u}</option>)}
-        </select>
+        <Select value={unit} onChange={setUnit} options={unitOptions(meta)} />
       </div>
       <div className="row2">
         <div className="field">
@@ -777,12 +797,14 @@ export function SlotForm({ presetDate, presetUnit }) {
       <button className="btn" onClick={save} disabled={!dates.length}>Adicionar{dates.length > 1 ? ` (${dates.length})` : ""}</button>
     </>}>
       <div className="row2">
-        <div className="field"><label>Unidade</label><select value={unit} onChange={(e) => setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
+        <div className="field"><label>Unidade</label><Select value={unit} onChange={setUnit} options={unitOptions(meta)} /></div>
         <div className="field"><label>Profissional <span style={{ color: "var(--muted)", fontWeight: 400 }}>(opcional)</span></label>
-          <select value={prof} onChange={(e) => setProf(e.target.value)}>
-            <option value="">— sem instrutor definido</option>
-            {meta.profs.map((p) => <option key={p}>{p}</option>)}
-          </select>
+          <Select
+            value={prof}
+            onChange={setProf}
+            defaultOption={{ label: "Sem instrutor definido", icon: "—" }}
+            options={profOptions(meta)}
+          />
         </div>
       </div>
       <div className="row2">
@@ -849,12 +871,14 @@ export function EditSlotForm({ slot }) {
         {bks.length ? <> · <b>{bks.length} reserva(s)</b> serão movidas junto</> : null}
       </div>
       <div className="row2">
-        <div className="field"><label>Unidade</label><select value={unit} onChange={(e) => setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
+        <div className="field"><label>Unidade</label><Select value={unit} onChange={setUnit} options={unitOptions(meta)} /></div>
         <div className="field"><label>Profissional</label>
-          <select value={prof} onChange={(e) => setProf(e.target.value)}>
-            <option value="">— sem instrutor definido</option>
-            {meta.profs.map((p) => <option key={p}>{p}</option>)}
-          </select>
+          <Select
+            value={prof}
+            onChange={setProf}
+            defaultOption={{ label: "Sem instrutor definido", icon: "—" }}
+            options={profOptions(meta)}
+          />
         </div>
       </div>
       <div className="row2">
@@ -1263,21 +1287,31 @@ export function EnrollForm({ client }) {
       </div>
       <div className="field" style={{ marginTop: "1rem" }}>
         <label>Plano</label>
-        <select value={freq} onChange={(e) => setFreq(Number(e.target.value))}>
-          <option value={1}>1x por semana — 4 aulas/mês — {money(meta.valorPlano1x ?? 120)}</option>
-          <option value={2}>2x por semana — 8 aulas/mês — {money(meta.valorPlano2x ?? 200)}</option>
-        </select>
+        <Select
+          value={freq}
+          onChange={(v) => setFreq(Number(v))}
+          options={[
+            { value: 1, label: "1x por semana", hint: "4 aulas por mês", icon: "📅", meta: money(meta.valorPlano1x ?? 120) },
+            { value: 2, label: "2x por semana", hint: "8 aulas por mês", icon: "📅", meta: money(meta.valorPlano2x ?? 200) },
+          ]}
+        />
       </div>
       <div className="field">
         <label>1ª aula oficial <span style={{ color: "var(--muted)", fontWeight: 400 }}>(opcional)</span></label>
-        <select value={slotId} onChange={(e) => setSlotId(e.target.value)}>
-          <option value="">— agendar depois</option>
-          {livres.slice(0, 60).map((s) => (
-            <option key={s.id} value={s.id}>
-              {fmtDate(s.date)} · {faixaHorario(s.time, meta.duracaoAulaMin)} · {s.unit} ({slotCapacity(s) - slotBookings(data, s.id).length} vaga(s))
-            </option>
-          ))}
-        </select>
+        <Select
+          value={slotId}
+          onChange={setSlotId}
+          defaultOption={{ label: "Agendar depois", icon: "⏳" }}
+          options={livres.slice(0, 60).map((s) => {
+            const vagas = slotCapacity(s) - slotBookings(data, s.id).length;
+            return {
+              value: s.id,
+              label: `${fmtDate(s.date)} · ${faixaHorario(s.time, meta.duracaoAulaMin)}`,
+              hint: `${s.unit} — ${vagas} vaga(s)`,
+              icon: "🧶",
+            };
+          })}
+        />
       </div>
       <div className="info-line"><b>Mensalidade</b><span><b style={{ color: "var(--terracota)" }}>{money(valor)}</b>/mês</span></div>
     </Modal>
@@ -1509,9 +1543,11 @@ export function BatchBookForm({ client }) {
       <div className="row2">
         <div className="field">
           <label>Unidade</label>
-          <select value={unit} onChange={(e) => { setUnit(e.target.value); setPicked(new Set()); }}>
-            {meta.units.map((u) => <option key={u}>{u}</option>)}
-          </select>
+          <Select
+            value={unit}
+            onChange={(v) => { setUnit(v); setPicked(new Set()); }}
+            options={unitOptions(meta)}
+          />
         </div>
         <div className="field">
           <label>Por quantas semanas</label>
@@ -1649,7 +1685,7 @@ function ClientFormFields({ f }) {
         <div className="field"><label>CPF <span style={{ color: "var(--muted)", fontWeight: 400 }}>(login do portal)</span></label><input value={f.cpf} onChange={(e) => f.setCpf(e.target.value)} placeholder="000.000.000-00" inputMode="numeric" /></div>
         <div className="field"><label>Email</label><input value={f.email} onChange={(e) => f.setEmail(e.target.value)} placeholder="aluno@email.com" inputMode="email" /></div>
       </div>
-      <div className="field"><label>Unidade</label><select value={f.unit} onChange={(e) => f.setUnit(e.target.value)}>{meta.units.map((u) => <option key={u}>{u}</option>)}</select></div>
+      <div className="field"><label>Unidade</label><Select value={f.unit} onChange={f.setUnit} options={unitOptions(meta)} /></div>
       <div className="row2">
         <div className="field"><label>Aniversário</label><input type="date" value={f.birthday} onChange={(e) => f.setBirthday(e.target.value)} /></div>
         <div className="field"><label>Primeira aula?</label>
@@ -1673,31 +1709,44 @@ function ClientFormFields({ f }) {
       </div>
       <div className="row2">
         <div className="field"><label>Plano</label>
-          <select value={f.plano} onChange={(e) => f.setPlano(e.target.value)}>
-            <option value="avulso">Avulso — paga por aula</option>
-            <option value="1">📅 Mensalista — 1x por semana ({money(meta.valorPlano1x ?? 120)}/mês)</option>
-            <option value="2">📅 Mensalista — 2x por semana ({money(meta.valorPlano2x ?? 200)}/mês)</option>
-          </select>
+          <Select
+            value={f.plano}
+            onChange={f.setPlano}
+            options={[
+              { value: "avulso", label: "Avulso", hint: "paga por aula, sem mensalidade", icon: "🧺" },
+              { value: "1", label: "Mensalista — 1x por semana", hint: "4 aulas por mês", icon: "📅", meta: money(meta.valorPlano1x ?? 120) },
+              { value: "2", label: "Mensalista — 2x por semana", hint: "8 aulas por mês", icon: "📅", meta: money(meta.valorPlano2x ?? 200) },
+            ]}
+          />
           {f.plano !== "avulso" && client?.plan !== "mensalista" && (
             <div className="help" style={{ marginTop: ".4rem" }}>Ao salvar, a matrícula é feita e a 1ª mensalidade é gerada automaticamente.</div>
           )}
         </div>
         <div className="field"><label>Situação da inscrição</label>
-          <select value={f.status} onChange={(e) => f.setStatus(e.target.value)}>
-            <option value="ativo">Ativa — está fazendo o curso</option>
-            <option value="cancelado">Cancelada — rompeu com o curso</option>
-          </select>
+          <Select
+            value={f.status}
+            onChange={f.setStatus}
+            options={[
+              { value: "ativo", label: "Ativa", hint: "está fazendo o curso", dot: "var(--ok)" },
+              { value: "cancelado", label: "Cancelada", hint: "rompeu com o curso", dot: "var(--danger)" },
+            ]}
+          />
           <div className="help" style={{ marginTop: ".4rem" }}>Quem rompe deixa de ganhar e de usar créditos de reposição.</div>
         </div>
       </div>
       <div className="field">
         <label>Dia de vencimento (Boleto / PIX)</label>
-        <select value={f.billingDay} onChange={(e) => f.setBillingDay(e.target.value)}>
-          <option value="">Dia {meta.vencimentoDia || 10} (padrão do sistema)</option>
-          {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
-            <option key={d} value={d}>Dia {d} de cada mês</option>
-          ))}
-        </select>
+        <Select
+          value={f.billingDay}
+          onChange={f.setBillingDay}
+          grid
+          defaultOption={{ label: `Dia ${meta.vencimentoDia || 10} — padrão do sistema`, icon: "⚙️" }}
+          options={Array.from({ length: 28 }, (_, i) => ({
+            value: i + 1,
+            label: String(i + 1),
+            triggerLabel: `Dia ${i + 1} de cada mês`,
+          }))}
+        />
         <div className="help" style={{ marginTop: ".4rem" }}>Dia do mês em que vence a mensalidade para a emissão do boleto ou PIX.</div>
       </div>
       {client?.plan !== "mensalista" && (

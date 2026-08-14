@@ -394,6 +394,95 @@
   .field label{display:block;font-size:.82rem;font-weight:700;color:var(--brown);margin-bottom:.35rem}
   .field input,.field select,.field textarea{width:100%;padding:.65rem .8rem;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
   .field textarea{resize:vertical;min-height:70px}
+
+  /* ===== Seletor próprio (<Select> em ui.jsx) =====
+     Substitui o <select> nativo, cuja lista aberta é desenhada pelo
+     sistema operacional e não aceita CSS. */
+  .fsel{position:relative;width:100%}
+
+  .fsel-trigger{
+    width:100%;display:flex;align-items:center;gap:.6rem;
+    padding:.65rem .8rem;min-height:44px;
+    border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);
+    font-size:.95rem;font-weight:600;text-align:left;
+    transition:border-color .16s,box-shadow .16s,background .16s;
+  }
+  .fsel-trigger:hover:not(:disabled){border-color:rgba(94,74,56,.26)}
+  .fsel-trigger:focus-visible,.fsel.open .fsel-trigger{
+    outline:none;border-color:var(--green-deep);box-shadow:0 0 0 3px rgba(31,107,58,.13);
+  }
+  .fsel-trigger:disabled{opacity:.55;cursor:not-allowed;background:var(--cream)}
+  .fsel-trigger .t-ic{font-size:1.05rem;line-height:1;flex-shrink:0}
+  .fsel-trigger .t-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fsel-trigger .t-meta{font-size:.82rem;font-weight:700;color:var(--green-deep);flex-shrink:0}
+  .fsel-trigger.is-placeholder .t-txt{color:var(--muted);font-weight:400}
+  .fsel-chev{width:16px;height:16px;flex-shrink:0;color:var(--muted);transition:transform .2s cubic-bezier(.4,0,.2,1),color .16s}
+  .fsel.open .fsel-chev{transform:rotate(180deg);color:var(--green-deep)}
+
+  /* versão compacta — barras de filtro */
+  .fsel-compact .fsel-trigger{padding:.5rem .7rem;min-height:38px;font-size:.9rem;gap:.45rem}
+  .fsel-compact .fsel-chev{width:14px;height:14px}
+
+  .fsel-pop{
+    position:fixed;z-index:300;
+    background:var(--offwhite);border:1px solid rgba(94,74,56,.14);border-radius:14px;
+    box-shadow:0 22px 50px -20px rgba(58,50,40,.42),0 2px 8px -2px rgba(58,50,40,.14);
+    padding:.35rem;overflow:hidden;
+    animation:fselIn .16s cubic-bezier(.2,.8,.3,1);transform-origin:top center;
+  }
+  .fsel-pop.up{transform-origin:bottom center}
+  @keyframes fselIn{from{opacity:0;transform:translateY(-5px) scale(.985)}to{opacity:1;transform:none}}
+
+  .fsel-search{display:flex;align-items:center;gap:.45rem;padding:.15rem .3rem .45rem;border-bottom:1px solid var(--line);margin-bottom:.35rem}
+  .fsel-search input{flex:1;border:none;background:transparent;outline:none;font-size:.9rem;font-weight:600;color:var(--ink);padding:.35rem .15rem}
+  .fsel-search input::placeholder{color:var(--muted);font-weight:400}
+  .fsel-search svg{width:15px;height:15px;color:var(--muted);flex-shrink:0}
+
+  .fsel-list{max-height:270px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--beige) transparent}
+  .fsel-list::-webkit-scrollbar{width:8px}
+  .fsel-list::-webkit-scrollbar-thumb{background:var(--beige);border-radius:99px;border:2px solid var(--offwhite)}
+  .fsel-list::-webkit-scrollbar-track{background:transparent}
+
+  .fsel-opt{
+    display:flex;align-items:center;gap:.6rem;width:100%;
+    padding:.55rem .6rem;border:none;background:none;border-radius:9px;
+    text-align:left;font-size:.92rem;font-weight:600;color:var(--ink);
+    transition:background .12s,color .12s;
+  }
+  .fsel-opt:disabled{opacity:.45;cursor:not-allowed}
+  .fsel-opt .o-ic{font-size:1.02rem;line-height:1;width:1.25rem;text-align:center;flex-shrink:0}
+  .fsel-opt .o-body{flex:1;min-width:0}
+  .fsel-opt .o-label{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fsel-opt .o-hint{display:block;font-size:.78rem;font-weight:400;color:var(--muted);margin-top:.05rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fsel-opt .o-meta{font-size:.82rem;font-weight:700;color:var(--sage-deep);flex-shrink:0}
+  .fsel-opt .o-check{width:16px;height:16px;flex-shrink:0;color:var(--green-deep);opacity:0;transition:opacity .12s}
+  .fsel-opt.active:not(:disabled){background:rgba(140,154,120,.16)}
+  .fsel-opt.selected{background:rgba(31,107,58,.09);color:var(--green-deep)}
+  .fsel-opt.selected .o-meta{color:var(--green-deep)}
+  .fsel-opt.selected .o-check{opacity:1}
+  .fsel-opt.selected.active{background:rgba(31,107,58,.15)}
+
+  .o-dot,.t-dot{width:9px;height:9px;border-radius:99px;flex-shrink:0;box-shadow:0 0 0 3px rgba(255,255,255,.9)}
+  .fsel-empty{padding:1rem .6rem;text-align:center;color:var(--muted);font-size:.88rem}
+
+  /* modo grade — listas de números (dia de vencimento) */
+  .fsel-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:.25rem;padding:.15rem;max-height:270px;overflow-y:auto}
+  .fsel-grid .fsel-opt{justify-content:center;padding:.5rem .2rem;font-size:.88rem;font-weight:700}
+  .fsel-grid .fsel-opt .o-body{display:contents}
+  .fsel-grid .fsel-opt .o-check{display:none}
+
+  /* nas barras de filtro o seletor não ocupa a linha inteira */
+  .filters .fsel{width:auto;min-width:158px}
+
+  /* item "padrão do sistema" destacado no topo */
+  .fsel-default{
+    display:flex;align-items:center;gap:.5rem;width:100%;padding:.55rem .6rem;margin-bottom:.3rem;
+    border:1px dashed var(--line);background:none;border-radius:9px;
+    font-size:.88rem;font-weight:600;color:var(--muted);text-align:left;transition:background .12s,border-color .12s,color .12s;
+  }
+  .fsel-default:hover{background:rgba(140,154,120,.14)}
+  .fsel-default.selected{border-style:solid;border-color:rgba(31,107,58,.3);background:rgba(31,107,58,.07);color:var(--green-deep)}
+
   /* Formulário de depoimentos (labels em bloco + inputs de largura total) */
   .form-label{display:block;font-size:.82rem;font-weight:700;color:var(--brown);margin-bottom:.35rem}
   .form-input{width:100%;padding:.65rem .8rem;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
