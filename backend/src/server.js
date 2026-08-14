@@ -739,15 +739,23 @@ app.post(
 // reserva (ou do aluno + competência), o mesmo registro sempre gera o mesmo txid,
 // e o PUT /cob/{txid} do Sicredi é idempotente: reenviar não duplica cobrança.
 const txidBooking = (id) => `FQCB${String(id).padStart(22, "0")}`;
-const txidMensalidade = (clientId, comp) =>
-  `FQCM${String(clientId).padStart(16, "0")}${comp.replace("-", "")}`;
+// `seq` é a via da cobrança: 0 (sem sufixo) é a original; 1, 2, 3… são as
+// reemissões, feitas quando a cobrança anterior expirou no vencimento. Precisa
+// de txid novo porque o PUT /cob/{txid} é idempotente — reenviar o mesmo txid
+// devolveria a cobrança vencida em vez de criar uma válida.
+const txidMensalidade = (clientId, comp, seq = 0) =>
+  `FQCM${String(clientId).padStart(16, "0")}${comp.replace("-", "")}${seq ? String(seq).padStart(2, "0") : ""}`;
 // Caminho inverso: o webhook só nos entrega o txid, então precisamos saber a que
-// ele se refere quando a busca direta no banco não acha (ex.: cobrança recriada).
+// ele se refere quando a busca direta no banco não acha. É o que salva o caso da
+// aluna que pagou pelo QR antigo: o txid dela não está mais na invoice (foi
+// substituído pela reemissão), mas cliente + competência ainda identificam a dívida.
 const parseTxid = (txid) => {
   let m = /^FQCB(\d{22})$/.exec(txid || "");
   if (m) return { tipo: "booking", id: Number(m[1]) };
-  m = /^FQCM(\d{16})(\d{4})(\d{2})$/.exec(txid || "");
-  if (m) return { tipo: "mensalidade", clientId: Number(m[1]), competencia: `${m[2]}-${m[3]}` };
+  m = /^FQCM(\d{16})(\d{4})(\d{2})(\d{2})?$/.exec(txid || "");
+  if (m) {
+    return { tipo: "mensalidade", clientId: Number(m[1]), competencia: `${m[2]}-${m[3]}`, seq: Number(m[4] || 0) };
+  }
   return null;
 };
 
@@ -876,16 +884,46 @@ const mensalidadeValorDe = (c) => {
   if (c.weeklyFreq) return valorDoPlano(c.weeklyFreq) || 0;
   return SETTINGS.mensalidadeValor || 0;
 };
+// Dia de vencimento da competência, sem ajuste nenhum. É esta data que diz
+// QUANDO gerar a mensalidade — por isso não pode ser a versão "empurrada para
+// hoje" abaixo, senão a antecedência nunca seria satisfeita.
+const vencimentoBruto = (c, comp = competenciaAtual()) => {
+  const dia = Math.min(28, Math.max(1, c.billingDay || SETTINGS.vencimentoDia || 10));
+  const [y, m] = comp.split("-").map(Number);
+  return `${y}-${String(m).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+};
 // Vencimento do boleto de uma competência. Nunca devolve data no passado: quem
 // se matricula depois do dia de vencimento teria a 1ª mensalidade nascendo
 // vencida — e entraria em atraso (perdendo a reposição) sem dever nada.
 const vencimentoDe = (c, comp = competenciaAtual()) => {
-  const dia = Math.min(28, Math.max(1, c.billingDay || SETTINGS.vencimentoDia || 10));
-  const [y, m] = comp.split("-").map(Number);
-  const venc = `${y}-${String(m).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+  const venc = vencimentoBruto(c, comp);
   const hoje = todayISO();
   return venc < hoje ? hoje : venc;
 };
+// Com quantos dias de antecedência a mensalidade do mês é gerada. Antes ela
+// nascia no próprio dia do vencimento, o que dava zero prazo para a aluna.
+const ANTECEDENCIA_DIAS = 5;
+
+/**
+ * Emite a cobrança Pix de uma mensalidade no Sicredi.
+ * Fica separada de gerarMensalidade porque a reemissão (QR vencido) precisa
+ * exatamente do mesmo trabalho, só que com outra via (seq) e outra expiração.
+ * @returns {{txid: string, pixCode: string|null}}
+ */
+async function emitirCobrancaMensalidade({ client, comp, valorCents, expiraEm, seq = 0 }) {
+  const cpf = (client.cpf || "").replace(/\D/g, "");
+  if (!cpf) throw Object.assign(new Error("Cadastre o CPF do aluno antes de gerar a cobrança."), { code: 400 });
+  const txid = txidMensalidade(client.id, comp, seq);
+  const cob = await createCharge({
+    txid,
+    name: client.name,
+    cpf,
+    amountCents: valorCents,
+    dueDate: expiraEm,
+    description: `Mensalidade ${comp} — Fios que Curam`,
+  });
+  return { txid, pixCode: extractPix(cob) };
+}
 
 // Gera (ou reaproveita) o boleto da mensalidade de um aluno para uma competência
 async function gerarMensalidade(clientId, competencia) {
@@ -899,31 +937,62 @@ async function gerarMensalidade(clientId, competencia) {
   const valor = mensalidadeValorDe(client);
   if (!valor) throw Object.assign(new Error("Defina o valor da mensalidade (no aluno ou nas Configurações)."), { code: 400 });
   const dueDate = vencimentoDe(client, comp);
-  let txid = null, pixCode = null;
+  const valorCents = Math.round(valor * 100);
+  let txid = null, pixCode = null, pixExpiresOn = null;
   if (sicrediConfigured()) {
-    const cpf = (client.cpf || "").replace(/\D/g, "");
-    if (!cpf) throw Object.assign(new Error("Cadastre o CPF do aluno antes de gerar a cobrança."), { code: 400 });
     // Se o Sicredi falhar, a mensalidade ainda precisa existir aqui — senão a aluna
     // fica sem cobrança nenhuma. Fica sem Pix e a tela oferece gerar de novo.
     try {
-      txid = txidMensalidade(clientId, comp);
-      const cob = await createCharge({
-        txid,
-        name: client.name,
-        cpf,
-        amountCents: Math.round(valor * 100),
-        dueDate,
-        description: `Mensalidade ${comp} — Fios que Curam`,
-      });
-      pixCode = extractPix(cob);
+      ({ txid, pixCode } = await emitirCobrancaMensalidade({ client, comp, valorCents, expiraEm: dueDate }));
+      pixExpiresOn = dueDate;
     } catch (e) {
+      // Falta de CPF é erro de cadastro, não falha do banco: sobe para a tela
+      // em vez de criar silenciosamente uma mensalidade sem como pagar.
+      if (e.code === 400) throw e;
       console.warn(`[mensalidade] Sicredi falhou para ${client.name} (${comp}): ${e.message}. Mensalidade registrada sem Pix.`);
-      txid = null;
+      txid = null; pixCode = null; pixExpiresOn = null;
     }
   }
   return prisma.invoice.create({
-    data: { clientId, competencia: comp, amountCents: Math.round(valor * 100), dueDate, status: "pendente", txid, pixCode },
+    data: { clientId, competencia: comp, amountCents: valorCents, dueDate, status: "pendente", txid, pixCode, pixExpiresOn },
   });
+}
+
+// Quantos dias a cobrança reemitida fica válida. A mensalidade continua vencida
+// para efeito de atraso (dueDate não muda) — o que se renova é só o prazo do QR.
+const VALIDADE_REEMISSAO_DIAS = 3;
+
+// Até quando o Pix guardado é pagável. Mensalidades criadas antes da coluna
+// pixExpiresOn existir não têm o campo: nelas a validade era o próprio vencimento.
+const pixValidoEm = (inv) => inv.pixExpiresOn || inv.dueDate;
+
+/**
+ * Devolve um Pix pagável para uma mensalidade em aberto, reemitindo se o
+ * anterior já expirou. O Sicredi expira a cobrança às 23:59 do vencimento, então
+ * sem isto quem atrasa um dia fica com um QR que o banco recusa.
+ */
+async function pixPagavelDaMensalidade(invoice) {
+  const hoje = todayISO();
+  // Reaproveitar enquanto vale é o que impede a reemissão a cada clique — sem
+  // isso o `seq` estouraria o teto em poucos dias de aluna curiosa.
+  if (invoice.pixCode && pixValidoEm(invoice) >= hoje) return invoice;
+  if (!sicrediConfigured()) throw Object.assign(new Error("Pagamento por Pix indisponível no momento."), { code: 503 });
+  const client = await prisma.client.findUnique({ where: { id: invoice.clientId } });
+  if (!client) throw Object.assign(new Error("Aluno não encontrado"), { code: 404 });
+  const seq = (parseTxid(invoice.txid)?.seq || 0) + 1;
+  if (seq > 99) throw Object.assign(new Error("Limite de reemissões atingido. Fale com a Inêz."), { code: 400 });
+  const pixExpiresOn = addDays(hoje, VALIDADE_REEMISSAO_DIAS);
+  const { txid, pixCode } = await emitirCobrancaMensalidade({
+    client,
+    comp: invoice.competencia,
+    valorCents: invoice.amountCents,
+    expiraEm: pixExpiresOn,
+    seq,
+  });
+  // A cobrança antiga não precisa ser cancelada: ela já expirou sozinha. E se a
+  // aluna pagar por um QR antigo que ainda estava aberto, parseTxid encontra a
+  // mensalidade por cliente + competência e a baixa acontece do mesmo jeito.
+  return prisma.invoice.update({ where: { id: invoice.id }, data: { txid, pixCode, pixExpiresOn } });
 }
 
 // Gerar boleto da mensalidade (manual) — body opcional { competencia: 'YYYY-MM' }
@@ -951,34 +1020,58 @@ app.post("/api/invoices/:id/cancel", wrap(async (req, res) => {
   res.json(inv);
 }));
 
-// Gerar boletos de TODOS os mensalistas ativos para a competência atual (usado no botão "gerar todos" e no automático)
-async function gerarMensalidadesDoMes() {
+/**
+ * Gera os boletos dos mensalistas ativos para a competência atual.
+ * @param {object} [o]
+ * @param {boolean} [o.soNoPrazo] - true (modo automático) gera apenas para quem
+ *   já entrou na janela de ANTECEDENCIA_DIAS antes do próprio vencimento; false
+ *   (botão "gerar todos" do painel) gera para todo mundo, na hora.
+ * @returns {{feitas: object[], novas: object[]}}
+ */
+async function gerarMensalidadesDoMes({ soNoPrazo = false } = {}) {
   const comp = competenciaAtual();
-  const mensalistas = await prisma.client.findMany({ where: { plan: "mensalista" } });
+  const hoje = todayISO();
+  // Aluna que rompeu com o curso não recebe cobrança nova.
+  const mensalistas = await prisma.client.findMany({ where: { plan: "mensalista", status: "ativo" } });
+  // Quem já tinha boleto antes desta rodada — para o log contar só o que nasceu agora.
+  const jaTinha = new Set(
+    (await prisma.invoice.findMany({ where: { competencia: comp }, select: { clientId: true } })).map((i) => i.clientId)
+  );
   const feitas = [];
   for (const c of mensalistas) {
+    // O vencimento é por aluna (billingDay), então a janela também é.
+    if (soNoPrazo && hoje < addDays(vencimentoBruto(c, comp), -ANTECEDENCIA_DIAS)) continue;
     try { feitas.push(await gerarMensalidade(c.id, comp)); } catch (e) { console.warn(`[mensalidade] ${c.name}: ${e.message}`); }
   }
-  return feitas;
+  return { feitas, novas: feitas.filter((i) => !jaTinha.has(i.clientId)) };
 }
 app.post("/api/invoices/gerar-mes", wrap(async (_req, res) => {
-  const feitas = await gerarMensalidadesDoMes();
-  res.json({ geradas: feitas.length });
+  const { feitas, novas } = await gerarMensalidadesDoMes();
+  res.json({ geradas: feitas.length, novas: novas.length });
 }));
 
-// Automático: 1x/dia verifica se é o dia de vencimento padrão e gera as mensalidades do mês
+/* Automático: uma vez por dia, gera as mensalidades de quem está a
+   ANTECEDENCIA_DIAS ou menos do vencimento.
+
+   Antes isto disparava só quando o dia do mês era exatamente o do vencimento —
+   se o servidor estivesse fora do ar naquele dia, o mês inteiro era pulado. Agora
+   qualquer dia dentro da janela resolve, e a rodada no boot recupera o atraso de
+   quem reiniciou depois da hora. gerarMensalidade é idempotente, então repetir
+   não duplica nada. */
 let ultimoDiaGeracao = null;
-setInterval(async () => {
-  try {
-    const hoje = todayISO();
-    const diaHoje = new Date(hoje + "T00:00").getDate();
-    if (diaHoje === (SETTINGS.vencimentoDia || 10) && ultimoDiaGeracao !== hoje) {
-      ultimoDiaGeracao = hoje;
-      const feitas = await gerarMensalidadesDoMes();
-      if (feitas.length) console.log(`[mensalidade] ${feitas.length} boleto(s) do mês gerados automaticamente.`);
-    }
-  } catch (e) { console.warn("[mensalidade auto]", e.message); }
-}, 60 * 60 * 1000); // a cada hora
+async function rodadaMensalidades() {
+  const hoje = todayISO();
+  if (ultimoDiaGeracao === hoje) return;
+  ultimoDiaGeracao = hoje;
+  const { novas } = await gerarMensalidadesDoMes({ soNoPrazo: true });
+  if (novas.length) console.log(`[mensalidade] ${novas.length} boleto(s) do mês gerados automaticamente.`);
+}
+const dispararRodada = () => rodadaMensalidades().catch((e) => {
+  ultimoDiaGeracao = null; // falhou: deixa a próxima hora tentar de novo
+  console.warn("[mensalidade auto]", e.message);
+});
+setInterval(dispararRodada, 60 * 60 * 1000); // a cada hora
+setTimeout(dispararRodada, 15_000); // e uma vez no boot, já com o banco de pé
 
 /* ---------- PORTAL DO ALUNO ---------- */
 // Localiza o aluno pela "chave" usada no portal: CPF, telefone (dígitos) ou id.
@@ -998,10 +1091,16 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
   const client = await clientByPortalKey(req.params.key);
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const t = todayISO();
-  const [bookings, slots, ativas] = await Promise.all([
+  const [bookings, slots, ativas, invoices] = await Promise.all([
     prisma.booking.findMany({ where: { clientName: client.name }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
     prisma.slot.findMany({ where: { date: { gte: t } }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
     prisma.booking.findMany({ where: { status: { not: "cancelada" } } }),
+    // Mensalidade cancelada não é dívida nem histórico útil para a aluna — fica de fora.
+    prisma.invoice.findMany({
+      where: { clientId: client.id, status: { not: "cancelado" } },
+      orderBy: { competencia: "desc" },
+      take: 12,
+    }),
   ]);
   const occ = {}; ativas.forEach((b) => { occ[b.slotId] = (occ[b.slotId] || 0) + 1; });
   const available = slots
@@ -1010,7 +1109,52 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
     .filter((s) => !client.unit || s.unit === client.unit)
     .map((s) => ({ ...s, prof: s.prof || profFor(s.unit), occupancy: occ[s.id] || 0, free: (s.capacity || 1) - (occ[s.id] || 0) }));
   const makeup = await resumoReposicao(client);
-  res.json({ client: safeClient(client), bookings, available, makeup, meta: { units: SETTINGS.units, valorPadrao: SETTINGS.valorPadrao, pixKey: SETTINGS.pixKey, pixName: SETTINGS.pixName } });
+  res.json({
+    client: safeClient(client),
+    bookings,
+    available,
+    makeup,
+    invoices,
+    // A tela de matrícula e a de mensalidade leem daqui. Faltavam os preços e a
+    // duração da aula, então o portal exibia os valores chumbados do código em
+    // vez dos que estão nas Configurações.
+    meta: {
+      units: SETTINGS.units,
+      valorPadrao: SETTINGS.valorPadrao,
+      pixKey: SETTINGS.pixKey,
+      pixName: SETTINGS.pixName,
+      vencimentoDia: client.billingDay || SETTINGS.vencimentoDia,
+      taxaMatricula: SETTINGS.taxaMatricula,
+      valorPlano1x: SETTINGS.valorPlano1x,
+      valorPlano2x: SETTINGS.valorPlano2x,
+      valorAvulsa: SETTINGS.valorAvulsa,
+      duracaoAulaMin: SETTINGS.duracaoAulaMin,
+    },
+  });
+}));
+
+/* Devolve um Pix pagável da mensalidade — reemitindo se o anterior expirou.
+   Público como o resto do portal, mas só entrega cobrança de mensalidade que
+   pertence à própria aluna e que ainda está em aberto. */
+app.post("/api/portal/:key/invoice/:id/pix", wrap(async (req, res) => {
+  const client = await clientByPortalKey(req.params.key);
+  if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const id = Number(req.params.id);
+  const inv = Number.isInteger(id) ? await prisma.invoice.findUnique({ where: { id } }) : null;
+  // Mesma resposta para "não existe" e "é de outra pessoa": não confirma ids alheios.
+  if (!inv || inv.clientId !== client.id) return res.status(404).json({ error: "Mensalidade não encontrada." });
+  if (inv.status !== "pendente") return res.status(400).json({ error: "Esta mensalidade não está em aberto." });
+  try {
+    res.json(await pixPagavelDaMensalidade(inv));
+  } catch (e) {
+    // O portal é público: erro de configuração vira recado para procurar a Inêz,
+    // sem expor qual credencial do banco está faltando.
+    const publico = e.code === 400 || e.code === 404;
+    if (!publico) console.warn(`[portal] falha ao reemitir Pix da invoice ${inv.id}: ${e.message}`);
+    res.status(e.code && publico ? e.code : 503).json({
+      error: publico ? e.message : "Não consegui gerar o Pix agora. Tente de novo em instantes ou fale com a Inêz. 💚",
+    });
+  }
 }));
 
 // Converter em mensalista pelo portal (usado no tablet da sala, ao fim da experimental)

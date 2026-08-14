@@ -71,6 +71,7 @@ model Invoice {
   txid          String?  @db.VarChar(40) // id da cobrança Pix no Sicredi (padrão BACEN)
   boletoUrl     String?  @db.VarChar(500) // legado da Cora; Pix puro não gera boleto
   pixCode       String?  @db.Text
+  pixExpiresOn  String?  @db.VarChar(10) // até quando o pixCode é pagável, 'YYYY-MM-DD'
   paidAt        String?  @db.VarChar(30)
   createdAt     DateTime @default(now())
 

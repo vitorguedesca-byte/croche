@@ -641,6 +641,15 @@
   .pt-qr-legenda{color:var(--muted);font-size:1rem;text-align:center}
   .pt-pix-det{margin-top:.6rem}
   .pt-pix-det summary{color:var(--green-deep);font-weight:700;cursor:pointer;font-size:.98rem;padding:.4rem 0}
+  /* cartão da mensalidade do portal */
+  .pt-mens-val{flex:none;font-family:'Fraunces',serif;font-size:1.6rem;font-weight:800;color:var(--terracota);white-space:nowrap}
+  .pt-mens-status{margin-top:.7rem;display:inline-block;border-radius:999px;padding:.35rem .9rem;font-size:.92rem;font-weight:800}
+  .pt-mens-status.aberta{background:rgba(217,164,65,.16);color:#8a6413}
+  .pt-mens-status.atraso{background:rgba(194,84,63,.14);color:var(--danger)}
+  .pt-mens-hist{margin-top:.7rem;border-top:1px solid var(--line);padding-top:.6rem}
+  .pt-mens-linha{display:flex;align-items:center;justify-content:space-between;gap:.7rem;flex-wrap:wrap;padding:.45rem 0;font-size:.98rem;color:var(--muted)}
+  .pt-mens-linha b{color:var(--ink)}
+  .pt-mens-ok{color:var(--ok);font-weight:700;white-space:nowrap}
   /* tablet da sala */
   .pt-kiosk-tag{display:inline-block;background:var(--cream);color:var(--muted);border-radius:999px;padding:.3rem .9rem;font-size:.86rem;font-weight:700;margin-bottom:.9rem}
   .pt-btn-terminei{background:var(--green-deep);color:#fff;border:none;border-radius:12px;padding:.75rem 1.4rem;font-weight:800;font-size:1.02rem;cursor:pointer}

@@ -6,7 +6,7 @@ import { toast as toastErro, confirmModal } from "./toast.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
-import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario } from "./helpers.js";
+import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel } from "./helpers.js";
 
 const CPF_KEY = "fqc_portal_cpf";
 // WhatsApp da Inêz: (31) 98496-6403 — sem o "55", que o waLink já acrescenta
@@ -84,6 +84,13 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
       setData(d); setPhone(p);
     } catch (e) { setErr(e.message || "Não consegui carregar."); setData(null); }
     finally { setLoading(false); }
+  };
+
+  // Recarga silenciosa: atualiza os dados sem piscar a tela e, se a rede
+  // tropeçar, não faz nada. O `load` acima zera `data` quando falha — o que
+  // jogaria a aluna de volta para o login no meio de uma atualização de fundo.
+  const refreshSilencioso = async (p = phone) => {
+    try { setData(await api.portal.get(p)); } catch {}
   };
 
   const checkCpf = async () => {
@@ -270,6 +277,16 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
         </div>
 
         {podeConverter && <ContinuarCard cliente={cliente} meta={meta} onContinuar={() => setScreen("enroll")} />}
+
+        <MensalidadeCard
+          invoices={data.invoices}
+          cliente={cliente}
+          meta={meta}
+          phone={phone}
+          flash={flash}
+          kiosk={kiosk}
+          onPago={refreshSilencioso}
+        />
 
         <RepoCard makeup={data.makeup} onRepor={() => { setRepondo(true); irParaAgenda(); }} />
 
@@ -678,6 +695,159 @@ function ProximaAulaCard({ booking, meta }) {
         </div>
         <div className="pt-next-s">{complemento}</div>
       </div>
+    </div>
+  );
+}
+
+/* Mensalidade: onde a aluna encontra o Pix do mês.
+   As cobranças nascem sozinhas alguns dias antes do vencimento (ver
+   rodadaMensalidades no server) — este cartão é a vitrine delas, mais o botão de
+   gerar um código novo quando o anterior expirou no vencimento. */
+function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago }) {
+  const [pixNovo, setPixNovo] = useState({}); // { [invoiceId]: pixCode } reemitidos nesta tela
+  const [gerando, setGerando] = useState(false);
+  const [erro, setErro] = useState("");
+  const [verHistorico, setVerHistorico] = useState(false);
+
+  const t = todayISO();
+  const lista = invoices || [];
+  // A mais antiga em aberto é a que ela precisa pagar primeiro.
+  const abertas = lista
+    .filter((i) => i.status === "pendente")
+    .sort((a, b) => a.competencia.localeCompare(b.competencia));
+  const atual = abertas[0];
+  const pagas = lista.filter((i) => i.status === "pago");
+
+  // Mensalidade antiga não tem pixExpiresOn: nela a validade era o vencimento.
+  const validoAte = (i) => i.pixExpiresOn || i.dueDate;
+  const pixCode = atual ? pixNovo[atual.id] || (validoAte(atual) >= t ? atual.pixCode : null) : null;
+
+  // Com o QR na tela a confirmação chega sozinha pelo webhook do Sicredi.
+  // Recarregar de tempos em tempos faz o "pago ✓" aparecer sem ela tocar em nada.
+  useEffect(() => {
+    if (!pixCode) return;
+    let voltas = 0;
+    const id = setInterval(() => {
+      if (++voltas > 30) { clearInterval(id); return; } // ~10 min e desiste
+      onPago();
+    }, 20000);
+    return () => clearInterval(id);
+  }, [pixCode]);
+
+  // Aluna avulsa que nunca teve mensalidade não precisa ver o assunto.
+  if (cliente.plan !== "mensalista" && !lista.length) return null;
+
+  const gerarPix = async () => {
+    setGerando(true); setErro("");
+    try {
+      const inv = await api.portal.invoicePix(phone, atual.id);
+      if (inv.pixCode) { setPixNovo((m) => ({ ...m, [atual.id]: inv.pixCode })); flash("Código Pix atualizado! 💚"); }
+      else setErro("Não consegui gerar o código agora. Fale com a Inêz pelo WhatsApp. 💚");
+    } catch (e) {
+      setErro(e.message || "Não consegui gerar o código agora.");
+    } finally { setGerando(false); }
+  };
+
+  const atrasada = !!atual && atual.dueDate < t;
+  const diasAtraso = atrasada ? diasEntre(atual.dueDate, t) : 0;
+  const valor = atual ? atual.amountCents / 100 : 0;
+  const msgComprovante = atual
+    ? `Olá Inêz! Fiz o Pix da mensalidade de ${compLabel(atual.competencia)}, no valor de ${money(valor)}. Segue o comprovante 👇`
+    : "";
+
+  return (
+    <div className="pt-repo" style={{ borderLeftColor: atrasada ? "var(--danger)" : atual ? "var(--warn)" : "var(--green-mid)" }}>
+      <div className="pt-repo-top">
+        <div>
+          <div className="pt-repo-t">💠 Minha mensalidade</div>
+          {atual ? (
+            <div className="pt-sub2">
+              <b className="pt-no-caps">{compLabel(atual.competencia)}</b> · vence em <b>{fmtDate(atual.dueDate)}</b>
+            </div>
+          ) : (
+            <div className="pt-sub2">
+              Você está em dia — nenhuma mensalidade em aberto. 💚
+              {cliente.plan === "mensalista" && <> A próxima chega aqui sozinha, com vencimento no dia {meta.vencimentoDia || 10}.</>}
+            </div>
+          )}
+        </div>
+        {atual && <div className="pt-mens-val">{money(valor)}</div>}
+      </div>
+
+      {atual && (
+        <div className={`pt-mens-status ${atrasada ? "atraso" : "aberta"}`}>
+          {atrasada
+            ? `⚠️ Em atraso há ${diasAtraso} ${diasAtraso === 1 ? "dia" : "dias"}`
+            : atual.dueDate === t
+              ? "Vence hoje"
+              : `Em aberto — faltam ${diasEntre(t, atual.dueDate)} dia(s) para o vencimento`}
+        </div>
+      )}
+
+      {abertas.length > 1 && (
+        <div className="pt-sub2" style={{ marginTop: ".5rem" }}>
+          Você tem <b>{abertas.length} mensalidades em aberto</b>. Comece por esta, a mais antiga.
+        </div>
+      )}
+
+      {atual && (pixCode ? (<>
+        <PixQR code={pixCode} size={kiosk ? 300 : 230} legenda="Aponte a câmera do seu celular para pagar" />
+        <details className="pt-pix-det">
+          <summary>Prefiro copiar o código</summary>
+          <div className="pt-pix-code">{pixCode}</div>
+          <button className="pt-pix-copy" onClick={async () => {
+            try { await navigator.clipboard.writeText(pixCode); flash("Código Pix copiado! 📋"); }
+            catch { flash("Não consegui copiar. Use o QR Code."); }
+          }}>📋 Copiar código Pix</button>
+        </details>
+        <p className="pt-hint">A baixa é automática: assim que o Pix cair, esta tela mostra “pago”. 💚</p>
+        <a className="pt-btn pt-btn-wa" href={waLink(INEZ_WA, msgComprovante)} target="_blank" rel="noreferrer">
+          <WaIcon size={20} /> Já paguei — enviar comprovante
+        </a>
+      </>) : (<>
+        {/* O Sicredi expira a cobrança no fim do dia do vencimento, então quem
+            atrasa precisa de um código novo — é este botão. */}
+        <p className="pt-hint" style={{ marginTop: ".8rem" }}>
+          {atual.pixCode
+            ? "O código Pix desta mensalidade expirou no vencimento. Gere um novo para pagar agora."
+            : "O código Pix ainda não foi gerado para esta mensalidade."}
+        </p>
+        {erro && <div className="pt-err">{erro}</div>}
+        <button className="pt-btn" onClick={gerarPix} disabled={gerando}>
+          {gerando ? "Gerando…" : "💠 Gerar código Pix"}
+        </button>
+        {meta.pixKey && (
+          <details className="pt-pix-det">
+            <summary>Prefiro pagar na chave Pix</summary>
+            <div className="pt-pix">
+              <div className="pt-pix-row"><span>Chave Pix</span><b>{meta.pixKey}</b></div>
+              {meta.pixName ? <div className="pt-pix-row"><span>Recebedor</span><b>{meta.pixName}</b></div> : null}
+              <div className="pt-pix-row"><span>Valor</span><b>{money(valor)}</b></div>
+            </div>
+            <a className="pt-btn pt-btn-wa" href={waLink(INEZ_WA, msgComprovante)} target="_blank" rel="noreferrer">
+              <WaIcon size={20} /> Enviar comprovante
+            </a>
+          </details>
+        )}
+      </>))}
+
+      {pagas.length > 0 && (<>
+        <button className="pt-link" style={{ marginTop: ".8rem" }} onClick={() => setVerHistorico(!verHistorico)}>
+          {verHistorico ? "Ocultar o histórico" : `Ver as ${pagas.length} mensalidade${pagas.length === 1 ? "" : "s"} já paga${pagas.length === 1 ? "" : "s"}`}
+        </button>
+        {verHistorico && (
+          <div className="pt-mens-hist">
+            {pagas.map((i) => (
+              <div className="pt-mens-linha" key={i.id}>
+                <span className="pt-no-caps">{compLabel(i.competencia)}</span>
+                <b>{money(i.amountCents / 100)}</b>
+                {/* paidAt aceita data ou timestamp completo — o corte garante 'YYYY-MM-DD' */}
+                <span className="pt-mens-ok">✓ pago{i.paidAt ? ` em ${fmtDate(String(i.paidAt).slice(0, 10))}` : ""}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </>)}
     </div>
   );
 }

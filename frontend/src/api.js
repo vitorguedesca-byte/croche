@@ -112,5 +112,7 @@ export const api = {
     enroll: (phone, data) => req("POST", `/api/portal/${encodeURIComponent(phone)}/enroll`, data),
     cancel: (phone, bookingId) => req("POST", `/api/portal/${encodeURIComponent(phone)}/cancel/${bookingId}`),
     absence: (phone, bookingId, reason) => req("POST", `/api/portal/${encodeURIComponent(phone)}/absence/${bookingId}`, { reason }),
+    // Pix da mensalidade: devolve o código atual ou reemite, se já tinha vencido
+    invoicePix: (phone, invoiceId) => req("POST", `/api/portal/${encodeURIComponent(phone)}/invoice/${invoiceId}/pix`),
   },
 };
