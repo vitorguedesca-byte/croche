@@ -126,14 +126,21 @@ async function occupancy(slotId) {
   });
 }
 
+/* Multa e juros só entram com SETTINGS.cobrarEncargos LIGADA. Desligada (o
+   padrão), toda mensalidade custa o valor original — mesma ideia das outras
+   travas de cobrança: a regra existe no código e a Inêz decide quando passa a
+   valer. Sem esta chave, subir os encargos jogaria a multa de uma vez sobre
+   todas as mensalidades já vencidas. */
+const semEncargos = (inv) => ({ dias: 0, multaCents: 0, jurosCents: 0, totalCents: inv.amountCents, atrasada: false });
+const encargosDe = (inv, data) =>
+  SETTINGS.cobrarEncargos ? encargosDaMensalidade(inv, data) : semEncargos(inv);
+
 /* Acrescenta a conta do atraso a uma mensalidade, para a tela não precisar
    repetir o cálculo. Só faz sentido em cobrança ainda em aberto: paga ou
    cancelada não acumula nada. Valores em reais, já prontos para exibir. */
 const comEncargos = (inv) => {
   if (!inv) return inv;
-  const e = inv.status === "pendente"
-    ? encargosDaMensalidade(inv, todayISO())
-    : { dias: 0, multaCents: 0, jurosCents: 0, totalCents: inv.amountCents, atrasada: false };
+  const e = inv.status === "pendente" ? encargosDe(inv, todayISO()) : semEncargos(inv);
   /* O QR guardado pode estar cobrando um valor antigo — foi emitido antes de a
      multa entrar. A tela precisa saber disso para oferecer um código novo em
      vez de mostrar um QR que cobra menos do que a conta ao lado dele. */
@@ -545,7 +552,7 @@ const wrap = (fn) => (req, res) =>
 
 /* ---------- configurações (linha única id=1, cache em memória) ---------- */
 const PRECOS_PADRAO = { taxaMatricula: 20, valorPlano1x: 120, valorPlano2x: 200, valorAvulsa: 40, duracaoAulaMin: 120 };
-let SETTINGS = { valorPadrao: VALOR_PADRAO, capacidadePadrao: CAPACITY_PADRAO, units: UNITS, profs: PROFS, horarioFunc: "", pixKey: "", pixName: "", mensalidadeValor: 0, vencimentoDia: 10, travaAtraso: false, pixExpira: false, ...PRECOS_PADRAO };
+let SETTINGS = { valorPadrao: VALOR_PADRAO, capacidadePadrao: CAPACITY_PADRAO, units: UNITS, profs: PROFS, horarioFunc: "", pixKey: "", pixName: "", mensalidadeValor: 0, vencimentoDia: 10, travaAtraso: false, pixExpira: false, cobrarEncargos: false, ...PRECOS_PADRAO };
 async function loadSettings() {
   let s = await prisma.settings.findUnique({ where: { id: 1 } });
   if (!s) s = await prisma.settings.create({ data: { id: 1 } });
@@ -568,6 +575,7 @@ async function loadSettings() {
     // Travas de cobrança: ausentes (banco antigo) = desligadas.
     travaAtraso: s.travaAtraso ?? false,
     pixExpira: s.pixExpira ?? false,
+    cobrarEncargos: s.cobrarEncargos ?? false,
   };
   return SETTINGS;
 }
@@ -1264,7 +1272,7 @@ const pixValidoEm = (inv) => inv.pixExpiresOn || inv.dueDate;
    ela custa HOJE, e isso é recalculado toda vez que alguém pede o Pix. */
 
 // Quanto custa hoje: { dias, multaCents, jurosCents, totalCents, atrasada }
-const encargosHoje = (inv, hoje = todayISO()) => encargosDaMensalidade(inv, hoje);
+const encargosHoje = (inv, hoje = todayISO()) => encargosDe(inv, hoje);
 // Quanto o QR guardado está cobrando — `encargosAte` diz a data em que ele foi calculado
 const totalDoPixAtual = (inv) => encargosDaMensalidade(inv, inv.encargosAte || inv.dueDate).totalCents;
 
@@ -2295,7 +2303,7 @@ app.put(
     }
     if (b.duracaoAulaMin !== undefined) data.duracaoAulaMin = Math.min(600, Math.max(15, parseInt(b.duracaoAulaMin, 10) || SETTINGS.duracaoAulaMin));
     // travas de cobrança (desligadas até a Inêz confirmar)
-    for (const k of ["travaAtraso", "pixExpira"]) if (b[k] !== undefined) data[k] = !!b[k];
+    for (const k of ["travaAtraso", "pixExpira", "cobrarEncargos"]) if (b[k] !== undefined) data[k] = !!b[k];
     await prisma.settings.upsert({ where: { id: 1 }, update: data, create: { id: 1, ...data } });
     await loadSettings();
     res.json(SETTINGS);

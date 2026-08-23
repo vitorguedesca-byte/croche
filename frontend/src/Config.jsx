@@ -82,6 +82,7 @@ export default function Config() {
   // Travas de cobrança — nascem desligadas, a Inêz vira a chave quando quiser
   const [travaAtraso, setTravaAtraso] = useState(!!m.travaAtraso);
   const [pixExpira, setPixExpira] = useState(!!m.pixExpira);
+  const [cobrarEncargos, setCobrarEncargos] = useState(!!m.cobrarEncargos);
   const [saved, setSaved] = useState(false);
 
   const save = async () => {
@@ -111,6 +112,7 @@ export default function Config() {
       duracaoAulaMin: Math.min(600, Math.max(15, parseInt(duracao, 10) || 120)),
       travaAtraso,
       pixExpira,
+      cobrarEncargos,
       units: unitsList,
       profs: profsList,
     };
@@ -136,7 +138,7 @@ export default function Config() {
           ? <div className="cfg-preview">🔑 Alunas verão: <b>{pixName.trim() || "—"}</b> · chave <b>{pixKey.trim()}</b></div>
           : <div className="cfg-warn">⚠️ Sem chave Pix cadastrada, as alunas não conseguem pagar a reserva.</div>}
 
-        {/* As duas travas de atraso, desligadas até você confirmar que quer cobrar assim */}
+        {/* As travas de atraso, desligadas até você confirmar que quer cobrar assim */}
         <div style={{ marginTop: "1.1rem", borderTop: "1px solid var(--line)", paddingTop: ".9rem" }}>
           <label style={{ display: "block", marginBottom: ".6rem" }}>Cobrança em atraso</label>
           <Chave
@@ -153,15 +155,24 @@ export default function Config() {
             ligado="Passado o vencimento, o QR morre e a aluna precisa pedir um novo pelo portal."
             desligado="O QR continua pagável depois do vencimento — ninguém fica sem como pagar."
           />
+          <Chave
+            on={cobrarEncargos}
+            onToggle={() => setCobrarEncargos(!cobrarEncargos)}
+            titulo="Cobrar multa e juros por atraso"
+            ligado="A mensalidade vencida passa a custar mais, e o Pix é reemitido com o valor atualizado."
+            desligado="A mensalidade vencida continua custando o valor original, sem acréscimo."
+          />
 
           {/* Multa e juros são FIXOS no código (backend/src/regrasAula.js) — não
               viram campo aqui de propósito. Mostramos só para você conferir. */}
           <div className="cfg-preview" style={{ marginTop: ".8rem" }}>
-            ⚖️ Mensalidade vencida cobra <b>{money(m.multaAtraso ?? 5)} de multa</b> (uma vez, a partir do 1º dia)
+            ⚖️ {cobrarEncargos ? "Cobrando hoje:" : "Se você ligar a chave acima:"}{" "}
+            <b>{money(m.multaAtraso ?? 5)} de multa</b> (uma vez, a partir do 1º dia)
             {" "}e <b>{(m.jurosDia ?? 0.001).toString().replace(".", ",")}% de juros ao dia</b> sobre o valor original.
             O Pix é reemitido com o valor atualizado quando a aluna abre o portal.
             <div className="help" style={{ marginTop: ".35rem" }}>
               Esses dois valores são fixos no sistema — para alterar, fale com quem cuida do código.
+              {!cobrarEncargos && " Com a chave desligada, ninguém paga acréscimo nenhum."}
             </div>
           </div>
         </div>

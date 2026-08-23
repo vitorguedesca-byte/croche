@@ -189,7 +189,13 @@ export const diaDoMes = (iso) => Math.min(28, Math.max(1, Number(String(iso).sli
    são simples (não compostos) sobre o valor ORIGINAL, contados por dia corrido.
 
    Ordem de grandeza, para não haver surpresa: com 0,001% ao dia, uma mensalidade
-   de R$ 200 atrasada 30 dias rende R$ 0,06 de juros — quem pesa é a multa. */
+   de R$ 200 atrasada 30 dias rende R$ 0,06 de juros — quem pesa é a multa.
+
+   SE a multa e os juros são aplicados é outra história: depende da chave
+   `Settings.cobrarEncargos`, que nasce DESLIGADA e a Inêz liga em Configurações.
+   Quem faz esse desvio é `encargosDe()` no server — as funções aqui são puras e
+   sempre calculam. Sem essa chave, subir os encargos jogaria a multa de uma vez
+   sobre todas as mensalidades já vencidas. */
 export const MULTA_ATRASO_REAIS = 5;      // R$, uma vez, a partir do 1º dia de atraso
 export const JUROS_DIA_PERCENTUAL = 0.001; // % ao dia, juros simples sobre o valor original
 

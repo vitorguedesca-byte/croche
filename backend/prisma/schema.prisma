@@ -217,6 +217,8 @@ model Settings {
   travaAtraso      Boolean @default(false)
   // true = o Pix da mensalidade expira no vencimento e precisa ser reemitido
   pixExpira        Boolean @default(false)
+  // true = mensalidade vencida passa a cobrar multa e juros (valores fixos em regrasAula.js)
+  cobrarEncargos   Boolean @default(false)
   // ----- tabela de preços -----
   taxaMatricula    Float  @default(20)  // taxa cobrada para agendar a aula experimental
   valorPlano1x     Float  @default(120) // mensalidade de 1x por semana (4 aulas/mês)
