@@ -2,7 +2,40 @@ import { useState } from "react";
 import { toast } from "./toast.jsx";
 import { useStore } from "./store.jsx";
 import { api } from "./api.js";
-import { WEEKDAYS_PT, DEFAULT_HORARIO, parseHorario, horarioToText, serializeHorario } from "./helpers.js";
+import { WEEKDAYS_PT, DEFAULT_HORARIO, parseHorario, horarioToText, serializeHorario, money } from "./helpers.js";
+
+/* Interruptor liga/desliga com o efeito escrito por extenso nos dois estados —
+   estas travas mudam o que a aluna vê no portal, então vale dizer o que
+   acontece antes de virar a chave, não depois. */
+function Chave({ on, onToggle, titulo, ligado, desligado }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      style={{
+        display: "flex", alignItems: "flex-start", gap: ".7rem", width: "100%",
+        textAlign: "left", padding: ".7rem .9rem", marginBottom: ".5rem",
+        borderRadius: 10, cursor: "pointer", transition: "all .18s",
+        border: `1.5px solid ${on ? "var(--green-deep)" : "var(--line)"}`,
+        background: on ? "rgba(28,94,51,.07)" : "var(--cream)",
+      }}
+    >
+      <span style={{
+        flex: "0 0 42px", height: 24, borderRadius: 999, position: "relative", marginTop: 2,
+        background: on ? "var(--green-deep)" : "var(--line)", transition: "background .18s",
+      }}>
+        <span style={{
+          position: "absolute", top: 3, left: on ? 21 : 3, width: 18, height: 18,
+          borderRadius: "50%", background: "#fff", transition: "left .18s",
+        }} />
+      </span>
+      <span>
+        <b style={{ color: on ? "var(--green-deep)" : "var(--muted)" }}>{titulo}</b>
+        <div className="help" style={{ marginTop: ".2rem" }}>{on ? ligado : desligado}</div>
+      </span>
+    </button>
+  );
+}
 
 export default function Config() {
   const { data, run } = useStore();
@@ -46,6 +79,9 @@ export default function Config() {
   const [plano2x, setPlano2x] = useState(m.valorPlano2x ?? 200);
   const [avulsa, setAvulsa] = useState(m.valorAvulsa ?? 40);
   const [duracao, setDuracao] = useState(m.duracaoAulaMin ?? 120);
+  // Travas de cobrança — nascem desligadas, a Inêz vira a chave quando quiser
+  const [travaAtraso, setTravaAtraso] = useState(!!m.travaAtraso);
+  const [pixExpira, setPixExpira] = useState(!!m.pixExpira);
   const [saved, setSaved] = useState(false);
 
   const save = async () => {
@@ -73,6 +109,8 @@ export default function Config() {
       valorPlano2x: Number(plano2x) || 0,
       valorAvulsa: Number(avulsa) || 0,
       duracaoAulaMin: Math.min(600, Math.max(15, parseInt(duracao, 10) || 120)),
+      travaAtraso,
+      pixExpira,
       units: unitsList,
       profs: profsList,
     };
@@ -92,11 +130,41 @@ export default function Config() {
         <div className="cfg-h"><span className="cfg-ic">💠</span><div><h2>Pagamento (Pix)</h2><p>A chave usada pelas alunas para pagar a reserva das aulas.</p></div></div>
         <div className="row2">
           <div className="field"><label>Chave Pix</label><input value={pixKey} onChange={(e) => setPixKey(e.target.value)} placeholder="ex.: 31988880000, e-mail, CPF ou chave aleatória" /></div>
-          <div className="field"><label>Nome do recebedor</label><input value={pixName} onChange={(e) => setPixName(e.target.value)} placeholder="Inêz Pimentel" /></div>
+          <div className="field"><label>Nome do recebedor</label><input value={pixName} onChange={(e) => setPixName(e.target.value)} placeholder="Fios que Curam" /></div>
         </div>
         {pixKey.trim()
           ? <div className="cfg-preview">🔑 Alunas verão: <b>{pixName.trim() || "—"}</b> · chave <b>{pixKey.trim()}</b></div>
           : <div className="cfg-warn">⚠️ Sem chave Pix cadastrada, as alunas não conseguem pagar a reserva.</div>}
+
+        {/* As duas travas de atraso, desligadas até você confirmar que quer cobrar assim */}
+        <div style={{ marginTop: "1.1rem", borderTop: "1px solid var(--line)", paddingTop: ".9rem" }}>
+          <label style={{ display: "block", marginBottom: ".6rem" }}>Cobrança em atraso</label>
+          <Chave
+            on={travaAtraso}
+            onToggle={() => setTravaAtraso(!travaAtraso)}
+            titulo="Mensalidade vencida bloqueia a reposição"
+            ligado="A aluna com mensalidade em atraso não ganha nem usa crédito de reposição."
+            desligado="A aluna repõe normalmente, mesmo com mensalidade em atraso."
+          />
+          <Chave
+            on={pixExpira}
+            onToggle={() => setPixExpira(!pixExpira)}
+            titulo="Pix da mensalidade expira no vencimento"
+            ligado="Passado o vencimento, o QR morre e a aluna precisa pedir um novo pelo portal."
+            desligado="O QR continua pagável depois do vencimento — ninguém fica sem como pagar."
+          />
+
+          {/* Multa e juros são FIXOS no código (backend/src/regrasAula.js) — não
+              viram campo aqui de propósito. Mostramos só para você conferir. */}
+          <div className="cfg-preview" style={{ marginTop: ".8rem" }}>
+            ⚖️ Mensalidade vencida cobra <b>{money(m.multaAtraso ?? 5)} de multa</b> (uma vez, a partir do 1º dia)
+            {" "}e <b>{(m.jurosDia ?? 0.001).toString().replace(".", ",")}% de juros ao dia</b> sobre o valor original.
+            O Pix é reemitido com o valor atualizado quando a aluna abre o portal.
+            <div className="help" style={{ marginTop: ".35rem" }}>
+              Esses dois valores são fixos no sistema — para alterar, fale com quem cuida do código.
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* TABELA DE PREÇOS */}
@@ -145,7 +213,7 @@ export default function Config() {
           </div>
           <div className="field">
             <label>Profissionais <span className="cfg-count">{profsList.length}</span></label>
-            <textarea value={profs} onChange={(e) => setProfs(e.target.value)} style={{ minHeight: 110 }} placeholder={"Inêz\nEquipe FQC"} />
+            <textarea value={profs} onChange={(e) => setProfs(e.target.value)} style={{ minHeight: 110 }} placeholder={"Equipe FQC\nOutro nome"} />
           </div>
         </div>
       </div>

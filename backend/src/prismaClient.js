@@ -4,10 +4,10 @@ import { PrismaClient } from "@prisma/client";
 export const prisma = new PrismaClient();
 
 export const UNITS = ["Ipatinga", "Timóteo"];
-export const PROFS = ["Inêz", "Equipe FQC"];
+export const PROFS = ["Equipe FQC"];
 export const VALOR_PADRAO = 80;
 export const CAPACITY_PADRAO = 4;
 
 export function profFor(unit) {
-  return unit === "Ipatinga" ? "Inêz" : "Equipe FQC";
+  return "Equipe FQC";
 }

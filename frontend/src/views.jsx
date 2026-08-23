@@ -116,7 +116,7 @@ export function Dashboard({ go }) {
   const futuras = bookingsActive(data).filter((b) => b.date >= t).length;
   const prox = bookingsActive(data).filter((b) => b.date >= t).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).slice(0, 6);
 
-  const groups = { cliente: 0, lead: 0, novato: 0 };
+  const groups = { cliente: 0, novato: 0 };
   data.clients.forEach((c) => { groups[classifyClient(data, c)]++; });
 
   const hh = new Date().getHours();
@@ -127,7 +127,7 @@ export function Dashboard({ go }) {
 
   return (<>
     <div className="dash-hello">
-      <div><h2>{saud}, Inêz! 💚</h2><p>{dataLonga}</p></div>
+      <div><h2>{saud}! 💚</h2><p>{dataLonga}</p></div>
       <button className="btn" onClick={() => go("agenda")}>📅 Abrir agenda</button>
     </div>
 
@@ -140,7 +140,6 @@ export function Dashboard({ go }) {
 
     <div className="people-strip">
       <button className="people-card" onClick={() => go("clientes", { tab: "cliente" })}><span className="pc-ic">👩</span><span className="pc-n">{groups.cliente}</span><span className="pc-l">Alunos</span></button>
-      <button className="people-card" onClick={() => go("clientes", { tab: "lead" })}><span className="pc-ic">🌱</span><span className="pc-n">{groups.lead}</span><span className="pc-l">Leads a converter</span></button>
       <button className="people-card" onClick={() => go("clientes", { tab: "novato" })}><span className="pc-ic">✨</span><span className="pc-n">{groups.novato}</span><span className="pc-l">Novatos(as)</span></button>
     </div>
 
@@ -334,7 +333,9 @@ function ListView({ data, unit, open, ref0 }) {
             <div className="ls-slot-h">
               <span className="ls-time">{faixaHorario(s.time, data.meta.duracaoAulaMin)}</span>
               <span className="ls-unit">{s.unit}</span>
-              {s.prof && <span className="cli-sub">· {s.prof}</span>}
+              {/* O nome de quem dá a aula saiu daqui: a marcação é dia, hora e
+                  unidade. O campo continua no cadastro do horário, para uso
+                  interno — só não acompanha mais cada aula na tela. */}
               <span className="ls-cap">{ativas.length}/{cap}</span>
               <button className="btn ghost sm" onClick={() => open(<SlotDetail slotId={s.id} />)}>Gerir turma</button>
             </div>
@@ -424,20 +425,20 @@ const initials = (n) => (n || "").trim().split(/\s+/).slice(0, 2).map((w) => w[0
 export function Clientes({ params }) {
   const { data, run } = useStore();
   const { open } = useModal();
-  const [tab, setTab] = useState(params?.tab || "cliente"); // cliente | lead | novato
-  useEffect(() => { if (params?.tab) setTab(params.tab); }, [params?.tab]);
+  // "lead" saiu do sistema; um link antigo apontando para lá cai em "cliente".
+  const [tab, setTab] = useState(params?.tab === "novato" ? "novato" : "cliente"); // cliente | novato
+  useEffect(() => { if (params?.tab) setTab(params.tab === "novato" ? "novato" : "cliente"); }, [params?.tab]);
   const [search, setSearch] = useState("");
   const [unitF, setUnitF] = useState("Todas");
   const [planF, setPlanF] = useState("Todos");
   const [sortBy, setSortBy] = useState("nome");
   const cntOf = (c) => clientActiveCount(data, c);
 
-  const groups = { cliente: [], lead: [], novato: [] };
+  const groups = { cliente: [], novato: [] };
   data.clients.forEach((c) => groups[classifyClient(data, c)].push(c));
 
   const TABS = [
     ["cliente", "👩 Alunos", groups.cliente.length, "Alunos com cadastro e aulas ativas."],
-    ["lead", "🌱 Leads", groups.lead.length, "Cadastraram/entraram mas ainda não marcaram uma aula."],
     ["novato", "✨ Novatos", groups.novato.length, "Na primeira aula — merecem atenção especial no acolhimento."],
   ];
   const hint = (TABS.find((t) => t[0] === tab) || [])[3];
@@ -459,13 +460,11 @@ export function Clientes({ params }) {
     await run(api.deleteClient(c.id));
     toast("Cadastro excluído.");
   };
-  const waMsg = (c) => tab === "lead"
-    ? `Olá ${c.name}! Vi que você se interessou pelas aulas de crochê 💚 Posso te ajudar a escolher um horário?`
-    : tab === "novato"
-      ? `Olá ${c.name}! Que alegria ter você na sua primeira aula de crochê 💚 Qualquer dúvida, é só chamar!`
-      : `Olá ${c.name}! 💚`;
+  const waMsg = (c) => tab === "novato"
+    ? `Olá ${c.name}! Que alegria ter você na sua primeira aula de crochê 💚 Qualquer dúvida, é só chamar!`
+    : `Olá ${c.name}! 💚`;
 
-  const emptyLabel = { cliente: "Nenhum aluno encontrado.", lead: "Nenhum lead no momento.", novato: "Nenhum aluno na primeira aula." }[tab];
+  const emptyLabel = { cliente: "Nenhum aluno encontrado.", novato: "Nenhum aluno na primeira aula." }[tab];
 
   return (
     <div className="panel">
@@ -506,7 +505,7 @@ export function Clientes({ params }) {
         <span className="count">{list.length} de {groups[tab].length}</span>
       </div>
       {list.length ? (
-        <table><thead><tr><th>{tab === "lead" ? "Contato" : "Aluno"}</th><th>Unidade</th><th>Etiquetas</th><th>Aulas</th><th>Presença</th><th></th></tr></thead><tbody>
+        <table><thead><tr><th>Aluno</th><th>Unidade</th><th>Aulas</th><th>Presença</th><th></th></tr></thead><tbody>
           {list.map((c) => {
             const cnt = cntOf(c);
             const at = clientAttendance(data, c.name);
@@ -520,17 +519,15 @@ export function Clientes({ params }) {
                       {c.plan === "mensalista" ? <span className="badge b-ok ml">📅 {c.weeklyFreq ? `${c.weeklyFreq}x/semana` : "mensalista"}</span> : null}
                       {c.matriculaStatus === "paga" && c.plan !== "mensalista" ? <span className="badge b-warn ml">🎟️ matrícula a decidir</span> : null}
                       {tab === "novato" ? <span className="badge b-terra ml">✨ 1ª aula</span> : null}
-                      {tab === "lead" ? <span className="badge b-warn ml">🌱 lead</span> : null}
                       <div className="cli-sub">{c.phone || "sem telefone"}{c.birthday ? " · 🎂 " + fmtDate(c.birthday) : ""}</div>
                     </div>
                   </div>
                 </td>
                 <td><span className="chip">{c.unit}</span></td>
-                <td><div className="tags">{(c.tags || []).length ? c.tags.map((t) => <span key={t} className="chip">{t}</span>) : <span className="cli-sub">—</span>}</div></td>
                 <td>{cnt}</td>
                 <td><span className="badge b-ok" title="Presenças">✓ {at.pres}</span>{at.falt ? <> <span className="badge b-danger" title="Faltas">✕ {at.falt}</span></> : null}</td>
                 <td className="td-actions">
-                  <button className="btn wa sm" title={tab === "lead" ? "Convidar" : "WhatsApp"} onClick={() => openWa(c.phone, waMsg(c))}><WaIcon /></button>
+                  <button className="btn wa sm" title="WhatsApp" onClick={() => openWa(c.phone, waMsg(c))}><WaIcon /></button>
                   {c.hasPin && <button className="btn sec sm" onClick={() => resetPin(c)}>🔒 Resetar PIN</button>}
                   <button className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>Editar</button>
                   <button className="btn ghost sm" style={{ color: "var(--danger)" }} title="Excluir" onClick={() => delClient(c)}>🗑</button>
@@ -539,7 +536,7 @@ export function Clientes({ params }) {
             );
           })}
         </tbody></table>
-      ) : <div className="empty"><div className="ic">{tab === "lead" ? "🌱" : tab === "novato" ? "✨" : "👩"}</div><p>{emptyLabel}</p></div>}
+      ) : <div className="empty"><div className="ic">{tab === "novato" ? "✨" : "👩"}</div><p>{emptyLabel}</p></div>}
     </div>
   );
 }
@@ -573,13 +570,55 @@ export function Mensalistas() {
   const marcarPago = async (inv) => { await run(api.payInvoice(inv.id)); };
   const copyPix = (code) => { navigator.clipboard.writeText(code); toast("Código Pix copiado! 📋"); };
 
+  /* Cobrança pelo WhatsApp da aluna. Abre a conversa com o texto pronto — quem
+     aperta enviar é você. É de propósito: enviar sozinho pela API oficial exige
+     um template aprovado na Meta, que ainda não existe (ver o PDF do WhatsApp
+     Oficial na raiz do projeto). Assim funciona hoje, e você lê antes de mandar.
+
+     A mensagem inclui o Pix copia-e-cola quando ele existe E está atualizado —
+     um QR emitido antes da multa cobraria menos do que a conta acima dele. */
+  const msgCobranca = (c, inv) => {
+    const e = inv.encargos;
+    const primeiro = (c.name || "").split(" ")[0];
+    const linhas = [
+      `Olá ${primeiro}! 💚 Passando para lembrar da sua mensalidade de ${compLabel(inv.competencia)}, aqui na Fios que Curam.`,
+      "",
+      `Vencimento: ${fmtDate(inv.dueDate)}`,
+    ];
+    if (e && e.atrasada) {
+      linhas.push(
+        `Está em atraso há ${e.dias} ${e.dias === 1 ? "dia" : "dias"}.`,
+        "",
+        `Mensalidade: ${money(inv.amountCents / 100)}`,
+        `Multa: ${money(e.multa)}`,
+        `Juros (${e.dias} ${e.dias === 1 ? "dia" : "dias"}): ${money(e.juros)}`,
+        `*Total: ${money(e.total)}*`,
+      );
+    } else {
+      linhas.push("", `*Valor: ${money(inv.amountCents / 100)}*`);
+    }
+    if (inv.pixCode && inv.pixAtualizado !== false) {
+      linhas.push("", "Segue o Pix copia-e-cola:", inv.pixCode);
+    } else {
+      linhas.push("", "Me avisa por aqui que eu te mando o Pix atualizado. 💚");
+    }
+    linhas.push("", "Qualquer dúvida, é só responder por aqui!");
+    return linhas.join("\n");
+  };
+  const cobrarNoWa = (c, inv) => {
+    if (!(c.phone || "").replace(/\D/g, "")) return toast(`${c.name} não tem telefone no cadastro.`, "error");
+    openWa(c.phone, msgCobranca(c, inv));
+  };
+
   // ----- fechamento da competência -----
   const invs = mensalistas.map(invOf);
   const pagosArr = invs.filter((i) => i && i.status === "pago");
   const pendArr = invs.filter((i) => i && i.status === "pendente");
   const semBoleto = invs.filter((i) => !i).length;
   const recebido = pagosArr.reduce((s, i) => s + i.amountCents / 100, 0);
-  const aReceber = pendArr.reduce((s, i) => s + i.amountCents / 100, 0);
+  // "A receber" é o que ela vai receber DE FATO: a vencida cobra multa e juros.
+  const aReceber = pendArr.reduce((s, i) => s + (i.encargos ? i.encargos.total : i.amountCents / 100), 0);
+  const emAtraso = pendArr.filter((i) => i.encargos && i.encargos.atrasada);
   const previsto = mensalistas.reduce((s, c) => { const i = invOf(c); return s + (i ? i.amountCents / 100 : valorDe(c)); }, 0);
 
   return (
@@ -599,7 +638,8 @@ export function Mensalistas() {
 
       <div className="fch-tot">
         <div className="fch-card"><div className="l">✓ Recebido</div><div className="v">{money(recebido)}</div><div className="cli-sub">{pagosArr.length} pago(s)</div></div>
-        <div className="fch-card"><div className="l">⏳ A receber</div><div className="v warn">{money(aReceber)}</div><div className="cli-sub">{pendArr.length} pendente(s)</div></div>
+        <div className="fch-card"><div className="l">⏳ A receber</div><div className="v warn">{money(aReceber)}</div>
+          <div className="cli-sub">{pendArr.length} pendente(s){emAtraso.length ? ` · ${emAtraso.length} em atraso` : ""}</div></div>
         <div className="fch-card"><div className="l">📄 Sem boleto</div><div className="v terra">{semBoleto}</div><div className="cli-sub">de {mensalistas.length} aluno(s)</div></div>
         <div className="fch-card"><div className="l">📊 Previsto no mês</div><div className="v">{money(previsto)}</div><div className="cli-sub">{previsto ? Math.round((recebido / previsto) * 100) : 0}% fechado</div></div>
       </div>
@@ -618,17 +658,31 @@ export function Mensalistas() {
                     <div><span className="cli-name">{c.name}</span><div className="cli-sub">{c.unit}{c.cpf ? "" : " · ⚠ sem CPF"}</div></div>
                   </div>
                 </td>
-                <td>{money(inv ? inv.amountCents / 100 : valorDe(c))}{c.monthlyValue != null ? <span className="cli-sub"> (individual)</span> : null}</td>
+                <td>
+                  {money(inv ? inv.amountCents / 100 : valorDe(c))}{c.monthlyValue != null ? <span className="cli-sub"> (individual)</span> : null}
+                  {/* Vencida: mostra o total que o Pix está cobrando hoje */}
+                  {inv?.encargos?.atrasada && (
+                    <div className="cli-sub" title={`Multa ${money(inv.encargos.multa)} + juros ${money(inv.encargos.juros)} (${inv.encargos.dias} dia(s))`}>
+                      + encargos = <b style={{ color: "var(--danger)" }}>{money(inv.encargos.total)}</b>
+                    </div>
+                  )}
+                </td>
                 <td>{inv ? fmtDate(inv.dueDate) : "dia " + vencDe(c)}</td>
                 <td>
                   {!inv ? <span className="badge b-muted">não gerado</span>
                     : inv.status === "pago" ? <span className="badge b-ok">✓ pago{inv.paidAt ? " em " + fmtDate(String(inv.paidAt).slice(0, 10)) : ""}</span>
                     : inv.status === "cancelado" ? <span className="badge b-danger">cancelado</span>
+                    : inv.encargos?.atrasada ? <span className="badge b-danger">⚠️ em atraso há {inv.encargos.dias} dia(s)</span>
                     : <span className="badge b-warn">⏳ pendente · vence {fmtDate(inv.dueDate)}</span>}
                 </td>
                 <td className="td-actions">
                   {!inv && ehMesAtual && <button className="btn sm" disabled={busy} onClick={() => gerar(c)}>🧾 Gerar boleto</button>}
                   {inv && inv.status === "pendente" && <>
+                    <button className="btn wa sm"
+                      title={inv.encargos?.atrasada ? "Cobrar no WhatsApp da aluna" : "Lembrar no WhatsApp da aluna"}
+                      onClick={() => cobrarNoWa(c, inv)}>
+                      <WaIcon /> {inv.encargos?.atrasada ? "Cobrar" : "Lembrar"}
+                    </button>
                     {inv.boletoUrl && <a className="btn sec sm" href={inv.boletoUrl} target="_blank" rel="noreferrer">📄 Boleto</a>}
                     {inv.pixCode && <button className="btn sec sm" onClick={() => copyPix(inv.pixCode)}>💠 Pix</button>}
                     <button className="btn sm" onClick={() => marcarPago(inv)}>✓ Marcar pago</button>

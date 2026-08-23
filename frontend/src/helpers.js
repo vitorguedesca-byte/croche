@@ -1,8 +1,10 @@
 export const UNITS = ["Ipatinga", "Timóteo"];
-export const PROFS = ["Inêz", "Equipe FQC"];
+export const PROFS = ["Equipe FQC"];
 export const VALOR_PADRAO = 80;
 export const CAPACITY_PADRAO = 4;
-export const TAG_OPTIONS = ["Lead"];
+// Etiquetas de aluno: nenhuma no momento. A única que existia ("Lead") saiu do
+// sistema em 22/08/2026. O campo continua no banco para não perder histórico.
+export const TAG_OPTIONS = [];
 
 export const STATUS = {
   aguardando: { label: "Aguardando pagamento", badge: "b-warn", dot: "var(--warn)" },
@@ -155,17 +157,17 @@ export function clientAttendance(data, name) {
   };
 }
 
-/* ---- classificação de pessoas: cliente | lead | novato ---- */
+/* ---- classificação de pessoas: cliente | novato ----
+   A etiqueta "Lead" saiu do sistema em 22/08/2026: quem entra pelo site já
+   marca a experimental, então "cadastrou e não prosseguiu" deixou de ser um
+   estado real. Restaram dois: quem está na primeira aula e todo o resto. */
 // nº de marcações ativas (não canceladas) de uma pessoa
 export const clientActiveCount = (data, c) =>
   bookingsActive(data).filter((b) => b.clientName === c.name).length;
 
-// Novato: primeira aula (firstClass). Lead: veio do portal (etiqueta "Lead") e não prosseguiu (sem marcação ativa).
-// Cliente: cadastro manual ou qualquer pessoa com marcação ativa. Cadastrar "Novo cliente" sempre resulta em Cliente.
+// Novato: está na primeira aula (firstClass). Cliente: todo o resto.
 export function classifyClient(data, c) {
-  if (c.firstClass) return "novato";
-  if (clientActiveCount(data, c) > 0) return "cliente";
-  return (c.tags || []).includes("Lead") ? "lead" : "cliente";
+  return c.firstClass ? "novato" : "cliente";
 }
 
 // Marcação "nova": pessoa ainda sem acesso (sem PIN) ou na primeira aula
@@ -229,4 +231,39 @@ export function mensalidadeDe(c, meta) {
   if (c.weeklyFreq === 1) return (meta && meta.valorPlano1x) || 0;
   if (c.weeklyFreq === 2) return (meta && meta.valorPlano2x) || 0;
   return (meta && meta.mensalidadeValor) || 0;
+}
+
+/* ================= regras de marcação do mensalista =================
+   ESPELHO de backend/src/regrasAula.js — é lá que a regra é aplicada de
+   verdade; aqui é só para o painel avisar a Inêz ANTES de mandar a requisição.
+   Ao mexer numa regra, mexa nos dois lugares.
+
+   • Sábado não faz parte do plano de mensalista.
+   • Horário a partir das 18:00 também não (18:00 já entra no bloqueio).
+   • Escala: a aluna marca a próxima aula no dia da aula dela.
+   Quem já estava em sábado / à noite quando a regra entrou continua podendo —
+   é o que `podeSabado` e `podeNoite` guardam (preenchidos pela migration). */
+export const NOITE_A_PARTIR = "18:00";
+export const ehSabadoISO = (iso) => new Date(iso + "T00:00").getDay() === 6;
+export const ehNoite = (time) => hhmm(time) >= NOITE_A_PARTIR;
+export const tipoMensalista = (c) =>
+  !c || c.plan !== "mensalista" ? null : c.mensalistaTipo === "escala" ? "escala" : "fixo";
+export const TIPO_MENSALISTA_LABEL = { fixo: "Fixo", escala: "Escala" };
+
+/* Por que este horário fura o plano da aluna — ou "" quando está tudo certo.
+   Só olha data/hora: a janela da escala é do portal, não do painel (quem agenda
+   pelo painel é a Inêz, e ela pode marcar quando quiser). */
+export function motivoForaDaRegra(c, { date, time }) {
+  if (!tipoMensalista(c)) return "";
+  if (ehSabadoISO(date) && !c.podeSabado) return "sábado não faz parte do plano de mensalista";
+  if (ehNoite(time) && !c.podeNoite) return `horário a partir das ${NOITE_A_PARTIR} não faz parte do plano de mensalista`;
+  return "";
+}
+// Mesma checagem a partir de dia-da-semana (Seg=0…Dom=6) + hora — usada no lote,
+// que escolhe turmas recorrentes em vez de datas soltas.
+export function motivoForaDaRegraDow(c, dow, time) {
+  if (!tipoMensalista(c)) return "";
+  if (dow === 5 && !c.podeSabado) return "sábado não faz parte do plano de mensalista";
+  if (ehNoite(time) && !c.podeNoite) return `horário a partir das ${NOITE_A_PARTIR} não faz parte do plano de mensalista`;
+  return "";
 }

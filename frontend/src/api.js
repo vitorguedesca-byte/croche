@@ -53,8 +53,10 @@ export const api = {
   // mensalidades (mensalistas)
   batchBook: (clientId, data) => req("POST", `/api/clients/${clientId}/batch-book`, data),
   getMakeup: (clientId) => req("GET", `/api/clients/${clientId}/makeup`),
-  makeupBook: (clientId, slotId) => req("POST", `/api/clients/${clientId}/makeup-book`, { slotId }),
-  extraBook: (clientId, slotId) => req("POST", `/api/clients/${clientId}/extra-book`, { slotId }),
+  // `forcar` = a Inêz viu o aviso ("sábado não faz parte do plano dela") e
+  // decidiu marcar assim mesmo. O portal da aluna nunca manda esse campo.
+  makeupBook: (clientId, slotId, forcar) => req("POST", `/api/clients/${clientId}/makeup-book`, { slotId, forcar: !!forcar }),
+  extraBook: (clientId, slotId, forcar) => req("POST", `/api/clients/${clientId}/extra-book`, { slotId, forcar: !!forcar }),
   enroll: (clientId, data) => req("POST", `/api/clients/${clientId}/enroll`, data),
   refundMatricula: (clientId) => req("POST", `/api/clients/${clientId}/matricula/refund`, {}),
   releaseBooking: (id, reason) => req("POST", `/api/bookings/${id}/release`, { reason: reason || "" }),
@@ -110,6 +112,10 @@ export const api = {
       slotId, name, reposicao: modo === "repor", extra: modo === "extra",
     }),
     enroll: (phone, data) => req("POST", `/api/portal/${encodeURIComponent(phone)}/enroll`, data),
+    // Aula extra: ela compra primeiro (Pix) e só escolhe o horário depois que cai
+    extraCheckout: (phone) => req("POST", `/api/portal/${encodeURIComponent(phone)}/extra/checkout`, {}),
+    extraStatus: (phone) => req("GET", `/api/portal/${encodeURIComponent(phone)}/extra/status`),
+    extraCancelar: (phone) => req("POST", `/api/portal/${encodeURIComponent(phone)}/extra/cancelar`, {}),
     cancel: (phone, bookingId) => req("POST", `/api/portal/${encodeURIComponent(phone)}/cancel/${bookingId}`),
     absence: (phone, bookingId, reason) => req("POST", `/api/portal/${encodeURIComponent(phone)}/absence/${bookingId}`, { reason }),
     // Pix da mensalidade: devolve o código atual ou reemite, se já tinha vencido

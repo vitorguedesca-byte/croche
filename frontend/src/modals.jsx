@@ -10,6 +10,8 @@ import {
   slotById, slotBookings, slotBookingsAll, slotCapacity, slotWaitlist, clientAttendance,
   bookingKind, competenciasDoAluno, compLabel, mensalidadeDe, matriculaISO,
   WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays,
+  NOITE_A_PARTIR, ehSabadoISO, ehNoite, tipoMensalista, TIPO_MENSALISTA_LABEL,
+  motivoForaDaRegra, motivoForaDaRegraDow,
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
@@ -23,6 +25,11 @@ const FORMAS_PAGAMENTO = [
 ];
 const unitOptions = (meta) => meta.units.map((u) => ({ value: u, label: u, icon: "📍" }));
 const profOptions = (meta) => meta.profs.map((p) => ({ value: p, label: p, icon: "👩‍🏫" }));
+/* Os dois jeitos de a mensalista ocupar a agenda (ver backend/src/regrasAula.js) */
+const TIPO_MENSALISTA_OPCOES = [
+  { value: "fixo", label: "Fixo", hint: "dia e hora fixos — você monta a agenda dela", icon: "📌" },
+  { value: "escala", label: "Escala", hint: "ela marca a própria aula, no dia da aula dela", icon: "🔄" },
+];
 
 /* Resultado da criação de horários: as aulas duram 2h, então o servidor recusa
    turmas que se sobrepõem na mesma unidade — aqui a gente conta o que aconteceu. */
@@ -645,6 +652,23 @@ export function BookingForm({ slotId }) {
 
   const save = async () => {
     if (!name.trim()) return toast("Informe o nome.", "error");
+    /* Se a aluna escolhida é mensalista, avisa quando a marcação cai fora do
+       plano (sábado / a partir das 18h). Este caminho é da Inêz, então é só
+       aviso — quem decide é ela. A regra dura vive no portal e no backend. */
+    const cli = selectedClient || data.clients.find((c) => c.name === name.trim());
+    const foraDatas = cli ? dates.filter((d) => motivoForaDaRegra(cli, { date: d, time })) : [];
+    if (foraDatas.length) {
+      const motivo = motivoForaDaRegra(cli, { date: foraDatas[0], time });
+      const ok = await confirmModal({
+        title: "Marcação fora do plano",
+        message: `${cli.name} é mensalista e ${motivo}.\n\n` +
+          `${foraDatas.length} data(s) desta marcação caem nessa situação. Marcar assim abre uma exceção.`,
+        confirmLabel: "Marcar mesmo assim",
+        cancelLabel: "Voltar",
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
     const payload = { clientName: name.trim(), phone: phone.trim(), unit, value, date, time, slotId: slot && !repetindo ? slot.id : undefined };
     if (repetindo) payload.dates = dates;
     const r = await run(api.createBooking(payload));
@@ -958,7 +982,9 @@ function MensalidadesPanel({ client }) {
   const invs = (data.invoices || []).filter((i) => i.clientId === client.id);
   const valorPadrao = mensalidadeDe(client, data.meta);
   const totalPago = invs.filter((i) => i.status === "pago").reduce((s, i) => s + i.amountCents / 100, 0);
-  const emAberto = invs.filter((i) => i.status === "pendente").reduce((s, i) => s + i.amountCents / 100, 0);
+  // Em aberto vale pelo total do dia: a vencida já carrega multa e juros.
+  const emAberto = invs.filter((i) => i.status === "pendente")
+    .reduce((s, i) => s + (i.encargos ? i.encargos.total : i.amountCents / 100), 0);
   const ini = matriculaISO(client);
   return (
     <div className="prof-panel">
@@ -977,11 +1003,16 @@ function MensalidadesPanel({ client }) {
           return (
             <div className="hist-row" key={comp}>
               <span className="hist-comp">{compLabel(comp)}</span>
-              <span className="hist-val">{money(valor)}</span>
+              <span className="hist-val" title={inv?.encargos?.atrasada
+                ? `${money(valor)} + multa ${money(inv.encargos.multa)} + juros ${money(inv.encargos.juros)}`
+                : undefined}>
+                {inv?.encargos?.atrasada ? money(inv.encargos.total) : money(valor)}
+              </span>
               <span className="hist-st">
                 {!inv ? <span className="badge b-muted">não gerado</span>
                   : inv.status === "pago" ? <span className="badge b-ok">✓ {inv.paidAt ? fmtDate(String(inv.paidAt).slice(0, 10)) : "pago"}</span>
                   : inv.status === "cancelado" ? <span className="badge b-danger">cancelado</span>
+                  : inv.encargos?.atrasada ? <span className="badge b-danger">⚠️ {inv.encargos.dias} dia(s) de atraso</span>
                   : <span className="badge b-warn">⏳ vence {fmtDate(inv.dueDate)}</span>}
               </span>
             </div>
@@ -1196,7 +1227,17 @@ export function planoLabel(c, meta = {}) {
     : c.weeklyFreq === 1 ? (meta.valorPlano1x ?? 120)
     : (meta.mensalidadeValor ?? 0);
   const freq = c.weeklyFreq ? `${c.weeklyFreq}x por semana` : "plano antigo";
-  return <><span className="badge b-ok">📅 {freq}</span> <span className="cli-sub">{money(valor)}/mês</span></>;
+  const tipo = tipoMensalista(c);
+  return (<>
+    <span className="badge b-ok">📅 {freq}</span>{" "}
+    <span className="badge b-info">{tipo === "escala" ? "🔄" : "📌"} {TIPO_MENSALISTA_LABEL[tipo]}</span>{" "}
+    <span className="cli-sub">{money(valor)}/mês</span>
+    {(c.podeSabado || c.podeNoite) && (
+      <> <span className="cli-sub" title="Direito herdado: ela já estava nesse horário quando a regra mudou.">
+        · pode {[c.podeSabado && "sábado", c.podeNoite && `${NOITE_A_PARTIR}+`].filter(Boolean).join(" e ")}
+      </span></>
+    )}
+  </>);
 }
 
 const MATRICULA_ROTULO = {
@@ -1212,16 +1253,34 @@ function MatriculaBlock({ client }) {
   if (client.matriculaStatus === "nao_aplica") return null;
   const [cls, txt] = MATRICULA_ROTULO[client.matriculaStatus] || ["b-muted", client.matriculaStatus];
   const taxa = data.meta?.taxaMatricula ?? 20;
-  const podeDevolver = client.matriculaStatus === "paga";
+  /* A devolução vale também depois da conversão: a aluna nova agora já sai
+     matriculada ao pagar a taxa, então "não quis continuar" precisa desfazer
+     essa matrícula — e não só registrar o estorno. */
+  const podeDevolver = client.matriculaStatus === "paga" || client.matriculaStatus === "convertida";
   const podeConverter = client.plan !== "mensalista" && client.matriculaStatus !== "devolvida";
 
   const devolver = async () => {
+    const t = todayISO();
+    const aulas = (data.bookings || []).filter(
+      (b) => b.clientName === client.name && b.date >= t && b.status !== "cancelada" && b.paymentMethod !== "Matrícula"
+    ).length;
+    const mensalidades = (data.invoices || []).filter((i) => i.clientId === client.id && i.status === "pendente").length;
     if (!(await confirmModal({
       title: "Devolver a taxa",
-      message: `Confirmar a devolução de ${money(taxa)} para ${client.name}?\n\nO sistema só registra — o Pix de volta você faz por fora.`,
-      confirmLabel: "Registrar devolução", tone: "danger",
+      message: `Confirmar a devolução INTEGRAL de ${money(taxa)} para ${client.name}?\n\n` +
+        (client.plan === "mensalista" ? "• A matrícula é desfeita — ela volta a ser avulsa\n" : "") +
+        (aulas ? `• ${aulas} aula(s) futura(s) serão canceladas\n` : "") +
+        (mensalidades ? `• ${mensalidades} mensalidade(s) em aberto serão canceladas\n` : "") +
+        "\nO sistema só registra — o Pix de volta você faz por fora.",
+      confirmLabel: "Devolver e desfazer", tone: "danger",
     }))) return;
-    try { await run(api.refundMatricula(client.id)); toast("Devolução registrada."); }
+    try {
+      const r = await run(api.refundMatricula(client.id));
+      const d = r?.desfez;
+      toast(d
+        ? `Devolução registrada. ${d.aulas} aula(s) e ${d.mensalidades} mensalidade(s) canceladas.`
+        : "Devolução registrada.");
+    }
     catch { /* run já avisou */ }
   };
 
@@ -1250,24 +1309,28 @@ export function EnrollForm({ client }) {
   const { open } = useModal();
   const meta = data.meta || {};
   const [freq, setFreq] = useState(1);
+  const [tipo, setTipo] = useState("fixo");
   const [slotId, setSlotId] = useState("");
   const [busy, setBusy] = useState(false);
   const t = todayISO();
   const livres = data.slots
     .filter((s) => s.date >= t && slotBookings(data, s.id).length < slotCapacity(s))
+    // A 1ª aula oficial já é aula de mensalista: sábado e horário a partir das
+    // 18h saíram do plano e não entram para quem está começando agora.
+    .filter((s) => !ehSabadoISO(s.date) && !ehNoite(s.time))
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const valor = freq === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120);
 
   const salvar = async () => {
     if (!(await confirmModal({
       title: "Confirmar matrícula",
-      message: `Matricular ${client.name} no plano de ${freq}x por semana (${money(valor)}/mês)?\n\n` +
+      message: `Matricular ${client.name} no plano de ${freq}x por semana (${money(valor)}/mês), como mensalista ${tipo}?\n\n` +
         (slotId ? "A 1ª aula oficial será agendada e " : "") + "a primeira mensalidade será gerada agora.",
       confirmLabel: "Matricular",
     }))) return;
     setBusy(true);
     try {
-      const r = await run(api.enroll(client.id, { weeklyFreq: freq, slotId: slotId || undefined }));
+      const r = await run(api.enroll(client.id, { weeklyFreq: freq, mensalistaTipo: tipo, slotId: slotId || undefined }));
       toast(`Matrícula concluída — ${money(r.valorMensal)}/mês.${r.invoice ? "" : " Atenção: a mensalidade não foi gerada."}`,
         r.invoice ? "success" : "info");
       open(<ClientProfile client={client} />);
@@ -1297,7 +1360,16 @@ export function EnrollForm({ client }) {
         />
       </div>
       <div className="field">
+        <label>Tipo de mensalista</label>
+        <Select
+          value={tipo}
+          onChange={setTipo}
+          options={TIPO_MENSALISTA_OPCOES}
+        />
+      </div>
+      <div className="field">
         <label>1ª aula oficial <span style={{ color: "var(--muted)", fontWeight: 400 }}>(opcional)</span></label>
+        <div className="help" style={{ marginBottom: ".4rem" }}>Sábado e horários a partir das {NOITE_A_PARTIR} não fazem parte do plano — por isso não aparecem na lista.</div>
         <Select
           value={slotId}
           onChange={setSlotId}
@@ -1388,14 +1460,19 @@ function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso }) {
   const livres = data.slots
     .filter((s) => s.date >= t && slotBookings(data, s.id).length < slotCapacity(s))
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  /* Sábado e horário a partir das 18h saíram do plano de mensalista. Aqui quem
+     marca é a Inêz, então a turma continua na lista: ela vê o aviso e decide.
+     Confirmando, a chamada vai com `forcar` e o backend deixa passar. */
   const marcar = async (s) => {
+    const fora = motivoForaDaRegra(client, s);
     if (!(await confirmModal({
       title: titulo,
-      message: confirmar(s),
-      confirmLabel: titulo,
+      message: confirmar(s) + (fora ? `\n\n⚠️ Atenção: ${fora}. Marcando assim mesmo, você está abrindo uma exceção para ${client.name}.` : ""),
+      confirmLabel: fora ? "Marcar mesmo assim" : titulo,
+      tone: fora ? "danger" : undefined,
     }))) return;
     try {
-      await run(acao(s)); // run já avisa o erro na tela
+      await run(acao(s, !!fora)); // run já avisa o erro na tela
       toast(sucesso);
       open(<ClientProfile client={client} />);
     } catch { /* erro já reportado pelo run */ }
@@ -1406,15 +1483,21 @@ function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso }) {
     </>}>
       <div className="help">{ajuda}</div>
       <div style={{ marginTop: ".8rem" }}>
-        {livres.length ? livres.slice(0, 40).map((s) => (
-          <div className="roster-row row-click" key={s.id} onClick={() => marcar(s)}>
-            <div className="rr-info">
-              <b>{fmtDate(s.date)} · {faixaHorario(s.time, data.meta?.duracaoAulaMin)}</b>
-              <div className="cli-sub">{s.unit} · {slotCapacity(s) - slotBookings(data, s.id).length} vaga(s)</div>
+        {livres.length ? livres.slice(0, 40).map((s) => {
+          const fora = motivoForaDaRegra(client, s);
+          return (
+            <div className="roster-row row-click" key={s.id} onClick={() => marcar(s)}>
+              <div className="rr-info">
+                <b>{fmtDate(s.date)} · {faixaHorario(s.time, data.meta?.duracaoAulaMin)}</b>
+                <div className="cli-sub">
+                  {s.unit} · {slotCapacity(s) - slotBookings(data, s.id).length} vaga(s)
+                  {fora && <> · <span style={{ color: "var(--warn)" }}>⚠️ fora do plano ({fora})</span></>}
+                </div>
+              </div>
+              <button className="btn sec sm">Escolher</button>
             </div>
-            <button className="btn sec sm">Escolher</button>
-          </div>
-        )) : <div className="empty" style={{ padding: "1.2rem" }}><div className="ic">🪑</div><p>Nenhuma turma com vaga livre no momento.</p></div>}
+          );
+        }) : <div className="empty" style={{ padding: "1.2rem" }}><div className="ic">🪑</div><p>Nenhuma turma com vaga livre no momento.</p></div>}
       </div>
     </Modal>
   );
@@ -1425,24 +1508,25 @@ export function MakeupBookForm({ client }) {
     <SlotPicker
       client={client}
       titulo="Marcar reposição"
-      ajuda="Não há vaga reservada para reposição — aparecem só as turmas que já têm vaga livre. Máximo de 2 reposições dentro do mesmo mês."
+      ajuda="Não há vaga reservada para reposição — aparecem só as turmas que já têm vaga livre. Máximo de 2 reposições dentro do mesmo mês. O crédito só fica válido depois que a data da aula liberada passa, e a reposição não ocupa vaga do plano semanal."
       confirmar={(s) => `Marcar ${client.name} em reposição?\n\n${s.unit}\n${fmtDateLong(s.date)} às ${s.time}\n\nIsso consome 1 crédito.`}
-      acao={(s) => api.makeupBook(client.id, s.id)}
+      acao={(s, forcar) => api.makeupBook(client.id, s.id, forcar)}
       sucesso="Reposição marcada. 💚"
     />
   );
 }
 
-// Aula extra: a aluna pede pelo WhatsApp e você marca aqui. Por enquanto é
-// cortesia — entra confirmada, sem cobrança e sem consumir crédito.
+/* Aula extra pelo painel = CORTESIA. A aluna que compra sozinha faz isso no
+   portal (paga o Pix e escolhe o horário depois); este caminho entra sem
+   cobrança, para você marcar o que combinou por fora. */
 export function ExtraBookForm({ client }) {
   return (
     <SlotPicker
       client={client}
       titulo="Marcar aula extra"
-      ajuda="Aula além das do plano, combinada no WhatsApp. Por enquanto sem cobrança: entra já confirmada e não usa crédito de reposição."
-      confirmar={(s) => `Marcar ${client.name} em uma aula extra (sem cobrança)?\n\n${s.unit}\n${fmtDateLong(s.date)} às ${s.time}`}
-      acao={(s) => api.extraBook(client.id, s.id)}
+      ajuda="Cortesia: entra confirmada, sem cobrança, sem consumir crédito e sem ocupar vaga do plano semanal. Quando a aluna compra a aula extra pelo portal dela, o Pix é gerado lá e ela mesma escolhe o horário."
+      confirmar={(s) => `Marcar ${client.name} em uma aula extra de cortesia (sem cobrança)?\n\n${s.unit}\n${fmtDateLong(s.date)} às ${s.time}`}
+      acao={(s, forcar) => api.extraBook(client.id, s.id, forcar)}
       sucesso="Aula extra marcada. 💚"
     />
   );
@@ -1493,7 +1577,10 @@ export function BatchBookForm({ client }) {
         const proxVagas = prox ? slotCapacity(prox) - slotBookings(data, prox.id).length : null;
         const proxCap = prox ? slotCapacity(prox) : null;
         const prof = prox?.prof || g.slots[0]?.prof || "";
-        return { ...g, total: relevantes.length, ok, cheias, jaAgendadas, prox, proxVagas, proxCap, prof, datas: relevantes.map((s) => s.date) };
+        // Sábado / a partir das 18h: a turma continua na lista, mas marcada, e
+        // escolhê-la exige confirmar a exceção (quem manda na agenda é a Inêz).
+        const fora = motivoForaDaRegraDow(client, g.dow, g.time);
+        return { ...g, total: relevantes.length, ok, cheias, jaAgendadas, prox, proxVagas, proxCap, prof, fora, datas: relevantes.map((s) => s.date) };
       })
       .filter((g) => g.total > 0)
       .sort((a, b) => a.dow - b.dow || a.time.localeCompare(b.time));
@@ -1503,8 +1590,34 @@ export function BatchBookForm({ client }) {
   const escolhidos = grupos.filter((g) => picked.has(g.key));
   const totalAgendar = escolhidos.reduce((n, g) => n + g.ok, 0);
 
+  /* Teto do plano: cada turma escolhida acrescenta 1 aula por semana. Se a soma
+     passar do 1x/2x contratado, o backend pula as datas que sobram — então é
+     melhor dizer isso aqui, antes de você clicar. */
+  const limiteSemanal = Number(client.weeklyFreq) || 0;
+  const estouraTeto = limiteSemanal > 0 && escolhidos.length > limiteSemanal;
+
   const save = async () => {
     if (!escolhidos.length) return toast("Escolha ao menos uma turma.", "error");
+    // Turmas fora do plano (sábado / a partir das 18h) precisam de confirmação
+    // explícita: sem ela, o backend pula essas datas em vez de agendar.
+    const excecoes = escolhidos.filter((g) => g.fora);
+    let forcar = false;
+    if (excecoes.length || estouraTeto) {
+      const linhas = [
+        ...excecoes.map((g) => `${WEEKDAYS_SHORT[g.dow]} ${hhmm(g.time)} — ${g.fora}`),
+        ...(estouraTeto ? [`${escolhidos.length} turmas por semana, mas o plano dela é de ${limiteSemanal}x por semana`] : []),
+      ];
+      forcar = await confirmModal({
+        title: estouraTeto && !excecoes.length ? "Acima do plano contratado" : "Turma fora do plano",
+        message: `${linhas.join("\n")}\n\n` +
+          `Agendar ${client.name} assim abre uma exceção à regra do plano de mensalista.\n` +
+          "Voltando, o agendamento respeita o plano e pula o que passar do limite.",
+        confirmLabel: "Agendar mesmo assim",
+        cancelLabel: "Voltar e desmarcar",
+        tone: "danger",
+      });
+      if (!forcar) return;
+    }
     setBusy(true);
     try {
       // a API agenda um horário por chamada — agrupamos as datas por horário
@@ -1514,17 +1627,20 @@ export function BatchBookForm({ client }) {
         porHorario.get(g.time).push(...g.datas);
       });
       let agendadas = 0;
-      const p = { semTurma: 0, cheia: 0, jaAgendado: 0 };
+      const p = { semTurma: 0, cheia: 0, jaAgendado: 0, foraDaRegra: 0, teto: 0 };
       for (const [time, datas] of porHorario) {
-        const r = await run(api.batchBook(client.id, { unit, time, dates: [...new Set(datas)] }));
+        const r = await run(api.batchBook(client.id, { unit, time, dates: [...new Set(datas)], forcar }));
         agendadas += r?.agendadas ?? 0;
         const rp = r?.pulos || {};
         p.semTurma += rp.semTurma || 0; p.cheia += rp.cheia || 0; p.jaAgendado += rp.jaAgendado || 0;
+        p.foraDaRegra += rp.foraDaRegra || 0; p.teto += rp.teto || 0;
       }
       close();
       toast(
         `✅ ${agendadas} aula(s) agendada(s).\n` +
-        `Puladas: ${p.semTurma} sem turma · ${p.cheia} lotada(s) · ${p.jaAgendado} já agendada(s).`
+        `Puladas: ${p.semTurma} sem turma · ${p.cheia} lotada(s) · ${p.jaAgendado} já agendada(s)` +
+        (p.foraDaRegra ? ` · ${p.foraDaRegra} fora do plano` : "") +
+        (p.teto ? ` · ${p.teto} acima do plano semanal` : "") + "."
       );
     } finally { setBusy(false); }
   };
@@ -1538,7 +1654,14 @@ export function BatchBookForm({ client }) {
     </>}>
       <div className="cfg-preview" style={{ marginTop: 0, marginBottom: "1rem" }}>
         Escolha abaixo as <b>turmas que já existem</b> em que o(a) mensalista <b>{client.name}</b> vai entrar. Não cria turmas novas.
+        {limiteSemanal > 0 && <> O plano dela é de <b>{limiteSemanal}x por semana</b> — escolha até {limiteSemanal} turma{limiteSemanal > 1 ? "s" : ""}.</>}
       </div>
+      {estouraTeto && (
+        <div className="cfg-warn" style={{ marginBottom: "1rem" }}>
+          ⚠️ Você escolheu <b>{escolhidos.length}</b> turmas por semana, mas o plano de <b>{client.name}</b> é de <b>{limiteSemanal}x por semana</b>.
+          Ao salvar, o que passar do limite é pulado — a não ser que você confirme a exceção.
+        </div>
+      )}
 
       <div className="row2">
         <div className="field">
@@ -1580,7 +1703,8 @@ export function BatchBookForm({ client }) {
                     <span className="bb-hora">{hhmm(g.time)}</span>
                     {on && <span className="bb-check">✓</span>}
                   </div>
-                  {g.prof && <div className="bb-prof">com {g.prof}</div>}
+                  {g.fora && <div className="bb-prof" style={{ color: "var(--warn)" }} title={g.fora}>⚠️ fora do plano</div>}
+                  
                   <div className="bb-vagas">
                     {g.proxVagas != null && (
                       <span className={`badge ${g.proxVagas === 0 ? "b-danger" : g.proxVagas <= 1 ? "b-warn" : "b-ok"}`}>
@@ -1632,14 +1756,46 @@ function useClientForm(client, onDone) {
   const [billingDay, setBillingDay] = useState(client?.billingDay != null ? String(client.billingDay) : "");
   // Plano: "avulso" | "1" | "2" (mensalista 1x/2x por semana)
   const [plano, setPlano] = useState(client?.plan === "mensalista" ? String(client.weeklyFreq || 1) : "avulso");
+  // Tipo de mensalista: "fixo" (agenda montada pela Inêz) | "escala" (ela marca)
+  const [tipoMens, setTipoMens] = useState(client?.mensalistaTipo === "escala" ? "escala" : "fixo");
   const toggle = (t) => setTags((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
 
   const save = async () => {
     if (!name.trim()) return toast("Informe o nome.", "error");
     const payload = {
       name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: cpf.trim(), unit, tags, notes: notes.trim(),
-      birthday, firstClass, status, billingDay: billingDay === "" ? null : Number(billingDay)
+      birthday, firstClass, status, mensalistaTipo: tipoMens,
+      billingDay: billingDay === "" ? null : Number(billingDay)
     };
+
+    /* Inativar não é só mudar um rótulo: derruba a agenda e a cobrança dela.
+       Por isso a confirmação diz em números o que vai acontecer. A mensalidade
+       do mês CORRENTE fica de fora — é dívida do mês que ela cursou. */
+    if (client && status === "cancelado" && client.status !== "cancelado") {
+      const t = todayISO();
+      const comp = t.slice(0, 7);
+      const aulas = (data.bookings || []).filter(
+        (b) => b.clientName === client.name && b.date >= t && b.status !== "cancelada"
+      ).length;
+      const futuras = (data.invoices || []).filter(
+        (i) => i.clientId === client.id && i.status === "pendente" && i.competencia > comp
+      ).length;
+      const doMes = (data.invoices || []).filter(
+        (i) => i.clientId === client.id && i.status === "pendente" && i.competencia <= comp
+      ).length;
+      const ok = await confirmModal({
+        title: "Encerrar a inscrição",
+        message: `${client.name} deixa de ser aluna. Ao salvar:\n\n` +
+          `• ${aulas} aula(s) futura(s) serão canceladas\n` +
+          `• ${futuras} mensalidade(s) dos próximos meses serão canceladas\n` +
+          (doMes
+            ? `• ${doMes} mensalidade(s) deste mês (ou anteriores) CONTINUAM em aberto — se quiser perdoar, cancele na aba Mensalidades\n`
+            : "") +
+          "\nEla também deixa de ganhar e usar créditos de reposição.",
+        confirmLabel: "Encerrar inscrição", cancelLabel: "Voltar", tone: "danger",
+      });
+      if (!ok) return;
+    }
 
     const eraMensal = client?.plan === "mensalista";
     const querMensal = plano !== "avulso";
@@ -1648,9 +1804,13 @@ function useClientForm(client, onDone) {
 
     if (precisaMatricular) {
       const valor = Number(plano) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120);
+      // O dia da matrícula vira o dia de vencimento dela, e a 1ª mensalidade
+      // cai no mês seguinte — a não ser que você já tenha fixado um dia acima.
+      const dia = billingDay === "" ? Number(todayISO().slice(8, 10)) : Number(billingDay);
       const ok = await confirmModal({
         title: "Matricular como mensalista",
-        message: `${name.trim()} entrará no plano de ${plano}x por semana (${money(valor)}/mês).\n\nA primeira mensalidade será gerada agora e os boletos passam a sair todo mês.`,
+        message: `${name.trim()} entrará no plano de ${plano}x por semana (${money(valor)}/mês), como mensalista ${tipoMens}.\n\n` +
+          `A 1ª mensalidade vence no dia ${Math.min(28, dia)} do mês que vem, e todo mês nesse dia.`,
         confirmLabel: "Salvar e matricular",
       });
       if (!ok) return;
@@ -1660,8 +1820,13 @@ function useClientForm(client, onDone) {
     const saved = await run(client ? api.updateClient(client.id, payload) : api.createClient(payload));
     if (precisaMatricular) {
       const id = client ? client.id : saved?.id;
-      if (id) await run(api.enroll(id, { weeklyFreq: Number(plano) }));
-      toast(`📅 Mensalista ${plano}x/semana — 1ª mensalidade gerada.`);
+      const r = id ? await run(api.enroll(id, { weeklyFreq: Number(plano), mensalistaTipo: tipoMens, billingDay: billingDay === "" ? undefined : Number(billingDay) })) : null;
+      toast(`📅 Mensalista ${tipoMens} ${plano}x/semana.` +
+        (r?.primeiroVencimento ? ` 1ª mensalidade vence ${fmtDate(r.primeiroVencimento)}.` : ""));
+    } else if (saved?.encerrado) {
+      const e = saved.encerrado;
+      toast(`Inscrição encerrada. ${e.aulas} aula(s) e ${e.mensalidades} mensalidade(s) canceladas.` +
+        (e.extrasPagas ? ` Atenção: ela tem ${e.extrasPagas} aula(s) extra(s) já paga(s).` : ""));
     } else {
       toast("Cadastro salvo. 💚");
     }
@@ -1670,7 +1835,8 @@ function useClientForm(client, onDone) {
 
   return { meta, client, name, setName, phone, setPhone, email, setEmail, cpf, setCpf,
     unit, setUnit, tags, toggle, notes, setNotes, birthday, setBirthday,
-    firstClass, setFirstClass, status, setStatus, plano, setPlano, billingDay, setBillingDay, save };
+    firstClass, setFirstClass, status, setStatus, plano, setPlano, tipoMens, setTipoMens,
+    billingDay, setBillingDay, save };
 }
 
 function ClientFormFields({ f }) {
@@ -1721,6 +1887,19 @@ function ClientFormFields({ f }) {
           {f.plano !== "avulso" && client?.plan !== "mensalista" && (
             <div className="help" style={{ marginTop: ".4rem" }}>Ao salvar, a matrícula é feita e a 1ª mensalidade é gerada automaticamente.</div>
           )}
+          {f.plano !== "avulso" && (
+            <div style={{ marginTop: ".7rem" }}>
+              <label style={{ display: "block", marginBottom: ".3rem" }}>Tipo de mensalista</label>
+              <Select value={f.tipoMens} onChange={f.setTipoMens} options={TIPO_MENSALISTA_OPCOES} />
+              <div className="help" style={{ marginTop: ".4rem" }}>
+                Nos dois tipos: sem sábado e sem horário a partir das {NOITE_A_PARTIR}.
+                Na <b>escala</b>, a aluna marca a próxima aula no dia da aula dela.
+                {(client?.podeSabado || client?.podeNoite) && (
+                  <> Esta aluna tem direito herdado a {[client.podeSabado && "sábado", client.podeNoite && `horário a partir das ${NOITE_A_PARTIR}`].filter(Boolean).join(" e ")}.</>
+                )}
+              </div>
+            </div>
+          )}
         </div>
         <div className="field"><label>Situação da inscrição</label>
           <Select
@@ -1728,10 +1907,14 @@ function ClientFormFields({ f }) {
             onChange={f.setStatus}
             options={[
               { value: "ativo", label: "Ativa", hint: "está fazendo o curso", dot: "var(--ok)" },
-              { value: "cancelado", label: "Cancelada", hint: "rompeu com o curso", dot: "var(--danger)" },
+              { value: "cancelado", label: "Inativa", hint: "desistiu ou não é mais aluna", dot: "var(--danger)" },
             ]}
           />
-          <div className="help" style={{ marginTop: ".4rem" }}>Quem rompe deixa de ganhar e de usar créditos de reposição.</div>
+          <div className="help" style={{ marginTop: ".4rem" }}>
+            Ao salvar como <b>Inativa</b>, as aulas futuras dela são canceladas e as mensalidades
+            dos próximos meses também. A do mês corrente continua em aberto. Ela deixa de ganhar e
+            de usar créditos de reposição.
+          </div>
         </div>
       </div>
       <div className="field">
@@ -1749,7 +1932,10 @@ function ClientFormFields({ f }) {
         />
         <div className="help" style={{ marginTop: ".4rem" }}>Dia do mês em que vence a mensalidade para a emissão do boleto ou PIX.</div>
       </div>
-      {client?.plan !== "mensalista" && (
+      {/* O campo de etiquetas some enquanto não houver nenhuma para escolher —
+          a única que existia ("Lead") saiu do sistema. Se voltar a haver
+          etiqueta, basta preencher TAG_OPTIONS em helpers.js. */}
+      {TAG_OPTIONS.length > 0 && client?.plan !== "mensalista" && (
         <div className="field"><label>Etiquetas</label>
           <div className="tags">
             {TAG_OPTIONS.map((t) => (

@@ -52,7 +52,7 @@ function LoginFlow({ onAuth }) {
       const digits = phone.replace(/\D/g, "");
       if (digits.length < 8) { setErr("Digite um número de WhatsApp válido."); setLoading(false); return; }
       const r = await api.auth.check(digits);
-      if (!r.exists) { setErr("Número não cadastrado. Fale com a Inêz para fazer seu cadastro! 💚"); setLoading(false); return; }
+      if (!r.exists) { setErr("Número não cadastrado. Chame a gente no WhatsApp para fazer o seu cadastro! 💚"); setLoading(false); return; }
       setStep(r.hasPin ? "enter" : "create");
     } catch (e) { setErr(e.message); }
     finally { setLoading(false); }
@@ -210,7 +210,7 @@ function MyBookings({ client, data, onNew }) {
             {b.status === "aguardando" && (
               <div className="help" style={{ marginTop: ".7rem", fontSize: ".82rem" }}>
                 Reserva: {money(b.value)} — envie o comprovante no WhatsApp para confirmar sua vaga.{" "}
-                <a href={waLink("31988880000", `Olá Inêz! Vou enviar o comprovante da aula de ${fmtDate(b.date)} às ${b.time}.`)}
+                <a href={waLink("31988880000", `Olá! Vou enviar o comprovante da aula de ${fmtDate(b.date)} às ${b.time}.`)}
                   target="_blank" rel="noreferrer" style={{ color: "var(--green-deep)", fontWeight: 700 }}>
                   Enviar agora 💬
                 </a>

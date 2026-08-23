@@ -53,8 +53,8 @@ export default function AdminLogin() {
           {mode === "setup"
             ? "Crie o primeiro acesso do painel. Guarde bem essas credenciais."
             : mode === "register"
-            ? "Cadastre um novo acesso para a equipe da Inêz."
-            : "Acesso restrito à equipe da Inêz."}
+            ? "Cadastre um novo acesso para a equipe Fios que Curam."
+            : "Acesso restrito à equipe Fios que Curam."}
         </p>
 
         {mode === null ? (

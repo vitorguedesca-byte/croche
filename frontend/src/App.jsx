@@ -96,7 +96,7 @@ export default function App() {
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="brand">
           <img src="/logo-1.PNG" alt="Fios que Curam" />
-          <div><b>Fios que Curam</b><span>Gestão · por Inêz</span></div>
+          <div><b>Fios que Curam</b><span>Gestão · Fios que Curam</span></div>
         </div>
         {NAV.map((n, i) => n.sep
           ? <div key={i} className="nav-sep">{n.sep}</div>
