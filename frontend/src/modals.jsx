@@ -9,6 +9,7 @@ import {
   unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize, faixaHorario, hhmm,
   slotById, slotBookings, slotBookingsAll, slotCapacity, slotWaitlist, clientAttendance,
   bookingKind, competenciasDoAluno, compLabel, mensalidadeDe, matriculaISO,
+  compAtual, addComp, precoDaComp, mensalidadeDaComp,
   WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays,
   NOITE_A_PARTIR, ehSabadoISO, ehNoite, tipoMensalista, TIPO_MENSALISTA_LABEL,
   motivoForaDaRegra, motivoForaDaRegraDow,
@@ -973,11 +974,480 @@ export function ReplicateSlotForm({ slot }) {
 /* ======================= Perfil da aluna (histórico) ======================= */
 const iniciais = (n) => (n || "").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 
+/* ============ Alterar o valor da mensalidade de uma aluna ============
+   O mesmo modal serve para três coisas que a Inêz pensa como uma só:
+
+   • RECORRENTE — o valor dela muda para sempre. O mês corrente só entra se você
+     marcar: a mensalidade dele pode já ter sido emitida no valor antigo, e mudar
+     sem pedir seria alterar uma cobrança que a aluna já viu.
+   • UM OU MAIS MESES — desconto pontual ou promoção de N meses. Vale só nas
+     competências marcadas e acaba sozinho: passado o período, a mensalidade
+     volta ao valor recorrente sem ninguém precisar lembrar de desfazer.
+   • LIMPAR — tira o combinado de um mês e devolve ele ao valor recorrente.
+
+   Mês com mensalidade PAGA nunca é alterado: o dinheiro já entrou. O modal
+   mostra esses meses travados em vez de deixar você descobrir depois. */
+
+const ESCOPOS = [
+  { value: "recorrente", label: "De agora em diante", hint: "vira o valor fixo dela, todo mês", icon: "♾️" },
+  { value: "mes_atual", label: "Só o mês atual", hint: "desconto pontual; volta ao normal no mês seguinte", icon: "📆" },
+  { value: "proximo_mes", label: "Só o próximo mês", hint: "desconto pontual, já combinado", icon: "⏭️" },
+  { value: "promocao", label: "Promoção — meses seguidos", hint: "ex.: 3 meses com desconto; acaba sozinha", icon: "🎁" },
+  { value: "competencias", label: "Meses escolhidos", hint: "você marca um a um quais recebem o valor", icon: "🗓️" },
+];
+
+// Janela de meses oferecida para marcação: 6 atrás (mensalidade em aberto de
+// meses passados ainda pode ser negociada) até 12 à frente.
+const JANELA_ATRAS = 6;
+const JANELA_FRENTE = 12;
+
+export function AlterarMensalidade({ client, compInicial }) {
+  const { data, run } = useStore();
+  const { close } = useModal();
+  const atual = compAtual();
+  const recorrenteAtual = mensalidadeDe(client, data.meta);
+  const invs = (data.invoices || []).filter((i) => i.clientId === client.id);
+  const invDe = (comp) => invs.find((i) => i.competencia === comp);
+
+  const [valor, setValor] = useState(String(recorrenteAtual || ""));
+  /* Vindo da tela Mensalistas (com um mês na mão), o gesto é "mexer no valor
+     DESTE mês". Sem mês nenhum, o gesto é "mudar quanto ela paga". */
+  const [escopo, setEscopo] = useState(
+    !compInicial ? "recorrente" : compInicial === atual ? "mes_atual" : "competencias"
+  );
+  const [aplicarNoMesAtual, setAplicarNoMesAtual] = useState(false);
+  const [meses, setMeses] = useState("3");
+  const [inicio, setInicio] = useState(atual);
+  const [marcados, setMarcados] = useState(compInicial ? [compInicial] : [atual]);
+  const [motivo, setMotivo] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const janela = Array.from({ length: JANELA_ATRAS + 1 + JANELA_FRENTE }, (_, i) => addComp(atual, i - JANELA_ATRAS));
+  const novoValor = Number(String(valor).replace(",", "."));
+  // R$ 0 não é aceito: não existe Pix de zero. Mês de cortesia se resolve
+  // cancelando a mensalidade daquele mês, não zerando o valor.
+  const valido = Number.isFinite(novoValor) && novoValor > 0;
+
+  // Quais meses a escolha atual atinge — é o que alimenta a prévia
+  const alvos =
+    escopo === "recorrente" ? (aplicarNoMesAtual ? [atual] : [])
+    : escopo === "mes_atual" ? [atual]
+    : escopo === "proximo_mes" ? [addComp(atual, 1)]
+    : escopo === "promocao" ? Array.from({ length: Math.max(1, Math.min(24, parseInt(meses, 10) || 1)) }, (_, i) => addComp(inicio, i))
+    : [...marcados].sort();
+
+  const pagos = alvos.filter((c) => invDe(c)?.status === "pago");
+  const efetivos = alvos.filter((c) => invDe(c)?.status !== "pago");
+  const jaEmitidos = efetivos.filter((c) => invDe(c)?.status === "pendente");
+
+  const toggleMes = (comp) =>
+    setMarcados((m) => (m.includes(comp) ? m.filter((x) => x !== comp) : [...m, comp]));
+
+  const salvar = async () => {
+    if (!valido) return toast("Informe um valor válido.", "error");
+    if ((escopo === "competencias") && !marcados.length) return toast("Marque ao menos um mês.", "error");
+
+    // Confirmação em números: alterar valor mexe em cobrança, e o que a tela
+    // deixa claro aqui é o que ela não vai precisar explicar depois.
+    const linhas = [];
+    if (escopo === "recorrente") {
+      linhas.push(`${client.name} passa a pagar ${money(novoValor)} por mês, no lugar de ${money(recorrenteAtual)}.`);
+      linhas.push(aplicarNoMesAtual
+        ? `A mensalidade de ${compLabel(atual)} também passa para ${money(novoValor)}.`
+        : `A mensalidade de ${compLabel(atual)} continua como está — o novo valor começa em ${compLabel(addComp(atual, 1))}.`);
+    } else {
+      linhas.push(`${efetivos.length} mês(es) passam a custar ${money(novoValor)}: ${efetivos.map(compLabel).join(", ")}.`);
+      linhas.push(`Depois disso ela volta ao valor de sempre (${money(recorrenteAtual)}).`);
+    }
+    if (jaEmitidos.length) linhas.push(`${jaEmitidos.length} mensalidade(s) já emitida(s) serão atualizadas e o Pix reemitido.`);
+    if (pagos.length) linhas.push(`${pagos.length} mês(es) já pagos NÃO serão alterados: ${pagos.map(compLabel).join(", ")}.`);
+
+    if (!(await confirmModal({
+      title: "Alterar mensalidade",
+      message: linhas.join("\n\n"),
+      confirmLabel: "Alterar",
+    }))) return;
+
+    setBusy(true);
+    try {
+      const r = await run(api.alterarMensalidade(client.id, {
+        valor: novoValor, escopo, aplicarNoMesAtual,
+        meses: Number(meses) || 1, inicio,
+        competencias: escopo === "competencias" ? marcados : undefined,
+        motivo,
+      }));
+      toast(
+        escopo === "recorrente"
+          ? `Mensalidade de ${client.name} agora é ${money(novoValor)}/mês.`
+          : `${money(novoValor)} aplicado em ${r.competencias.length - (r.bloqueados?.length || 0)} mês(es).`,
+        "success"
+      );
+      close();
+    } finally { setBusy(false); }
+  };
+
+  // Tira o combinado de um mês: ele volta a seguir o valor recorrente
+  const limpar = async (comp) => {
+    if (!(await confirmModal({
+      title: "Remover valor combinado",
+      message: `${compLabel(comp)} volta a custar ${money(recorrenteAtual)}, o valor normal de ${client.name}.`,
+      confirmLabel: "Remover",
+    }))) return;
+    await run(api.alterarMensalidade(client.id, { escopo: "limpar", competencias: [comp] }));
+    toast(`${compLabel(comp)} voltou ao valor normal.`);
+  };
+
+  const combinados = (data.precos || [])
+    .filter((p) => p.clientId === client.id && p.competencia >= addComp(atual, -JANELA_ATRAS))
+    .sort((a, b) => a.competencia.localeCompare(b.competencia));
+
+  return (
+    <Modal
+      size="md"
+      title="Alterar mensalidade"
+      subheader={<>
+        <b>{client.name}</b> · hoje paga <b style={{ color: "var(--terracota)" }}>{money(recorrenteAtual)}</b>/mês
+        {client.monthlyValue != null ? " (valor individual)" : client.weeklyFreq ? ` (tabela — ${client.weeklyFreq}x/semana)` : ""}
+      </>}
+      footer={<>
+        <div style={{ flex: 1 }} />
+        <button className="btn ghost" onClick={close}>Cancelar</button>
+        <button className="btn" onClick={salvar} disabled={busy || !valido}>{busy ? "Salvando…" : "Alterar"}</button>
+      </>}
+    >
+      <div className="row2">
+        <div className="field">
+          <label>Novo valor (R$)</label>
+          <input type="number" min="0" step="0.01" value={valor} onChange={(e) => setValor(e.target.value)} autoFocus />
+          {valido && novoValor !== recorrenteAtual && (
+            <div className="help" style={{ marginTop: ".4rem" }}>
+              {novoValor < recorrenteAtual
+                ? <>↓ {money(recorrenteAtual - novoValor)} a menos ({Math.round((1 - novoValor / (recorrenteAtual || 1)) * 100)}% de desconto)</>
+                : <>↑ {money(novoValor - recorrenteAtual)} a mais</>}
+            </div>
+          )}
+        </div>
+        <div className="field">
+          <label>Vale para</label>
+          <Select value={escopo} onChange={setEscopo} options={ESCOPOS} />
+        </div>
+      </div>
+
+      {escopo === "recorrente" && (
+        <div className="field">
+          <button
+            type="button"
+            onClick={() => setAplicarNoMesAtual(!aplicarNoMesAtual)}
+            style={{
+              display: "flex", alignItems: "flex-start", gap: ".6rem", width: "100%", textAlign: "left",
+              padding: ".65rem .85rem", borderRadius: 10, cursor: "pointer", transition: "all .18s",
+              border: `1.5px solid ${aplicarNoMesAtual ? "var(--green-deep)" : "var(--line)"}`,
+              background: aplicarNoMesAtual ? "rgba(28,94,51,.07)" : "var(--cream)",
+            }}
+          >
+            <span style={{ fontSize: "1.05rem" }}>{aplicarNoMesAtual ? "✅" : "⬜"}</span>
+            <span>
+              <b style={{ color: aplicarNoMesAtual ? "var(--green-deep)" : "var(--muted)" }}>
+                Aplicar também na mensalidade de {compLabel(atual)}
+              </b>
+              <div className="help" style={{ marginTop: ".2rem" }}>
+                {invDe(atual)?.status === "pago"
+                  ? `A de ${compLabel(atual)} já está paga — ela não será alterada de qualquer forma.`
+                  : invDe(atual)
+                    ? "A mensalidade deste mês já foi emitida: o valor é corrigido e o Pix reemitido."
+                    : `Sem esta marcação, o valor novo começa a valer em ${compLabel(addComp(atual, 1))}.`}
+              </div>
+            </span>
+          </button>
+        </div>
+      )}
+
+      {escopo === "promocao" && (
+        <div className="row2">
+          <div className="field">
+            <label>Por quantos meses</label>
+            <Select
+              value={String(meses)}
+              onChange={setMeses}
+              options={[2, 3, 4, 6, 12].map((n) => ({ value: String(n), label: `${n} meses`, icon: "🎁" }))}
+            />
+          </div>
+          <div className="field">
+            <label>Começando em</label>
+            <Select
+              value={inicio}
+              onChange={setInicio}
+              options={Array.from({ length: 13 }, (_, i) => addComp(atual, i)).map((c) => ({
+                value: c, label: compLabel(c), icon: "📆",
+              }))}
+            />
+          </div>
+        </div>
+      )}
+
+      {escopo === "competencias" && (
+        <div className="field">
+          <label>Meses que recebem este valor <span className="cfg-count">{marcados.length}</span></label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: ".4rem", marginTop: ".3rem" }}>
+            {janela.map((comp) => {
+              const inv = invDe(comp);
+              const pago = inv?.status === "pago";
+              const on = marcados.includes(comp);
+              return (
+                <button
+                  key={comp}
+                  type="button"
+                  disabled={pago}
+                  onClick={() => toggleMes(comp)}
+                  title={pago ? "Já paga — não pode ser alterada" : inv ? "Mensalidade já emitida — o Pix será reemitido" : "Ainda sem boleto"}
+                  style={{
+                    padding: ".35rem .7rem", borderRadius: 999, fontSize: ".82rem",
+                    cursor: pago ? "not-allowed" : "pointer", opacity: pago ? 0.45 : 1,
+                    border: `1.5px solid ${on ? "var(--green-deep)" : "var(--line)"}`,
+                    background: on ? "rgba(28,94,51,.1)" : "var(--cream)",
+                    color: on ? "var(--green-deep)" : "var(--muted)",
+                    fontWeight: on ? 600 : 400, transition: "all .15s",
+                  }}
+                >
+                  {compLabel(comp)}{pago ? " ✓" : inv ? " ⏳" : ""}
+                </button>
+              );
+            })}
+          </div>
+          <div className="help" style={{ marginTop: ".45rem" }}>
+            ✓ = já paga (travada) · ⏳ = boleto já emitido (será atualizado e o Pix reemitido)
+          </div>
+        </div>
+      )}
+
+      <div className="field">
+        <label>Motivo <span style={{ color: "var(--muted)", fontWeight: 400 }}>(opcional)</span></label>
+        <input value={motivo} onChange={(e) => setMotivo(e.target.value)} placeholder="ex.: indicou uma amiga, promoção de aniversário" />
+      </div>
+
+      {/* Prévia: o que vai acontecer, mês a mês */}
+      {alvos.length > 0 && valido && (
+        <div className="cfg-preview" style={{ marginTop: ".2rem" }}>
+          <b>Ficará assim:</b>
+          <div style={{ marginTop: ".4rem" }}>
+            {alvos.map((comp) => {
+              const inv = invDe(comp);
+              const pago = inv?.status === "pago";
+              const antes = mensalidadeDaComp(client, comp, data.meta, data.precos);
+              return (
+                <div key={comp} className="hist-row">
+                  <span className="hist-comp">{compLabel(comp)}</span>
+                  <span className="hist-val">
+                    {pago ? money(inv.amountCents / 100)
+                      : <>{antes !== novoValor && <span style={{ textDecoration: "line-through", color: "var(--muted)", marginRight: ".4rem" }}>{money(antes)}</span>}<b>{money(novoValor)}</b></>}
+                  </span>
+                  <span className="hist-st">
+                    {pago ? <span className="badge b-ok">já paga — não muda</span>
+                      : inv ? <span className="badge b-warn">boleto atualizado</span>
+                      : <span className="badge b-muted">quando for gerado</span>}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {escopo !== "recorrente" && (
+            <div className="help" style={{ marginTop: ".45rem" }}>
+              Depois desses meses, {client.name.split(" ")[0]} volta a pagar {money(recorrenteAtual)}.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Combinados que já existem — para poder desfazer sem adivinhação */}
+      {combinados.length > 0 && (
+        <div className="field" style={{ marginTop: ".6rem" }}>
+          <label>Valores já combinados</label>
+          {combinados.map((p) => (
+            <div key={p.id} className="hist-row">
+              <span className="hist-comp">{compLabel(p.competencia)}</span>
+              <span className="hist-val"><b>{money(p.amountCents / 100)}</b>{p.motivo ? <span className="cli-sub"> · {p.motivo}</span> : null}</span>
+              <span className="hist-st">
+                <button className="btn ghost sm" onClick={() => limpar(p.competencia)}>Remover</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/* ============ Reajuste geral das mensalidades ============
+   Duas coisas diferentes acontecem aqui, e a tela separa as duas porque errar
+   isso custa dinheiro:
+
+   1. A TABELA (plano 1x/2x) sobe. É ela que define o valor de quem entrar
+      depois e de quem hoje paga o preço de tabela — essas alunas são reajustadas
+      automaticamente, sem precisar de lista.
+   2. Quem tem VALOR INDIVIDUAL não é arrastada junto. Esse valor foi combinado
+      (desconto de amiga, acerto antigo) e subir sozinho seria desfazer um acordo
+      sem ninguém notar. Por isso a lista aparece e você marca quem entra.
+
+   O reajuste vale do próximo boleto em diante: mensalidade já emitida não é
+   mexida — quem já recebeu o Pix não deve receber outro cobrando mais. */
+export function ReajusteGeral() {
+  const { data, run } = useStore();
+  const { close } = useModal();
+  const [tipo, setTipo] = useState("percentual");
+  const [valor, setValor] = useState("10");
+  const [atualizarTabela, setAtualizarTabela] = useState(true);
+  const [marcados, setMarcados] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  const n = Number(String(valor).replace(",", "."));
+  const valido = Number.isFinite(n) && n !== 0;
+  const aplicar = (base) => Math.max(0, Math.round((tipo === "percentual" ? base * (1 + n / 100) : base + n) * 100) / 100);
+
+  const mensalistas = data.clients.filter((c) => c.plan === "mensalista" && c.status !== "cancelado");
+  const individuais = mensalistas.filter((c) => c.monthlyValue != null).sort((a, b) => a.name.localeCompare(b.name));
+  const naTabela = mensalistas.filter((c) => c.monthlyValue == null);
+  const p1 = data.meta?.valorPlano1x ?? 120;
+  const p2 = data.meta?.valorPlano2x ?? 200;
+
+  const toggle = (id) => setMarcados((m) => (m.includes(id) ? m.filter((x) => x !== id) : [...m, id]));
+  const todos = () => setMarcados(marcados.length === individuais.length ? [] : individuais.map((c) => c.id));
+
+  const salvar = async () => {
+    if (!valido) return toast("Informe o reajuste.", "error");
+    if (!atualizarTabela && !marcados.length) return toast("Nada foi marcado para reajustar.", "error");
+
+    const linhas = [];
+    if (atualizarTabela) {
+      linhas.push(`Tabela: 1x/semana ${money(p1)} → ${money(aplicar(p1))} · 2x/semana ${money(p2)} → ${money(aplicar(p2))}.`);
+      linhas.push(`${naTabela.length} aluna(s) que pagam o preço de tabela passam a pagar o valor novo. Quem se matricular a partir de agora também.`);
+    }
+    if (marcados.length) linhas.push(`${marcados.length} aluna(s) com valor individual serão reajustadas.`);
+    if (individuais.length - marcados.length > 0) {
+      linhas.push(`${individuais.length - marcados.length} aluna(s) com valor individual ficam como estão.`);
+    }
+    linhas.push("As mensalidades já emitidas não mudam — o reajuste vale do próximo boleto em diante.");
+
+    if (!(await confirmModal({ title: "Aplicar reajuste", message: linhas.join("\n\n"), confirmLabel: "Aplicar" }))) return;
+
+    setBusy(true);
+    try {
+      const r = await run(api.reajuste({ tipo, valor: n, atualizarTabela, individuais: marcados }));
+      toast(`Reajuste aplicado.${r.tabela ? ` Tabela: ${money(r.tabela.plano1x)} / ${money(r.tabela.plano2x)}.` : ""}`, "success");
+      close();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal
+      size="md"
+      title="Reajuste geral"
+      subheader={<>{mensalistas.length} mensalista(s) ativa(s) · {naTabela.length} no preço de tabela · {individuais.length} com valor individual</>}
+      footer={<>
+        <div style={{ flex: 1 }} />
+        <button className="btn ghost" onClick={close}>Cancelar</button>
+        <button className="btn" onClick={salvar} disabled={busy || !valido}>{busy ? "Aplicando…" : "Aplicar reajuste"}</button>
+      </>}
+    >
+      <div className="row2">
+        <div className="field">
+          <label>Tipo de reajuste</label>
+          <Select
+            value={tipo}
+            onChange={setTipo}
+            options={[
+              { value: "percentual", label: "Percentual", hint: "ex.: 10% sobre o valor de cada uma", icon: "％" },
+              { value: "reais", label: "Valor fixo (R$)", hint: "ex.: R$ 15 a mais para todo mundo", icon: "💵" },
+            ]}
+          />
+        </div>
+        <div className="field">
+          <label>{tipo === "percentual" ? "Percentual (%)" : "Valor (R$)"}</label>
+          <input type="number" step={tipo === "percentual" ? "0.5" : "1"} value={valor} onChange={(e) => setValor(e.target.value)} />
+          <div className="help" style={{ marginTop: ".4rem" }}>Use número negativo para reduzir.</div>
+        </div>
+      </div>
+
+      <div className="field">
+        <button
+          type="button"
+          onClick={() => setAtualizarTabela(!atualizarTabela)}
+          style={{
+            display: "flex", alignItems: "flex-start", gap: ".6rem", width: "100%", textAlign: "left",
+            padding: ".65rem .85rem", borderRadius: 10, cursor: "pointer", transition: "all .18s",
+            border: `1.5px solid ${atualizarTabela ? "var(--green-deep)" : "var(--line)"}`,
+            background: atualizarTabela ? "rgba(28,94,51,.07)" : "var(--cream)",
+          }}
+        >
+          <span style={{ fontSize: "1.05rem" }}>{atualizarTabela ? "✅" : "⬜"}</span>
+          <span>
+            <b style={{ color: atualizarTabela ? "var(--green-deep)" : "var(--muted)" }}>Reajustar a tabela de preços</b>
+            <div className="help" style={{ marginTop: ".2rem" }}>
+              {valido
+                ? <>1x/semana <b>{money(p1)} → {money(aplicar(p1))}</b> · 2x/semana <b>{money(p2)} → {money(aplicar(p2))}</b>.
+                    Atinge as {naTabela.length} aluna(s) sem valor próprio e todas as matrículas novas.</>
+                : "Define o valor de quem entrar depois e de quem hoje paga o preço de tabela."}
+            </div>
+          </span>
+        </button>
+      </div>
+
+      {individuais.length > 0 && (
+        <div className="field">
+          <label style={{ display: "flex", alignItems: "center", gap: ".5rem" }}>
+            Alunas com valor individual <span className="cfg-count">{marcados.length}/{individuais.length}</span>
+            <div style={{ flex: 1 }} />
+            <button className="btn ghost sm" type="button" onClick={todos}>
+              {marcados.length === individuais.length ? "Desmarcar todas" : "Marcar todas"}
+            </button>
+          </label>
+          <div className="help" style={{ marginBottom: ".4rem" }}>
+            Elas têm valor combinado. Marque só quem deve receber o reajuste — as demais ficam como estão.
+          </div>
+          <div style={{ maxHeight: 220, overflowY: "auto" }}>
+            {individuais.map((c) => {
+              const on = marcados.includes(c.id);
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => toggle(c.id)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: ".6rem", width: "100%", textAlign: "left",
+                    padding: ".45rem .7rem", marginBottom: ".3rem", borderRadius: 8, cursor: "pointer",
+                    border: `1.5px solid ${on ? "var(--green-deep)" : "var(--line)"}`,
+                    background: on ? "rgba(28,94,51,.07)" : "var(--cream)",
+                  }}
+                >
+                  <span>{on ? "✅" : "⬜"}</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <b style={{ fontSize: ".9rem" }}>{c.name}</b>
+                    <span className="cli-sub"> · {c.weeklyFreq ? `${c.weeklyFreq}x/semana` : "plano antigo"}</span>
+                  </span>
+                  <span className="cli-sub" style={{ whiteSpace: "nowrap" }}>
+                    {money(c.monthlyValue)}
+                    {on && valido && <> → <b style={{ color: "var(--terracota)" }}>{money(aplicar(c.monthlyValue))}</b></>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="cfg-warn" style={{ marginTop: ".4rem" }}>
+        ⚠️ Não há "desfazer": o sistema não guarda qual era o valor de cada aluna antes.
+        Confira a conta acima antes de aplicar.
+      </div>
+    </Modal>
+  );
+}
+
 /* ====== Mensalidades do aluno (fechamento + pagamento) ======
    Mês a mês desde a primeira matrícula. Meses sem boleto aparecem como
    "não gerado" — o sistema não cria cobrança retroativa. */
 function MensalidadesPanel({ client }) {
   const { data } = useStore();
+  const { open } = useModal();
   const comps = competenciasDoAluno(client);
   const invs = (data.invoices || []).filter((i) => i.clientId === client.id);
   const valorPadrao = mensalidadeDe(client, data.meta);
@@ -986,30 +1456,51 @@ function MensalidadesPanel({ client }) {
   const emAberto = invs.filter((i) => i.status === "pendente")
     .reduce((s, i) => s + (i.encargos ? i.encargos.total : i.amountCents / 100), 0);
   const ini = matriculaISO(client);
+  /* Meses futuros só aparecem quando têm algo combinado (promoção, desconto já
+     acertado) — senão a lista viraria um calendário de meses vazios. */
+  const futurosComCombinado = (data.precos || [])
+    .filter((p) => p.clientId === client.id && p.competencia > compAtual())
+    .map((p) => p.competencia)
+    .sort()
+    .reverse();
+  const linhas = [...futurosComCombinado, ...comps];
+
   return (
     <div className="prof-panel">
       <div className="prof-panel-h">
         <b>🧾 Mensalidades · fechamento</b>
         <span className="cli-sub">{ini ? `desde ${fmtDate(ini)}` : "sem matrícula"}</span>
       </div>
-      <div className="cli-sub" style={{ marginBottom: ".5rem" }}>
-        <b style={{ color: "var(--green-deep)" }}>{money(totalPago)}</b> pago
-        {emAberto ? <> · <b style={{ color: "var(--warn)" }}>{money(emAberto)}</b> em aberto</> : null}
+      <div className="cli-sub" style={{ marginBottom: ".5rem", display: "flex", alignItems: "center", gap: ".6rem", flexWrap: "wrap" }}>
+        <span>
+          <b style={{ color: "var(--green-deep)" }}>{money(totalPago)}</b> pago
+          {emAberto ? <> · <b style={{ color: "var(--warn)" }}>{money(emAberto)}</b> em aberto</> : null}
+          {" · "}mensalidade <b style={{ color: "var(--terracota)" }}>{money(valorPadrao)}</b>
+        </span>
+        <div style={{ flex: 1 }} />
+        <button className="btn sec sm" onClick={() => open(<AlterarMensalidade client={client} />)}>
+          💰 Alterar valor
+        </button>
       </div>
       <div>
-        {comps.map((comp) => {
+        {linhas.map((comp) => {
           const inv = invs.find((i) => i.competencia === comp);
-          const valor = inv ? inv.amountCents / 100 : valorPadrao;
+          const combinado = precoDaComp(data.precos, client.id, comp);
+          // Sem boleto ainda, o valor que aparece é o que ele vai nascer cobrando
+          const valor = inv ? inv.amountCents / 100 : (combinado ? combinado.amountCents / 100 : valorPadrao);
           return (
             <div className="hist-row" key={comp}>
-              <span className="hist-comp">{compLabel(comp)}</span>
+              <span className="hist-comp">
+                {compLabel(comp)}
+                {combinado && <span className="cli-sub"> · {combinado.origem === "promocao" ? "promoção" : "combinado"}{combinado.motivo ? `: ${combinado.motivo}` : ""}</span>}
+              </span>
               <span className="hist-val" title={inv?.encargos?.atrasada
                 ? `${money(valor)} + multa ${money(inv.encargos.multa)} + juros ${money(inv.encargos.juros)}`
-                : undefined}>
+                : combinado ? `Valor combinado para este mês (o normal é ${money(valorPadrao)})` : undefined}>
                 {inv?.encargos?.atrasada ? money(inv.encargos.total) : money(valor)}
               </span>
               <span className="hist-st">
-                {!inv ? <span className="badge b-muted">não gerado</span>
+                {!inv ? <span className={combinado ? "badge b-warn" : "badge b-muted"}>{combinado ? "🎁 valor combinado" : "não gerado"}</span>
                   : inv.status === "pago" ? <span className="badge b-ok">✓ {inv.paidAt ? fmtDate(String(inv.paidAt).slice(0, 10)) : "pago"}</span>
                   : inv.status === "cancelado" ? <span className="badge b-danger">cancelado</span>
                   : inv.encargos?.atrasada ? <span className="badge b-danger">⚠️ {inv.encargos.dias} dia(s) de atraso</span>
@@ -1133,6 +1624,15 @@ export function ClientProfile({ client, initialTab }) {
           {c.email ? <div><span className="k">Email</span><span className="v">{c.email}</span></div> : null}
           <div><span className="k">Aniversário</span><span className="v">{c.birthday ? "🎂 " + fmtDate(c.birthday) : "—"}</span></div>
           <div><span className="k">Plano</span><span className="v">{planoLabel(c, data.meta)}</span></div>
+          {c.plan === "mensalista" && (
+            <div>
+              <span className="k">Mensalidade</span>
+              <span className="v" style={{ display: "flex", alignItems: "center", gap: ".4rem", justifyContent: "flex-end" }}>
+                <b style={{ color: "var(--terracota)" }}>{money(mensalidadeDe(c, data.meta))}</b>
+                <button className="btn ghost sm" onClick={() => open(<AlterarMensalidade client={c} />)}>Alterar</button>
+              </span>
+            </div>
+          )}
           <div><span className="k">Vencimento boleto/PIX</span><span className="v">{c.billingDay ? `Dia ${c.billingDay}` : `Dia ${data.meta?.vencimentoDia || 10} (padrão)`}</span></div>
           <div><span className="k">Portal (PIN)</span><span className="v">{c.hasPin ? <span className="badge b-ok">cadastrado</span> : <span className="badge b-muted">sem PIN</span>}</span></div>
           {(c.tags || []).length ? <div><span className="k">Etiquetas</span><span className="v tags" style={{ justifyContent: "flex-end" }}>{c.tags.map((x) => <span key={x} className="chip">{x}</span>)}</span></div> : null}

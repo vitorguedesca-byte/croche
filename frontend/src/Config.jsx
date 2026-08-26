@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { toast } from "./toast.jsx";
 import { useStore } from "./store.jsx";
+import { useModal } from "./ui.jsx";
+import { ReajusteGeral } from "./modals.jsx";
 import { api } from "./api.js";
 import { WEEKDAYS_PT, DEFAULT_HORARIO, parseHorario, horarioToText, serializeHorario, money } from "./helpers.js";
 
@@ -39,6 +41,7 @@ function Chave({ on, onToggle, titulo, ligado, desligado }) {
 
 export default function Config() {
   const { data, run } = useStore();
+  const { open } = useModal();
   const m = data.meta;
   const [valor, setValor] = useState(m.valorPadrao);
   const [cap, setCap] = useState(m.capacidadePadrao);
@@ -202,6 +205,21 @@ export default function Config() {
         </div>
         <div className="cfg-preview">
           🏷️ Matrícula <b>R$ {taxaMatricula}</b> · 1x/semana <b>R$ {plano1x}</b> (4 aulas) · 2x/semana <b>R$ {plano2x}</b> (8 aulas) · extra <b>R$ {avulsa}</b> · aula de <b>{Math.floor(duracao / 60)}h{duracao % 60 ? String(duracao % 60).padStart(2, "0") : ""}</b>
+        </div>
+
+        {/* Mudar os campos acima muda a TABELA — vale para quem entrar depois e
+            para quem paga o preço de tabela. O reajuste é outra coisa: aplica um
+            percentual (ou valor fixo) de uma vez, e deixa você escolher se as
+            alunas com valor individual entram junto. */}
+        <div style={{ marginTop: "1rem", borderTop: "1px solid var(--line)", paddingTop: ".9rem", display: "flex", alignItems: "center", gap: ".8rem", flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <b style={{ fontSize: ".95rem" }}>Reajuste geral</b>
+            <div className="help" style={{ marginTop: ".2rem" }}>
+              Aplica um percentual (ou valor fixo) na tabela e, se você quiser, nas mensalistas
+              com valor individual. Não mexe em mensalidade já emitida.
+            </div>
+          </div>
+          <button className="btn sec" type="button" onClick={() => open(<ReajusteGeral />)}>📈 Aplicar reajuste</button>
         </div>
       </div>
 

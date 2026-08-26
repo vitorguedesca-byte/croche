@@ -65,6 +65,15 @@ export const api = {
   payInvoice: (id) => req("POST", `/api/invoices/${id}/pay`),
   cancelInvoice: (id) => req("POST", `/api/invoices/${id}/cancel`),
 
+  /* Alterar o valor da mensalidade. `data.escopo` diz o alcance:
+     recorrente (para sempre) | mes_atual | proximo_mes | competencias (meses
+     escolhidos) | promocao (N meses seguidos) | limpar (volta ao recorrente). */
+  alterarMensalidade: (clientId, data) => req("POST", `/api/clients/${clientId}/mensalidade-valor`, data),
+  // Reemite o Pix da mensalidade (o QR some quando o valor muda)
+  reemitirPix: (invoiceId) => req("POST", `/api/invoices/${invoiceId}/pix`),
+  reajustePreview: (data) => req("POST", "/api/mensalidades/reajuste/preview", data),
+  reajuste: (data) => req("POST", "/api/mensalidades/reajuste", data),
+
   addWaitlist: (slotId, data) => req("POST", `/api/slots/${slotId}/waitlist`, data),
   removeWaitlist: (id) => req("DELETE", `/api/waitlist/${id}`),
   promoteWaitlist: (id) => req("POST", `/api/waitlist/${id}/promote`),

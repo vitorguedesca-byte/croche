@@ -5,13 +5,14 @@ import { useModal, StatusBadge, Select } from "./ui.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import {
-  SlotCard, DayModal, ManageBooking, ConfirmPayment, ClientProfile, SlotDetail,
+  SlotCard, DayModal, ManageBooking, ConfirmPayment, ClientProfile, SlotDetail, AlterarMensalidade,
 } from "./modals.jsx";
 import {
   UNITS, STATUS, unitColor,
   todayISO, addDays, weekStart, fmtDate, fmtDateLong, weekdayShort, money, waLink, capitalize, faixaHorario, hhmm,
   bookingsActive, slotBookings, slotBookingsAll, slotCapacity, slotOccupancy, slotWaitlist, clientAttendance,
   bookingKind, BOOKING_KINDS, compAtual, addComp, compLabel, competenciasDoAluno, mensalidadeDe, matriculaISO,
+  mensalidadeDaComp, precoDaComp,
   clientActiveCount, classifyClient, isNewLead,
 } from "./helpers.js";
 
@@ -557,7 +558,9 @@ export function Mensalistas() {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const invOf = (c) => (data.invoices || []).find((i) => i.clientId === c.id && i.competencia === comp);
-  const valorDe = (c) => mensalidadeDe(c, data.meta);
+  // Valor DESTA competência: um desconto ou promoção marcada para o mês vale
+  // mais do que o valor recorrente da aluna.
+  const valorDe = (c) => mensalidadeDaComp(c, comp, data.meta, data.precos);
   const vencDe = (c) => Math.min(28, Math.max(1, c.billingDay || data.meta.vencimentoDia || 10));
 
   const gerar = async (c) => { setBusy(true); try { await run(api.gerarMensalidade(c.id, comp)); } finally { setBusy(false); } };
@@ -569,6 +572,16 @@ export function Mensalistas() {
   };
   const marcarPago = async (inv) => { await run(api.payInvoice(inv.id)); };
   const copyPix = (code) => { navigator.clipboard.writeText(code); toast("Código Pix copiado! 📋"); };
+  /* Refaz o QR e já entrega o código na área de transferência: quem clica aqui
+     está prestes a colar no WhatsApp da aluna. */
+  const reemitir = async (inv) => {
+    setBusy(true);
+    try {
+      const r = await run(api.reemitirPix(inv.id));
+      if (r?.pixCode) { navigator.clipboard.writeText(r.pixCode); toast("Pix atualizado e copiado! 📋", "success"); }
+      else toast("Pix gerado.", "success");
+    } finally { setBusy(false); }
+  };
 
   /* Cobrança pelo WhatsApp da aluna. Abre a conversa com o texto pronto — quem
      aperta enviar é você. É de propósito: enviar sozinho pela API oficial exige
@@ -659,7 +672,17 @@ export function Mensalistas() {
                   </div>
                 </td>
                 <td>
-                  {money(inv ? inv.amountCents / 100 : valorDe(c))}{c.monthlyValue != null ? <span className="cli-sub"> (individual)</span> : null}
+                  {money(inv ? inv.amountCents / 100 : valorDe(c))}
+                  {(() => {
+                    const combinado = precoDaComp(data.precos, c.id, comp);
+                    if (combinado) return (
+                      <span className="cli-sub" title={combinado.motivo || `Valor combinado só para ${compLabel(comp)} — o normal dela é ${money(mensalidadeDe(c, data.meta))}`}>
+                        {" "}{combinado.origem === "promocao" ? "🎁 promoção" : "🎁 desconto"}
+                      </span>
+                    );
+                    if (c.monthlyValue != null) return <span className="cli-sub"> (individual)</span>;
+                    return null;
+                  })()}
                   {/* Vencida: mostra o total que o Pix está cobrando hoje */}
                   {inv?.encargos?.atrasada && (
                     <div className="cli-sub" title={`Multa ${money(inv.encargos.multa)} + juros ${money(inv.encargos.juros)} (${inv.encargos.dias} dia(s))`}>
@@ -676,6 +699,10 @@ export function Mensalistas() {
                     : <span className="badge b-warn">⏳ pendente · vence {fmtDate(inv.dueDate)}</span>}
                 </td>
                 <td className="td-actions">
+                  {/* Alterar o valor a partir daqui já chega com o mês da tela
+                      escolhido — é o caminho de "dar desconto pra ela nesse mês". */}
+                  <button className="btn ghost sm" title="Alterar o valor da mensalidade"
+                    onClick={() => open(<AlterarMensalidade client={c} compInicial={comp} />)}>💰</button>
                   {!inv && ehMesAtual && <button className="btn sm" disabled={busy} onClick={() => gerar(c)}>🧾 Gerar boleto</button>}
                   {inv && inv.status === "pendente" && <>
                     <button className="btn wa sm"
@@ -684,7 +711,11 @@ export function Mensalistas() {
                       <WaIcon /> {inv.encargos?.atrasada ? "Cobrar" : "Lembrar"}
                     </button>
                     {inv.boletoUrl && <a className="btn sec sm" href={inv.boletoUrl} target="_blank" rel="noreferrer">📄 Boleto</a>}
-                    {inv.pixCode && <button className="btn sec sm" onClick={() => copyPix(inv.pixCode)}>💠 Pix</button>}
+                    {inv.pixCode
+                      ? <button className="btn sec sm" onClick={() => copyPix(inv.pixCode)}>💠 Pix</button>
+                      /* Sem QR: o valor foi alterado (o antigo cobrava o preço
+                         velho) ou o Sicredi falhou na emissão. Um clique refaz. */
+                      : <button className="btn sec sm" disabled={busy} onClick={() => reemitir(inv)}>💠 Gerar Pix</button>}
                     <button className="btn sm" onClick={() => marcarPago(inv)}>✓ Marcar pago</button>
                   </>}
                 </td>

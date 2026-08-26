@@ -600,12 +600,15 @@ function haChoque(timeA, timeB, dur = SETTINGS.duracaoAulaMin) {
 app.get(
   "/api/state",
   wrap(async (req, res) => {
-    const [clients, slots, bookings, invoices, makeups] = await Promise.all([
+    const [clients, slots, bookings, invoices, makeups, precos] = await Promise.all([
       prisma.client.findMany({ orderBy: { name: "asc" } }),
       prisma.slot.findMany({ include: { waitlist: true }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
       prisma.booking.findMany({ orderBy: [{ date: "asc" }, { time: "asc" }] }),
       prisma.invoice.findMany({ orderBy: [{ competencia: "desc" }, { createdAt: "desc" }] }),
       prisma.makeupCredit.findMany({ orderBy: { createdAt: "desc" } }),
+      // valores combinados mês a mês (desconto/promoção) — a tela precisa deles
+      // para mostrar o valor certo de meses que ainda não têm boleto gerado
+      prisma.monthlyPrice.findMany({ orderBy: { competencia: "asc" } }),
     ]);
     res.json({
       meta: { ...SETTINGS, multaAtraso: MULTA_ATRASO_REAIS, jurosDia: JUROS_DIA_PERCENTUAL },
@@ -615,6 +618,7 @@ app.get(
       // cada mensalidade já vem com a conta do atraso pronta para a tela
       invoices: invoices.map(comEncargos),
       makeups,
+      precos,
     });
   })
 );
@@ -1174,6 +1178,18 @@ const mensalidadeValorDe = (c) => {
   if (c.weeklyFreq) return valorDoPlano(c.weeklyFreq) || 0;
   return SETTINGS.mensalidadeValor || 0;
 };
+
+/* Valor de UMA competência. Antes do recorrente vem o valor combinado só para
+   aquele mês (desconto pontual, promoção de 2/3 meses): é isso que faz a
+   promoção acabar sozinha — passada a competência, não há mais o que consultar
+   e o valor volta a ser o de sempre. */
+async function valorDaCompetencia(client, comp) {
+  const preco = await prisma.monthlyPrice.findUnique({
+    where: { clientId_competencia: { clientId: client.id, competencia: comp } },
+  });
+  if (preco) return preco.amountCents / 100;
+  return mensalidadeValorDe(client);
+}
 // Dia de vencimento da competência, sem ajuste nenhum. É esta data que diz
 // QUANDO gerar a mensalidade — por isso não pode ser a versão "empurrada para
 // hoje" abaixo, senão a antecedência nunca seria satisfeita.
@@ -1224,7 +1240,8 @@ async function gerarMensalidade(clientId, competencia) {
   // já existe para essa competência? reaproveita
   const existing = await prisma.invoice.findFirst({ where: { clientId, competencia: comp } });
   if (existing) return existing;
-  const valor = mensalidadeValorDe(client);
+  // Valor DA COMPETÊNCIA: respeita o desconto/promoção marcada para este mês.
+  const valor = await valorDaCompetencia(client, comp);
   if (!valor) throw Object.assign(new Error("Defina o valor da mensalidade (no aluno ou nas Configurações)."), { code: 400 });
   const dueDate = vencimentoDe(client, comp);
   const valorCents = Math.round(valor * 100);
@@ -1356,6 +1373,263 @@ app.post("/api/invoices/:id/pay", wrap(async (req, res) => {
 app.post("/api/invoices/:id/cancel", wrap(async (req, res) => {
   const inv = await prisma.invoice.update({ where: { id: Number(req.params.id) }, data: { status: "cancelado" } });
   res.json(inv);
+}));
+
+/* Reemitir o Pix de uma mensalidade, pelo painel.
+   Existe porque mudar o valor apaga o QR antigo (ele cobrava o preço velho) e a
+   Inêz precisa do código novo na mão para mandar pelo WhatsApp — sem depender de
+   a aluna abrir o portal primeiro. */
+app.post("/api/invoices/:id/pix", wrap(async (req, res) => {
+  const inv = await prisma.invoice.findUnique({ where: { id: Number(req.params.id) } });
+  if (!inv) return res.status(404).json({ error: "Mensalidade não encontrada." });
+  if (inv.status !== "pendente") return res.status(400).json({ error: "Esta mensalidade não está em aberto." });
+  try {
+    res.json(comEncargos(await pixPagavelDaMensalidade(inv)));
+  } catch (e) {
+    res.status(e.code || 503).json({ error: e.message || "Não consegui gerar o Pix agora." });
+  }
+}));
+
+/* ---------- VALOR DA MENSALIDADE: alteração pela admin ----------
+   Três coisas diferentes que a tela chama de "mudar o valor", e que aqui são
+   deliberadamente separadas:
+
+   1. RECORRENTE  → Client.monthlyValue. Vale de agora em diante, para sempre.
+   2. UM OU MAIS MESES → MonthlyPrice. Desconto pontual ou promoção de N meses;
+      passada a competência o valor volta sozinho ao recorrente. É por isso que a
+      promoção não precisa de "data de fim": ela simplesmente deixa de existir.
+   3. REAJUSTE GERAL → mexe na tabela de preços (vale para quem entrar depois) e,
+      opcionalmente, no valor individual de quem já está matriculada.
+
+   Em todos os casos, mês que JÁ tem mensalidade paga não é tocado: o dinheiro já
+   entrou, mudar o valor ali seria reescrever a história. Mensalidade pendente é
+   atualizada e o Pix reemitido — senão o QR antigo continuaria cobrando o valor
+   velho e o desconto não chegaria na aluna. */
+
+const compValida = (s) => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(s || ""));
+
+// Soma n meses a uma competência 'YYYY-MM'
+const addComp = (comp, n) => {
+  const [y, m] = comp.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + n, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+};
+
+const MESES_PROMO_MAX = 24;
+
+/* Grava o valor de um mês e propaga para a mensalidade daquele mês, se já
+   existir. Devolve o que aconteceu, para a tela poder dizer em números.
+   `valorReais` null apaga o combinado e o mês volta ao valor recorrente. */
+async function aplicarValorNaCompetencia(client, comp, valorReais, { origem = "ajuste", motivo = null } = {}) {
+  const inv = await prisma.invoice.findFirst({ where: { clientId: client.id, competencia: comp } });
+  if (inv && inv.status === "pago") return { comp, resultado: "pago", valor: inv.amountCents / 100 };
+
+  if (valorReais == null) {
+    await prisma.monthlyPrice.deleteMany({ where: { clientId: client.id, competencia: comp } });
+  } else {
+    const amountCents = Math.round(Number(valorReais) * 100);
+    await prisma.monthlyPrice.upsert({
+      where: { clientId_competencia: { clientId: client.id, competencia: comp } },
+      update: { amountCents, origem, motivo },
+      create: { clientId: client.id, competencia: comp, amountCents, origem, motivo },
+    });
+  }
+
+  // Valor que passa a valer para este mês depois da mudança acima
+  const efetivo = await valorDaCompetencia(client, comp);
+  if (!inv) return { comp, resultado: "agendado", valor: efetivo }; // ainda sem boleto: nasce já com o valor novo
+  if (inv.status === "cancelado") return { comp, resultado: "cancelado", valor: efetivo };
+
+  const novoCents = Math.round(efetivo * 100);
+  if (novoCents === inv.amountCents) return { comp, resultado: "sem_mudanca", valor: efetivo };
+
+  /* Zera o Pix guardado junto com o valor. Sem isso o QR antigo continuaria
+     pagável cobrando o valor velho — a aluna pagaria o preço de antes e o
+     sistema daria a mensalidade por quitada. O novo QR é emitido na próxima vez
+     que alguém pedir o Pix (portal da aluna ou botão da tela). */
+  const atualizada = await prisma.invoice.update({
+    where: { id: inv.id },
+    data: { amountCents: novoCents, pixCode: null, pixExpiresOn: null, encargosAte: null },
+  });
+  return { comp, resultado: "atualizada", valor: efetivo, invoiceId: atualizada.id };
+}
+
+/**
+ * Altera o valor da mensalidade de uma aluna.
+ * body: {
+ *   valor: number,                       // R$; obrigatório (exceto escopo "limpar")
+ *   escopo: "recorrente" | "mes_atual" | "proximo_mes" | "competencias" | "promocao" | "limpar",
+ *   aplicarNoMesAtual?: boolean,         // só no escopo "recorrente"
+ *   competencias?: string[],             // escopo "competencias" / "limpar"
+ *   meses?: number, inicio?: 'YYYY-MM',  // escopo "promocao"
+ *   motivo?: string
+ * }
+ */
+app.post("/api/clients/:id/mensalidade-valor", wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const client = await prisma.client.findUnique({ where: { id } });
+  if (!client) return res.status(404).json({ error: "Aluna não encontrada." });
+
+  const { escopo, aplicarNoMesAtual, motivo } = req.body || {};
+  const limpando = escopo === "limpar";
+  const valor = limpando ? null : Number(req.body?.valor);
+  /* Zero é recusado de propósito: não existe cobrança Pix de R$ 0 no Sicredi, e
+     uma mensalidade sem como pagar deixaria a aluna presa em "pendente" para
+     sempre. Mês de cortesia se resolve cancelando a mensalidade daquele mês
+     (botão na aba Mensalidades), não zerando o valor. */
+  if (!limpando && (!Number.isFinite(valor) || valor <= 0)) {
+    return res.status(400).json({
+      error: valor === 0
+        ? "Não dá para cobrar R$ 0 — para isentar um mês, cancele a mensalidade dele."
+        : "Informe um valor válido.",
+    });
+  }
+
+  const atual = competenciaAtual();
+  const anterior = mensalidadeValorDe(client);
+  const nota = (motivo || "").trim().slice(0, 200) || null;
+  let alvos = [];
+  let origem = "ajuste";
+  let recorrente = null;
+
+  switch (escopo) {
+    case "recorrente":
+      recorrente = valor;
+      // O mês corrente só entra se você mandar: a mensalidade dele pode já estar
+      // combinada (ou até emitida) no valor antigo, e mudar sem pedir seria
+      // alterar uma cobrança que a aluna já viu.
+      if (aplicarNoMesAtual) alvos = [atual];
+      break;
+    case "mes_atual":
+      alvos = [atual];
+      origem = "desconto";
+      break;
+    case "proximo_mes":
+      alvos = [addComp(atual, 1)];
+      origem = "desconto";
+      break;
+    case "competencias": {
+      const lista = (req.body?.competencias || []).filter(compValida);
+      if (!lista.length) return res.status(400).json({ error: "Escolha ao menos um mês." });
+      alvos = [...new Set(lista)].sort();
+      origem = "desconto";
+      break;
+    }
+    case "promocao": {
+      const meses = Math.max(1, Math.min(MESES_PROMO_MAX, parseInt(req.body?.meses, 10) || 0));
+      if (!meses) return res.status(400).json({ error: "Informe por quantos meses a promoção vale." });
+      const inicio = compValida(req.body?.inicio) ? req.body.inicio : atual;
+      alvos = Array.from({ length: meses }, (_, i) => addComp(inicio, i));
+      origem = "promocao";
+      break;
+    }
+    case "limpar": {
+      const lista = (req.body?.competencias || []).filter(compValida);
+      if (!lista.length) return res.status(400).json({ error: "Escolha ao menos um mês." });
+      alvos = [...new Set(lista)].sort();
+      break;
+    }
+    default:
+      return res.status(400).json({ error: "Escopo de alteração inválido." });
+  }
+
+  // Escopo recorrente: o valor individual da aluna passa a ser este.
+  if (recorrente != null) {
+    await prisma.client.update({ where: { id }, data: { monthlyValue: recorrente } });
+  }
+  // Recarrega: aplicarValorNaCompetencia precisa enxergar o monthlyValue novo
+  // para calcular o valor efetivo de cada mês.
+  const atualizado = await prisma.client.findUnique({ where: { id } });
+
+  const detalhes = [];
+  for (const comp of alvos) {
+    // No "aplicar já no mês atual" do recorrente não criamos combinado nenhum:
+    // apagamos o que houvesse e deixamos o mês seguir o valor recorrente novo.
+    const v = recorrente != null ? null : valor;
+    detalhes.push(await aplicarValorNaCompetencia(atualizado, comp, v, { origem, motivo: nota }));
+  }
+
+  const bloqueados = detalhes.filter((d) => d.resultado === "pago").map((d) => d.comp);
+  res.json({
+    client: atualizado,
+    escopo,
+    valorAnterior: anterior,
+    valorNovo: limpando ? mensalidadeValorDe(atualizado) : valor,
+    competencias: alvos,
+    detalhes,
+    atualizadas: detalhes.filter((d) => d.resultado === "atualizada").length,
+    bloqueados,
+  });
+}));
+
+/* Prévia do reajuste geral: quem seria afetado e por quanto. A tela chama isto
+   antes de aplicar — reajuste é irreversível na prática (não há "desfazer" que
+   saiba qual era o valor de cada uma), então vale ver a conta antes. */
+function calcularReajuste(base, { tipo, valor }) {
+  const n = Number(valor) || 0;
+  const novo = tipo === "percentual" ? base * (1 + n / 100) : base + n;
+  return Math.max(0, Math.round(novo * 100) / 100);
+}
+
+app.post("/api/mensalidades/reajuste/preview", wrap(async (req, res) => {
+  const { tipo = "percentual", valor = 0 } = req.body || {};
+  const mensalistas = await prisma.client.findMany({
+    where: { plan: "mensalista", status: "ativo" }, orderBy: { name: "asc" },
+  });
+  res.json({
+    tabela: {
+      plano1x: { antes: SETTINGS.valorPlano1x, depois: calcularReajuste(SETTINGS.valorPlano1x, { tipo, valor }) },
+      plano2x: { antes: SETTINGS.valorPlano2x, depois: calcularReajuste(SETTINGS.valorPlano2x, { tipo, valor }) },
+    },
+    // Quem tem valor individual não é arrastada junto: a tela lista para você
+    // marcar uma a uma quem entra no reajuste (pode haver desconto combinado).
+    individuais: mensalistas.filter((c) => c.monthlyValue != null).map((c) => ({
+      id: c.id, name: c.name, weeklyFreq: c.weeklyFreq,
+      antes: c.monthlyValue, depois: calcularReajuste(c.monthlyValue, { tipo, valor }),
+    })),
+    naTabela: mensalistas.filter((c) => c.monthlyValue == null).map((c) => ({
+      id: c.id, name: c.name, weeklyFreq: c.weeklyFreq, antes: mensalidadeValorDe(c),
+    })),
+  });
+}));
+
+/**
+ * Reajuste geral.
+ * body: {
+ *   tipo: "percentual" | "reais",
+ *   valor: number,
+ *   atualizarTabela?: boolean,   // sobe plano 1x/2x → vale para quem entrar depois
+ *   individuais?: number[]       // ids das alunas com valor próprio que entram
+ * }
+ * Não mexe em mensalidade já gerada: o reajuste vale do próximo boleto em diante.
+ */
+app.post("/api/mensalidades/reajuste", wrap(async (req, res) => {
+  const { tipo = "percentual", valor = 0, atualizarTabela = true, individuais = [] } = req.body || {};
+  const n = Number(valor);
+  if (!Number.isFinite(n) || n === 0) return res.status(400).json({ error: "Informe o reajuste." });
+
+  let tabela = null;
+  if (atualizarTabela) {
+    const plano1x = calcularReajuste(SETTINGS.valorPlano1x, { tipo, valor: n });
+    const plano2x = calcularReajuste(SETTINGS.valorPlano2x, { tipo, valor: n });
+    const d = { valorPlano1x: plano1x, valorPlano2x: plano2x };
+    await prisma.settings.upsert({ where: { id: 1 }, update: d, create: { id: 1, ...d } });
+    await loadSettings(); // sem isto, mensalidadeValorDe seguiria com o preço velho
+    tabela = { plano1x, plano2x };
+  }
+
+  const ids = [...new Set((individuais || []).map(Number).filter(Boolean))];
+  const alteradas = [];
+  for (const id of ids) {
+    const c = await prisma.client.findUnique({ where: { id } });
+    if (!c || c.monthlyValue == null) continue;
+    const novo = calcularReajuste(c.monthlyValue, { tipo, valor: n });
+    await prisma.client.update({ where: { id }, data: { monthlyValue: novo } });
+    alteradas.push({ id, name: c.name, antes: c.monthlyValue, depois: novo });
+  }
+
+  console.log(`[reajuste] ${tipo} ${n} · tabela ${atualizarTabela ? "sim" : "não"} · ${alteradas.length} valor(es) individual(is).`);
+  res.json({ tabela, individuais: alteradas });
 }));
 
 /**
@@ -2067,6 +2341,13 @@ app.post(
   wrap(async (req, res) => {
     const { name, phone, email, cpf, unit, tags, notes, birthday, level, firstClass, plan, mensalistaTipo, monthlyValue, billingDay } = req.body;
     if (!name) return res.status(400).json({ error: "name é obrigatório" });
+    const cpfDigits = onlyDigits(cpf);
+    if (cpfDigits) {
+      const existente = await prisma.client.findFirst({ where: { cpf: cpfDigits } });
+      if (existente) {
+        return res.status(409).json({ error: `Esse CPF já está cadastrado para ${existente.name}. Edite o cadastro dela em vez de criar um novo.` });
+      }
+    }
     const client = await prisma.client.create({
       data: {
         name, phone: phone || "", email: (email || "").trim() || null, cpf: onlyDigits(cpf) || null, unit: unit || UNITS[0], tags: JSON.stringify(tags || []), notes: notes || "",
@@ -2090,7 +2371,16 @@ app.patch(
     if (name !== undefined) data.name = name;
     if (phone !== undefined) data.phone = phone;
     if (email !== undefined) data.email = (email || "").trim() || null;
-    if (cpf !== undefined) data.cpf = onlyDigits(cpf) || null;
+    if (cpf !== undefined) {
+      const cpfDigits = onlyDigits(cpf);
+      if (cpfDigits) {
+        const existente = await prisma.client.findFirst({ where: { cpf: cpfDigits, NOT: { id } } });
+        if (existente) {
+          return res.status(409).json({ error: `Esse CPF já está cadastrado para ${existente.name}.` });
+        }
+      }
+      data.cpf = cpfDigits || null;
+    }
     if (unit !== undefined) data.unit = unit;
     if (tags !== undefined) data.tags = JSON.stringify(tags);
     if (notes !== undefined) data.notes = notes;

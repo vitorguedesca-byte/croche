@@ -46,6 +46,29 @@ model Client {
   invoices  Invoice[]
   makeups   MakeupCredit[]
   extras    ExtraPass[]
+  precos    MonthlyPrice[]
+}
+
+// Valor da mensalidade combinado para UM mês específico — desconto pontual,
+// promoção de 2/3 meses, cortesia. É o que permite mexer no valor de um mês sem
+// mexer no valor recorrente da aluna (Client.monthlyValue): passada a
+// competência, a mensalidade volta sozinha ao valor de sempre.
+//
+// Precedência do valor de uma competência:
+//   MonthlyPrice da competência → Client.monthlyValue → plano 1x/2x → legado
+model MonthlyPrice {
+  id          Int      @id @default(autoincrement())
+  clientId    Int
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  competencia String   @db.VarChar(7) // 'YYYY-MM'
+  amountCents Int
+  // De onde veio: "desconto" | "promocao" | "reajuste" | "ajuste"
+  origem      String   @default("ajuste") @db.VarChar(20)
+  motivo      String?  @db.VarChar(200) // o porquê, escrito pela Inêz — aparece na ficha
+  createdAt   DateTime @default(now())
+
+  @@unique([clientId, competencia])
+  @@index([competencia])
 }
 
 // Aula extra comprada pela aluna no portal: ela paga o Pix primeiro e só depois

@@ -232,6 +232,15 @@ export function mensalidadeDe(c, meta) {
   if (c.weeklyFreq === 2) return (meta && meta.valorPlano2x) || 0;
   return (meta && meta.mensalidadeValor) || 0;
 }
+/* Valor combinado só para um mês (desconto/promoção), se houver.
+   ESPELHO de valorDaCompetencia no server — quem manda é o backend; aqui é para
+   a tela mostrar o valor certo de meses que ainda nem têm boleto. */
+export const precoDaComp = (precos, clientId, comp) =>
+  (precos || []).find((p) => p.clientId === clientId && p.competencia === comp) || null;
+export function mensalidadeDaComp(c, comp, meta, precos) {
+  const p = precoDaComp(precos, c.id, comp);
+  return p ? p.amountCents / 100 : mensalidadeDe(c, meta);
+}
 
 /* ================= regras de marcação do mensalista =================
    ESPELHO de backend/src/regrasAula.js — é lá que a regra é aplicada de
