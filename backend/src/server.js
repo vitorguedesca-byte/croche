@@ -552,7 +552,7 @@ const wrap = (fn) => (req, res) =>
 
 /* ---------- configurações (linha única id=1, cache em memória) ---------- */
 const PRECOS_PADRAO = { taxaMatricula: 20, valorPlano1x: 120, valorPlano2x: 200, valorAvulsa: 40, duracaoAulaMin: 120 };
-let SETTINGS = { valorPadrao: VALOR_PADRAO, capacidadePadrao: CAPACITY_PADRAO, units: UNITS, profs: PROFS, horarioFunc: "", pixKey: "", pixName: "", mensalidadeValor: 0, vencimentoDia: 10, travaAtraso: false, pixExpira: false, cobrarEncargos: false, ...PRECOS_PADRAO };
+let SETTINGS = { valorPadrao: VALOR_PADRAO, capacidadePadrao: CAPACITY_PADRAO, units: UNITS, profs: PROFS, horarioFunc: "", pixKey: "", pixName: "", mensalidadeValor: 0, vencimentoDia: 10, travaAtraso: false, pixExpira: false, cobrarEncargos: false, geracaoAuto: false, ...PRECOS_PADRAO };
 async function loadSettings() {
   let s = await prisma.settings.findUnique({ where: { id: 1 } });
   if (!s) s = await prisma.settings.create({ data: { id: 1 } });
@@ -576,6 +576,7 @@ async function loadSettings() {
     travaAtraso: s.travaAtraso ?? false,
     pixExpira: s.pixExpira ?? false,
     cobrarEncargos: s.cobrarEncargos ?? false,
+    geracaoAuto: s.geracaoAuto ?? false,
   };
   return SETTINGS;
 }
@@ -1802,6 +1803,11 @@ app.post("/api/invoices/gerar-mes", wrap(async (_req, res) => {
    não duplica nada. */
 let ultimoDiaGeracao = null;
 async function rodadaMensalidades() {
+  /* Chave desligada: ninguém nasce sozinho. Sai ANTES de marcar o dia, de
+     propósito — assim, ligar a chave no meio do dia faz a rodada da hora
+     seguinte gerar, sem precisar esperar o dia virar. O botão "gerar" do painel
+     não passa por aqui e segue funcionando com a chave desligada. */
+  if (!SETTINGS.geracaoAuto) return;
   const hoje = todayISO();
   if (ultimoDiaGeracao === hoje) return;
   ultimoDiaGeracao = hoje;
@@ -2723,7 +2729,7 @@ app.put(
     }
     if (b.duracaoAulaMin !== undefined) data.duracaoAulaMin = Math.min(600, Math.max(15, parseInt(b.duracaoAulaMin, 10) || SETTINGS.duracaoAulaMin));
     // travas de cobrança (desligadas até a Inêz confirmar)
-    for (const k of ["travaAtraso", "pixExpira", "cobrarEncargos"]) if (b[k] !== undefined) data[k] = !!b[k];
+    for (const k of ["travaAtraso", "pixExpira", "cobrarEncargos", "geracaoAuto"]) if (b[k] !== undefined) data[k] = !!b[k];
     await prisma.settings.upsert({ where: { id: 1 }, update: data, create: { id: 1, ...data } });
     await loadSettings();
     res.json(SETTINGS);

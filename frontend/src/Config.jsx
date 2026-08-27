@@ -86,6 +86,7 @@ export default function Config() {
   const [travaAtraso, setTravaAtraso] = useState(!!m.travaAtraso);
   const [pixExpira, setPixExpira] = useState(!!m.pixExpira);
   const [cobrarEncargos, setCobrarEncargos] = useState(!!m.cobrarEncargos);
+  const [geracaoAuto, setGeracaoAuto] = useState(!!m.geracaoAuto);
   const [saved, setSaved] = useState(false);
 
   const save = async () => {
@@ -116,6 +117,7 @@ export default function Config() {
       travaAtraso,
       pixExpira,
       cobrarEncargos,
+      geracaoAuto,
       units: unitsList,
       profs: profsList,
     };
@@ -205,6 +207,29 @@ export default function Config() {
         </div>
         <div className="cfg-preview">
           🏷️ Matrícula <b>R$ {taxaMatricula}</b> · 1x/semana <b>R$ {plano1x}</b> (4 aulas) · 2x/semana <b>R$ {plano2x}</b> (8 aulas) · extra <b>R$ {avulsa}</b> · aula de <b>{Math.floor(duracao / 60)}h{duracao % 60 ? String(duracao % 60).padStart(2, "0") : ""}</b>
+        </div>
+
+        {/* Quem cria as mensalidades. Desligada, a mensalidade só existe depois
+            que você manda criar — que é o que dá tempo de combinar o valor do
+            mês antes de a cobrança nascer. */}
+        <div style={{ marginTop: "1.1rem", borderTop: "1px solid var(--line)", paddingTop: ".9rem" }}>
+          <label style={{ display: "block", marginBottom: ".6rem" }}>Emissão das mensalidades</label>
+          <Chave
+            on={geracaoAuto}
+            onToggle={() => setGeracaoAuto(!geracaoAuto)}
+            titulo="Gerar as mensalidades do mês automaticamente"
+            ligado="O sistema cria sozinho a mensalidade de cada mensalista ativa, 5 dias antes do vencimento dela."
+            desligado="Nenhuma mensalidade nasce sozinha — você gera pelo botão na aba Mensalidades, quando quiser."
+          />
+          {!geracaoAuto && (
+            <div className="cfg-preview" style={{ marginTop: ".8rem" }}>
+              🧾 Com a chave desligada, use <b>🧾 Gerar boleto</b> na aba Mensalidades (por aluna) ou o botão de gerar o mês inteiro.
+              <div className="help" style={{ marginTop: ".35rem" }}>
+                É o modo indicado para combinar desconto ou promoção antes de a cobrança existir — mensalidade já emitida
+                pode ser alterada, mas a aluna talvez já tenha visto o valor antigo.
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Mudar os campos acima muda a TABELA — vale para quem entrar depois e
