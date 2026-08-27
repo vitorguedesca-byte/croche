@@ -202,6 +202,111 @@ export const slotBookingsAll = (data, slotId) =>
     .filter((b) => b.slotId === slotId)
     .sort((a, b) => (a.status === "cancelada") - (b.status === "cancelada") || a.clientName.localeCompare(b.clientName));
 
+/* ================= aniversários =================
+   `birthday` é 'YYYY-MM-DD' e o ano dela é o de NASCIMENTO — o que interessa
+   para a Inêz é o dia e o mês. Tudo aqui trabalha com o próximo aniversário a
+   acontecer, medido pelo relógio de Brasília (todayISO), não pelo do navegador.
+
+   29 de fevereiro: em ano não bissexto o JS empurra para 1º de março, e é o que
+   a gente quer — a aluna é parabenizada, não some do sistema por quatro anos. */
+
+// { dia, mes } de um 'YYYY-MM-DD', ou null se não houver data válida
+export function diaMesNasc(bd) {
+  const m = String(bd || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? { ano: +m[1], mes: +m[2], dia: +m[3] } : null;
+}
+
+// Data ISO do próximo aniversário (hoje conta como o próximo). null sem data.
+export function proximoAniversario(bd, hoje = todayISO()) {
+  const n = diaMesNasc(bd);
+  if (!n) return null;
+  const [hy] = hoje.split("-").map(Number);
+  const iso = (ano) => {
+    const d = new Date(ano, n.mes - 1, n.dia); // 29/02 em ano comum vira 01/03
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const esteAno = iso(hy);
+  return esteAno >= hoje ? esteAno : iso(hy + 1);
+}
+
+// Quantos dias faltam (0 = hoje). null sem data.
+export function diasAteAniversario(bd, hoje = todayISO()) {
+  const prox = proximoAniversario(bd, hoje);
+  if (!prox) return null;
+  return Math.round((new Date(prox + "T00:00") - new Date(hoje + "T00:00")) / 86400000);
+}
+
+// Idade que ela COMPLETA no próximo aniversário. null sem data (ou ano zoado).
+export function idadeQueFaz(bd, hoje = todayISO()) {
+  const n = diaMesNasc(bd);
+  const prox = proximoAniversario(bd, hoje);
+  if (!n || !prox) return null;
+  const idade = Number(prox.slice(0, 4)) - n.ano;
+  return idade > 0 && idade < 130 ? idade : null;
+}
+
+// "hoje! 🎉" | "amanhã" | "em 5 dias" | "há 3 dias" — como a Inêz lê na tela
+export function faltamLabel(dias) {
+  if (dias === null || dias === undefined) return "—";
+  if (dias === 0) return "hoje! 🎉";
+  if (dias === 1) return "amanhã";
+  if (dias === -1) return "ontem";
+  if (dias < 0) return `há ${-dias} dias`;
+  return `em ${dias} dias`;
+}
+
+// '15/03' a partir de um 'YYYY-MM-DD' (sem depender do fuso)
+export const diaMesLabel = (bd) => {
+  const n = diaMesNasc(bd);
+  return n ? `${String(n.dia).padStart(2, "0")}/${String(n.mes).padStart(2, "0")}` : "—";
+};
+
+/* Aniversariantes de um período, do mais próximo para o mais distante.
+   `periodo`:
+     'semana' — a semana corrente, de segunda a domingo (weekStart manda)
+     'mes'    — o mês corrente inteiro, incluindo os dias que já passaram
+     'proximos' — os próximos `dias` dias corridos, a partir de hoje
+   O mês corrente traz quem já fez aniversário: em 26/08 a Inêz ainda quer ver
+   quem fez dia 3 — é o mês dela, não uma janela para a frente. */
+export function aniversariantes(clients, periodo = "mes", hoje = todayISO(), dias = 30) {
+  const [hy, hm] = hoje.split("-").map(Number);
+  const ini = periodo === "semana" ? weekStart(hoje) : null;
+  const fim = ini ? addDays(ini, 6) : null;
+  const noAnoDe = (n, ano) => `${ano}-${String(n.mes).padStart(2, "0")}-${String(n.dia).padStart(2, "0")}`;
+
+  return (clients || [])
+    .map((c) => {
+      const n = diaMesNasc(c.birthday);
+      if (!n) return null;
+      // `quando` é a data do aniversário DENTRO do período que estamos olhando —
+      // e não o próximo, senão quem já fez aniversário este mês apareceria com
+      // "em 342 dias" em vez de "foi dia 3".
+      let quando;
+      if (periodo === "semana") {
+        // a semana pode atravessar a virada do ano — por isso testa os dois anos
+        quando = [noAnoDe(n, hy), noAnoDe(n, hy + 1)].find((d) => d >= ini && d <= fim);
+        if (!quando) return null;
+      } else if (periodo === "proximos") {
+        const d = diasAteAniversario(c.birthday, hoje);
+        if (d === null || d > dias) return null;
+        quando = proximoAniversario(c.birthday, hoje);
+      } else {
+        if (n.mes !== hm) return null;
+        quando = noAnoDe(n, hy);
+      }
+      const idade = Number(quando.slice(0, 4)) - n.ano;
+      return {
+        c,
+        quando,
+        passou: quando < hoje,
+        dias: Math.round((new Date(quando + "T00:00") - new Date(hoje + "T00:00")) / 86400000),
+        idade: idade > 0 && idade < 130 ? idade : null,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.quando.localeCompare(b.quando) || a.c.name.localeCompare(b.c.name));
+}
+
 /* ================= mensalidades: competências ================= */
 export const compAtual = () => todayISO().slice(0, 7); // 'YYYY-MM'
 export function addComp(comp, n) {

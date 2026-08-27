@@ -36,6 +36,8 @@ export const api = {
   createSlot: (data) => req("POST", "/api/slots", data),
   updateSlotCapacity: (id, capacity) => req("PATCH", `/api/slots/${id}`, { capacity }),
   updateSlot: (id, data) => req("PATCH", `/api/slots/${id}`, data),
+  // repete a turma inteira (horário + alunas) nas próximas `weeks` semanas
+  replicateSlot: (id, weeks, alunas = true) => req("POST", `/api/slots/${id}/replicate`, { weeks, alunas }),
   // mode: falsy = só este · "series" = mesmos da série · "match" = todos os
   // futuros equivalentes (mesma unidade/hora/dia da semana), pega-tudo
   deleteSlot: (id, mode) => req("DELETE", `/api/slots/${id}${mode === "match" ? "?match=1" : mode ? "?series=1" : ""}`),

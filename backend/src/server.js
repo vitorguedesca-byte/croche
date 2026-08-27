@@ -671,6 +671,136 @@ app.post(
   })
 );
 
+/* ---------- replicar a TURMA INTEIRA (horário + alunas) ----------
+   O "Replicar" antigo (POST /api/slots com baseSlotId) só copia o horário vazio.
+   Aqui a Inêz repete a turma como ela está: mesma unidade, hora e capacidade E
+   as mesmas alunas, nas próximas N semanas (mesmo dia da semana).
+
+   O que NÃO é copiado, de propósito:
+   • reposição — é aula paga com crédito; repetir consumiria créditos da aluna;
+   • matrícula (aula experimental) — é uma só na vida da aluna;
+   • aluna com cadastro cancelado — saiu do curso.
+   Regras do mensalista (sábado / a partir das 18:00 / teto da semana) continuam
+   valendo: quem não pode entra na lista de "pulados", com o motivo.
+
+   As cópias nascem sempre NÃO PAGAS: aula do plano entra `confirmada` (como no
+   agendamento em lote do mensalista, já coberta pela mensalidade) e as demais
+   entram `aguardando`, para a Inêz cobrar aula a aula. */
+app.post(
+  "/api/slots/:id/replicate",
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const base = await prisma.slot.findUnique({ where: { id } });
+    if (!base) return res.status(404).json({ error: "Horário não encontrado." });
+
+    const semanas = Math.min(52, Math.max(1, parseInt(req.body?.weeks, 10) || 1));
+    const comAlunas = req.body?.alunas !== false; // padrão: leva as alunas junto
+    const hoje = todayISO();
+
+    // uma série em comum para o "excluir todos" continuar enxergando o conjunto
+    let seriesId = base.seriesId;
+    if (!seriesId) {
+      seriesId = crypto.randomUUID();
+      await prisma.slot.update({ where: { id: base.id }, data: { seriesId } });
+    }
+
+    // quem vai junto: reservas ativas da turma de origem, menos as que por
+    // natureza não se repetem (reposição = crédito da aluna, matrícula = a
+    // experimental é uma só). Ficam de fora uma vez, não semana a semana.
+    const ativas = comAlunas
+      ? await prisma.booking.findMany({ where: { slotId: id, status: { not: "cancelada" } } })
+      : [];
+    const naoReplicavel = (b) => ["Reposição", "Matrícula"].includes(b.paymentMethod || "");
+    const origem = ativas.filter((b) => !naoReplicavel(b));
+    const naoReplicadas = ativas.filter(naoReplicavel).map((b) => ({
+      clientName: b.clientName,
+      motivo: b.paymentMethod === "Reposição" ? "reposição não é replicada" : "aula experimental não é replicada",
+    }));
+    const nomes = [...new Set(origem.map((b) => b.clientName))];
+    const fichas = nomes.length ? await prisma.client.findMany({ where: { name: { in: nomes } } }) : [];
+    const fichaDe = (nome) => fichas.find((c) => c.name === nome) || null;
+    // aulas já marcadas de todas elas (para o teto semanal enxergar o que vamos criando)
+    const agenda = nomes.length
+      ? await prisma.booking.findMany({ where: { clientName: { in: nomes }, status: { not: "cancelada" } } })
+      : [];
+
+    const slotsCriados = [], aulasCriadas = [], conflitos = [];
+    const pulos = []; // { date, clientName, motivo }
+
+    for (let i = 1; i <= semanas; i++) {
+      const date = addDays(base.date, i * 7);
+      // 1) o horário: reaproveita o que já existe, cria se faltar
+      const doDia = await prisma.slot.findMany({ where: { date, unit: base.unit } });
+      let alvo = doDia.find((s) => s.time === base.time);
+      if (!alvo) {
+        const choque = doDia.find((s) => haChoque(s.time, base.time));
+        if (choque) { conflitos.push({ date, time: base.time, conflitaCom: choque.time }); continue; }
+        alvo = await prisma.slot.create({
+          data: { unit: base.unit, prof: base.prof, date, time: base.time, capacity: base.capacity, seriesId },
+        });
+        slotsCriados.push(alvo);
+      } else if (!alvo.seriesId) {
+        alvo = await prisma.slot.update({ where: { id: alvo.id }, data: { seriesId } });
+      }
+
+      // 2) as alunas
+      for (const b of origem) {
+        const ficha = fichaDe(b.clientName);
+        if (ficha?.status === "cancelado") {
+          pulos.push({ date, clientName: b.clientName, motivo: "cadastro cancelado" });
+          continue;
+        }
+        const jaTem = await prisma.booking.findFirst({
+          where: { slotId: alvo.id, clientName: b.clientName, status: { not: "cancelada" } },
+        });
+        if (jaTem) continue; // silencioso: já estava marcada
+        if ((await occupancy(alvo.id)) >= alvo.capacity) {
+          pulos.push({ date, clientName: b.clientName, motivo: "turma lotada" });
+          continue;
+        }
+        // a janela da escala não se aplica: quem marca aqui é a Inêz, em lote
+        const r = checarRegras(ficha, { date, time: alvo.time }, {
+          hoje,
+          aulasAtivas: agenda,
+          ignorarJanela: true,
+          ignorarTeto: (b.paymentMethod || "") !== PGTO_PLANO,
+        });
+        if (!r.ok) { pulos.push({ date, clientName: b.clientName, motivo: r.motivo }); continue; }
+
+        const nova = await prisma.booking.create({
+          data: {
+            clientName: b.clientName,
+            phone: b.phone || "",
+            unit: alvo.unit,
+            date: alvo.date,
+            time: alvo.time,
+            prof: alvo.prof,
+            slotId: alvo.id,
+            seriesId,
+            // aula do plano nasce confirmada (é o que o lote do mensalista faz —
+            // ela já está paga pela mensalidade); as demais entram aguardando
+            status: (b.paymentMethod || "") === PGTO_PLANO ? "confirmada" : "aguardando",
+            value: b.value,
+            paid: false,
+            paymentMethod: b.paymentMethod || null,
+          },
+        });
+        aulasCriadas.push(nova);
+        agenda.push(nova); // conta no teto das próximas semanas
+      }
+    }
+
+    res.json({
+      slots: slotsCriados.length,
+      aulas: aulasCriadas.length,
+      alunasPorSemana: origem.length,
+      conflitos,
+      pulos,
+      naoReplicadas, // reposição / experimental — informado uma vez só
+    });
+  })
+);
+
 app.patch(
   "/api/slots/:id",
   wrap(async (req, res) => {

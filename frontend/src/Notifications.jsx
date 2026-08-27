@@ -3,7 +3,7 @@ import { useStore } from "./store.jsx";
 import { WaIcon } from "./icons.jsx";
 import {
   todayISO, fmtDate, money, waLink, classifyClient,
-  slotCapacity, slotOccupancy,
+  slotCapacity, slotOccupancy, diasAteAniversario, faltamLabel, idadeQueFaz,
 } from "./helpers.js";
 
 const SEEN_KEY = "fqc:notif:lastSeen";
@@ -23,17 +23,6 @@ function timeAgo(d) {
   if (days < 30) return `há ${days} dias`;
   const mo = Math.floor(days / 30);
   return `há ${mo} ${mo === 1 ? "mês" : "meses"}`;
-}
-
-// dias até o próximo aniversário (0 = hoje); null se sem data válida
-function birthdayInDays(bd) {
-  if (!bd) return null;
-  const [, mm, dd] = bd.split("-");
-  if (!mm || !dd) return null;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  let next = new Date(today.getFullYear(), +mm - 1, +dd); next.setHours(0, 0, 0, 0);
-  if (next < today) next = new Date(today.getFullYear() + 1, +mm - 1, +dd);
-  return Math.round((next - today) / 86400000);
 }
 
 // Deriva a lista de notificações a partir do estado atual (sem backend dedicado).
@@ -97,16 +86,18 @@ function buildNotifications(data) {
       wa: c.phone ? { phone: c.phone, label: "Convidar", msg: `Olá ${c.name}! Vi que você se interessou pelas aulas de crochê 💚 Posso te ajudar a escolher um horário?` } : null,
     }));
 
-  // 🎂 Aniversários nos próximos 7 dias
+  // 🎂 Aniversários nos próximos 7 dias — a lista completa fica na tela
+  // Aniversariantes; aqui é só o aviso de quem está chegando.
   data.clients.forEach((c) => {
-    const d = birthdayInDays(c.birthday);
+    const d = diasAteAniversario(c.birthday, t);
     if (d === null || d > 7) return;
+    const idade = idadeQueFaz(c.birthday, t);
     out.push({
       id: "bd" + c.id, event: false, icon: "🎂", tone: "rgba(206,122,83,.16)",
       title: `Aniversário — ${c.name}`,
-      sub: d === 0 ? "é hoje! 🎉" : d === 1 ? "amanhã" : `em ${d} dias`,
-      nav: (go) => go("clientes", { tab: classifyClient(data, c) }),
-      wa: c.phone ? { phone: c.phone, label: "Parabenizar", msg: `Feliz aniversário, ${c.name}! 🎉💚 Toda a equipe da Fios que Curam deseja um dia especial pra você.` } : null,
+      sub: faltamLabel(d) + (idade ? ` · faz ${idade} anos` : ""),
+      nav: (go) => go("aniversariantes"),
+      wa: c.phone ? { phone: c.phone, label: "Parabenizar", msg: `Feliz aniversário, ${c.name.split(" ")[0]}! 🎉💚 Toda a equipe da Fios que Curam deseja um dia lindo pra você. Que venha mais um ano de muitos fios e muitas histórias! 🧶` } : null,
     });
   });
 

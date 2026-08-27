@@ -14,6 +14,7 @@ import {
   bookingKind, BOOKING_KINDS, compAtual, addComp, compLabel, competenciasDoAluno, mensalidadeDe, matriculaISO,
   mensalidadeDaComp, precoDaComp,
   clientActiveCount, classifyClient, isNewLead,
+  aniversariantes, diaMesNasc, diaMesLabel, faltamLabel,
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
@@ -990,5 +991,170 @@ export function Depoimentos() {
           </div>
         )}
     </div>
+  </>);
+}
+
+/* ============================= ANIVERSARIANTES =============================
+   Controle de aniversários das alunas — a Inêz usa para mandar o parabéns no
+   dia e para se organizar com o mês (bolo na aula, recadinho, mimo).
+
+   A data vem de `Client.birthday`, que a aluna já preenche na matrícula. Quem
+   está sem data aparece numa lista à parte no fim: é a única forma de a Inêz
+   saber quem falta completar, senão a pessoa some da tela para sempre.
+
+   O sino (Notifications.jsx) continua avisando dos aniversários dos próximos 7
+   dias — esta tela é o lugar de olhar a coisa inteira. */
+/* Uma linha da tabela. Quem faz hoje ganha fundo e etiqueta; quem já fez no
+   período em vista fica esmaecida, mas continua na lista — a Inêz quer ver. */
+function AniversarioRow({ x, open, parabens }) {
+  const { c } = x;
+  const ehHoje = x.dias === 0;
+  return (
+    <tr style={ehHoje ? { background: "rgba(206,122,83,.12)" } : x.passou ? { opacity: .62 } : undefined}>
+      <td>
+        <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} />)}>
+          <span className="cli-av">{initials(c.name)}</span>
+          <div>
+            <span className="cli-name">{c.name}</span>
+            {ehHoje && <span className="badge b-terra ml">🎉 é hoje</span>}
+            {c.plan === "mensalista" && <span className="badge b-ok ml">📅 mensalista</span>}
+            {c.status === "cancelado" && <span className="badge b-muted ml">inativa</span>}
+            <div className="cli-sub">{c.phone || "sem telefone"}</div>
+          </div>
+        </div>
+      </td>
+      <td><b style={ehHoje ? { color: "var(--terracota)" } : undefined}>🎂 {diaMesLabel(c.birthday)}</b></td>
+      <td>{x.passou ? <span className="cli-sub">{faltamLabel(x.dias)}</span> : faltamLabel(x.dias)}</td>
+      <td>{x.idade ? `${x.idade} anos` : "—"}</td>
+      <td><span className="chip">{c.unit || "—"}</span></td>
+      <td className="td-actions">
+        <button className="btn wa sm" title="Parabenizar no WhatsApp" disabled={!c.phone}
+          onClick={() => openWa(c.phone, parabens(c))}><WaIcon /> Parabenizar</button>
+        <button className="btn sec sm" onClick={() => open(<ClientProfile client={c} />)}>Ficha</button>
+      </td>
+    </tr>
+  );
+}
+
+export function Aniversariantes() {
+  const { data } = useStore();
+  const { open } = useModal();
+  const [per, setPer] = useState("mes");     // semana | mes | proximos | ano
+  const [search, setSearch] = useState("");
+  const [unitF, setUnitF] = useState("Todas");
+  const t = todayISO();
+
+  const hoje = aniversariantes(data.clients, "proximos", t, 0);
+  const daSemana = aniversariantes(data.clients, "semana", t);
+  const doMes = aniversariantes(data.clients, "mes", t);
+  const semData = data.clients
+    .filter((c) => !diaMesNasc(c.birthday))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const base = per === "semana" ? daSemana
+    : per === "mes" ? doMes
+    : per === "proximos" ? aniversariantes(data.clients, "proximos", t, 30)
+    : aniversariantes(data.clients, "proximos", t, 366); // 'ano' — os 12 meses à frente
+
+  const q = search.trim().toLowerCase();
+  const list = base.filter(({ c }) =>
+    (unitF === "Todas" || c.unit === unitF) &&
+    (!q || c.name.toLowerCase().includes(q) || (c.phone || "").includes(q))
+  );
+
+  const TABS = [
+    ["semana", "Esta semana", daSemana.length],
+    ["mes", "Este mês", doMes.length],
+    ["proximos", "Próximos 30 dias", aniversariantes(data.clients, "proximos", t, 30).length],
+    ["ano", "Ano todo", aniversariantes(data.clients, "proximos", t, 366).length],
+  ];
+  const HINTS = {
+    semana: "A semana corrente, de segunda a domingo — inclui quem já fez aniversário nos dias que passaram.",
+    mes: "O mês inteiro, do dia 1 ao último — quem já fez aparece marcado, para você não perder ninguém.",
+    proximos: "Os próximos 30 dias corridos, a partir de hoje. Bom para se antecipar com lembrancinha ou bolo.",
+    ano: "Os 12 meses à frente, agrupados por mês — a visão para planejar o ano.",
+  };
+
+  const parabens = (c) =>
+    `Feliz aniversário, ${c.name.split(" ")[0]}! 🎉💚 Toda a equipe da Fios que Curam deseja um dia lindo pra você. Que venha mais um ano de muitos fios e muitas histórias! 🧶`;
+
+  // No "Ano todo" a lista sai agrupada por mês; nos outros, uma tabela só.
+  const grupos = per !== "ano" ? [["", list]] : Object.entries(
+    list.reduce((acc, x) => {
+      const k = x.quando.slice(0, 7);
+      (acc[k] = acc[k] || []).push(x);
+      return acc;
+    }, {})
+  );
+
+  return (<>
+    <div className="grid stats" style={{ marginBottom: "1.2rem" }}>
+      <div className="card stat"><div className="lbl">🎉 Hoje</div><div className="val terra">{hoje.length}</div>
+        <div className="foot">{hoje.length ? hoje.map((x) => x.c.name.split(" ")[0]).join(", ") : "ninguém faz aniversário hoje"}</div></div>
+      <div className="card stat"><div className="lbl">📅 Esta semana</div><div className="val">{daSemana.length}</div><div className="foot">de segunda a domingo</div></div>
+      <div className="card stat"><div className="lbl">🗓 Este mês</div><div className="val">{doMes.length}</div>
+        <div className="foot">{capitalize(new Date(t + "T00:00").toLocaleDateString("pt-BR", { month: "long" }))}</div></div>
+      <div className="card stat"><div className="lbl">🎂 Sem data</div><div className="val warn">{semData.length}</div><div className="foot">alunas a completar o cadastro</div></div>
+    </div>
+
+    <div className="panel">
+      <div className="seg seg-tabs" style={{ marginBottom: "1rem" }}>
+        {TABS.map(([k, lbl, n]) => (
+          <button key={k} className={per === k ? "on" : ""} onClick={() => setPer(k)}>{lbl} <span className="seg-count">{n}</span></button>
+        ))}
+      </div>
+      <div className="seg-hint">{HINTS[per]}</div>
+      <div className="filters">
+        <input className="grow" placeholder="🔍 Buscar por nome ou telefone..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        <Select
+          compact
+          value={unitF}
+          onChange={setUnitF}
+          options={[{ value: "Todas", label: "Todas as unidades", icon: "📍" }, ...data.meta.units.map((u) => ({ value: u, label: u, icon: "📍" }))]}
+        />
+        <span className="count">{list.length} de {base.length}</span>
+      </div>
+
+      {list.length ? grupos.map(([comp, itens]) => (
+        <div key={comp || "unico"}>
+          {comp && <div className="panel-h" style={{ marginTop: ".6rem" }}><h2>{compLabel(comp)} <span className="muted-note">· {itens.length} aniversariante(s)</span></h2></div>}
+          <table><thead><tr><th>Aluna</th><th>Dia</th><th>Quando</th><th>Faz</th><th>Unidade</th><th></th></tr></thead><tbody>
+            {itens.map((x) => <AniversarioRow key={x.c.id} x={x} open={open} parabens={parabens} />)}
+          </tbody></table>
+        </div>
+      )) : (
+        <div className="empty"><div className="ic">🎂</div><p>Nenhuma aniversariante {per === "semana" ? "nesta semana" : per === "mes" ? "neste mês" : per === "proximos" ? "nos próximos 30 dias" : "no período"}.</p></div>
+      )}
+    </div>
+
+    {semData.length > 0 && (
+      <div className="panel">
+        <div className="panel-h">
+          <h2>🎂 Sem data de nascimento <span className="muted-note">· {semData.length} aluna(s)</span></h2>
+        </div>
+        <div className="seg-hint">
+          Sem a data, elas nunca vão aparecer nesta tela nem no sino. Abra a ficha e preencha o campo
+          <b> Aniversário</b> — ou pergunte no WhatsApp, que é o jeito mais rápido.
+        </div>
+        <table><thead><tr><th>Aluna</th><th>Unidade</th><th></th></tr></thead><tbody>
+          {semData.map((c) => (
+            <tr key={c.id}>
+              <td>
+                <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>
+                  <span className="cli-av">{initials(c.name)}</span>
+                  <div><span className="cli-name">{c.name}</span><div className="cli-sub">{c.phone || "sem telefone"}</div></div>
+                </div>
+              </td>
+              <td><span className="chip">{c.unit || "—"}</span></td>
+              <td className="td-actions">
+                <button className="btn wa sm" title="Perguntar no WhatsApp" disabled={!c.phone}
+                  onClick={() => openWa(c.phone, `Oi ${c.name.split(" ")[0]}! 💚 Estamos completando o cadastro aqui na Fios que Curam — qual é a sua data de nascimento? Queremos te parabenizar no seu dia! 🎂`)}><WaIcon /> Perguntar</button>
+                <button className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>Preencher</button>
+              </td>
+            </tr>
+          ))}
+        </tbody></table>
+      </div>
+    )}
   </>);
 }

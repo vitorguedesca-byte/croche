@@ -3,7 +3,7 @@ import { api, getToken, setToken } from "./api.js";
 import AdminLogin from "./AdminLogin.jsx";
 import { useStore } from "./store.jsx";
 import { useModal } from "./ui.jsx";
-import { Dashboard, Agenda, Marcacoes, Clientes, Mensalistas, Recebimentos, Depoimentos } from "./views.jsx";
+import { Dashboard, Agenda, Marcacoes, Clientes, Mensalistas, Recebimentos, Depoimentos, Aniversariantes } from "./views.jsx";
 import { SlotForm, BookingForm, ClientForm } from "./modals.jsx";
 import ClienteApp from "./ClienteApp.jsx";
 import Config from "./Config.jsx";
@@ -26,6 +26,7 @@ const NAV = [
   { sep: "Relacionamento" },
   { view: "clientes", ic: "👩", label: "Alunos" },
   { view: "mensalistas", ic: "📅", label: "Mensalistas" },
+  { view: "aniversariantes", ic: "🎂", label: "Aniversariantes" },
   { view: "recebimentos", ic: "💰", label: "Recebimentos" },
   { sep: "Site" },
   { view: "depoimentos", ic: "⭐", label: "Depoimentos" },
@@ -38,6 +39,7 @@ const TITLES = {
   marcacoes:    ["Marcações",     "Novos e alunas com acesso — confirmações e remarcações"],
   clientes:     ["Alunos",        "Alunos, leads e novatos — CRM e contato direto"],
   mensalistas:  ["Mensalistas",   "Mensalidades e boletos dos alunos mensalistas"],
+  aniversariantes: ["Aniversariantes", "Quem faz aniversário na semana e no mês"],
   recebimentos: ["Recebimentos",  "Visão de receita por dia, semana e mês"],
   depoimentos:  ["Depoimentos",   "Gerencie os depoimentos exibidos no site"],
   config:       ["Configurações", "Padrões do sistema, unidades e profissionais"],
@@ -88,7 +90,7 @@ export default function App() {
     marcacoes: <button className="btn" onClick={() => open(<BookingForm />)}>＋ Nova marcação</button>,
     clientes: <button className="btn" onClick={() => open(<ClientForm />)}>＋ Novo aluno</button>,
   };
-  const Body = { dashboard: Dashboard, agenda: Agenda, marcacoes: Marcacoes, clientes: Clientes, mensalistas: Mensalistas, recebimentos: Recebimentos, depoimentos: Depoimentos, config: Config }[view];
+  const Body = { dashboard: Dashboard, agenda: Agenda, marcacoes: Marcacoes, clientes: Clientes, mensalistas: Mensalistas, aniversariantes: Aniversariantes, recebimentos: Recebimentos, depoimentos: Depoimentos, config: Config }[view];
 
   return (
     <div className="app">

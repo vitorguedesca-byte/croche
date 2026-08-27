@@ -5,7 +5,7 @@ import { useStore } from "./store.jsx";
 import { api } from "./api.js";
 import { toast, confirmModal, promptModal } from "./toast.jsx";
 import {
-  UNITS, PROFS, TAG_OPTIONS, STATUS, VALOR_PADRAO, CAPACITY_PADRAO,
+  UNITS, PROFS, TAG_OPTIONS, VALOR_PADRAO, CAPACITY_PADRAO,
   unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize, faixaHorario, hhmm,
   slotById, slotBookings, slotBookingsAll, slotCapacity, slotWaitlist, clientAttendance,
   bookingKind, competenciasDoAluno, compLabel, mensalidadeDe, matriculaISO,
@@ -46,6 +46,35 @@ function avisarCriacao(r, sempre = false) {
     );
   }
   if (sempre || criados !== 1) toast(`${criados} horário(s) criado(s).`);
+}
+
+/* Resultado da replicação da turma inteira (horário + alunas).
+   Além do que deu certo, conta o que ficou de fora: choque de horário na
+   unidade e alunas puladas (turma lotada, regra do plano, reposição…). */
+function avisarReplicacao(r, semanas) {
+  if (!r) return;
+  const partes = [];
+  if (r.slots) partes.push(`${r.slots} horário(s) criado(s)`);
+  if (r.aulas) partes.push(`${r.aulas} aula(s) copiada(s)`);
+  if (!partes.length) partes.push("nada novo a criar — já estava tudo na agenda");
+  let tom = "success";
+  if (r.conflitos?.length) {
+    partes.push(`${r.conflitos.length} semana(s) sem criar por sobreposição de horário`);
+    tom = "info";
+  }
+  if (r.pulos?.length) {
+    // agrupa por motivo para não despejar uma linha por aluna/semana
+    const porMotivo = {};
+    r.pulos.forEach((p) => { porMotivo[p.motivo] = (porMotivo[p.motivo] || 0) + 1; });
+    const resumo = Object.entries(porMotivo).slice(0, 2).map(([m, n]) => `${n}× ${m}`).join("; ");
+    partes.push(`${r.pulos.length} aula(s) pulada(s): ${resumo}`);
+    tom = "info";
+  }
+  if (r.naoReplicadas?.length) {
+    partes.push(`${r.naoReplicadas.length} reserva(s) fora da cópia (reposição / experimental)`);
+    tom = "info";
+  }
+  toast(`Replicado por ${semanas} semana(s). ${partes.join(". ")}.`, tom);
 }
 
 /* ======================= Cartão de horário ======================= */
@@ -126,6 +155,16 @@ export function SlotDetail({ slotId }) {
   const { open, close } = useModal();
   const slot = slotById(data, slotId);
   const [capInput, setCapInput] = useState(slot ? slotCapacity(slot) : CAPACITY_PADRAO);
+  const [repBusy, setRepBusy] = useState(false);
+  // Atalho de 1 clique: repete a turma como ela está (alunas junto) na semana que vem.
+  const replicarProxima = async () => {
+    if (repBusy) return;
+    setRepBusy(true);
+    try {
+      const r = await run(api.replicateSlot(slotId, 1, true));
+      avisarReplicacao(r, 1);
+    } catch { /* o run já avisou do erro */ } finally { setRepBusy(false); }
+  };
   if (!slot) return <Modal title="Turma"><p>Horário não encontrado.</p></Modal>;
   const cap = slotCapacity(slot);
   const bks = slotBookings(data, slotId);
@@ -187,10 +226,19 @@ export function SlotDetail({ slotId }) {
       <div className="info-line"><b>Unidade</b><span><span className="chip" style={{ borderColor: uc, color: uc }}>{slot.unit}</span></span></div>
       <div className="info-line"><b>Data / hora</b><span>{fmtDateLong(slot.date)} · {faixaHorario(slot.time, data.meta?.duracaoAulaMin)}</span></div>
       <div className="info-line"><b>Profissional</b><span>{slot.prof || "—"}</span></div>
-      <div style={{ display: "flex", gap: ".5rem", marginTop: ".8rem" }}>
+      <div style={{ display: "flex", gap: ".5rem", marginTop: ".8rem", flexWrap: "wrap" }}>
         <button className="btn sec sm" onClick={() => open(<EditSlotForm slot={slot} />)}>✏️ Editar turma</button>
-        <button className="btn sec sm" onClick={() => open(<ReplicateSlotForm slot={slot} />)}>🔁 Replicar</button>
+        <button className="btn sec sm" onClick={replicarProxima} disabled={repBusy}
+          title="Repete esta turma (com as alunas) na semana que vem">
+          {repBusy ? "Replicando…" : "🔁 Próxima semana"}
+        </button>
+        <button className="btn sec sm" onClick={() => open(<ReplicateTurmaForm slot={slot} />)}
+          title="Repetir esta turma por várias semanas">🗓 Replicar por X semanas</button>
         <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir horário</button>
+      </div>
+      <div className="help" style={{ marginTop: ".45rem" }}>
+        Replicar repete a turma <b>com as {occ} aluna(s)</b> no mesmo dia da semana e horário. As aulas copiadas
+        nascem <b>não pagas</b>; reposições e aulas experimentais não são replicadas.
       </div>
       <div className="field" style={{ marginTop: "1rem" }}>
         <label>Capacidade da turma — máx. de pessoas por aula</label>
@@ -265,17 +313,15 @@ export function WaitlistForm({ slotId }) {
 export function ManageBooking({ booking, onBack }) {
   const { data, run } = useStore();
   const { open, close } = useModal();
-  const [status, setStatus] = useState(booking.status);
-  const [attendance, setAttendance] = useState(booking.attendance || "");
-  const [date, setDate] = useState(booking.date);
-  const [time, setTime] = useState(booking.time);
   const [pix, setPix] = useState(booking.pixCode || "");
   const [genBusy, setGenBusy] = useState(false);
   const slotExists = !!slotById(data, booking.slotId);
-  const save = async () => {
-    await run(api.updateBooking(booking.id, { status, attendance, date, time }));
-    close();
-  };
+  /* Este modal é só de CONSULTA + as três ações que a Inêz de fato usa:
+     cobrar o Pix, liberar a vaga e tirar a aluna da turma.
+     Editar status / presença / data / hora à mão saiu daqui em 26/08/2026: o
+     status anda sozinho pelo pagamento, a presença se marca dentro da turma
+     (✓/✕ na lista) e remarcar é liberar a vaga e marcar de novo — assim as
+     regras de reposição e de capacidade sempre passam pelo caminho certo. */
   // Libera a vaga aplicando as regras de reposição (mesmo caminho do portal).
   const liberar = async () => {
     const motivo = await promptModal({
@@ -300,20 +346,20 @@ export function ManageBooking({ booking, onBack }) {
       ? (data.bookings || []).filter((b) => b.seriesId === booking.seriesId && b.id !== booking.id && b.date >= t)
       : [];
     if (!sibs.length) {
-      const msg = `Excluir a aula de ${booking.clientName} em ${fmtDate(booking.date)} às ${booking.time}?` +
+      const msg = `Tirar ${booking.clientName} da turma de ${fmtDate(booking.date)} às ${booking.time}?` +
         (booking.paid ? "\n\nAtenção: esta aula consta como paga." : "") +
-        "\n\nA vaga volta a ficar livre na turma.";
-      if (!(await confirmModal({ title: "Excluir aula", message: msg, confirmLabel: "Excluir", tone: "danger" }))) return;
+        "\n\nA vaga volta a ficar livre na turma. Não gera crédito de reposição.";
+      if (!(await confirmModal({ title: "Excluir aluno(a)", message: msg, confirmLabel: "Excluir", tone: "danger" }))) return;
       await run(api.deleteBooking(booking.id));
       close();
       return;
     }
     const pagas = (booking.paid ? 1 : 0) + sibs.filter((b) => b.paid).length;
     const ans = await confirmModal({
-      title: "Excluir aula replicada",
-      message: `Esta aula foi marcada de forma replicada: ${booking.clientName} tem mais ${sibs.length} aula(s) da mesma marcação daqui em diante.` +
+      title: "Excluir aluno(a) — turma replicada",
+      message: `Esta aula veio de uma replicação: ${booking.clientName} tem mais ${sibs.length} aula(s) da mesma marcação daqui em diante.` +
         (pagas > 0 ? `\n\nAtenção: ${pagas} dessas aula(s) consta(m) como paga(s).` : "") +
-        `\n\nQuer excluir só esta aula ou todas da marcação?`,
+        `\n\nQuer tirá-la só desta aula ou de todas da marcação?`,
       confirmLabel: `Excluir todas (${sibs.length + 1})`,
       altLabel: "Só esta",
       tone: "danger",
@@ -341,7 +387,6 @@ export function ManageBooking({ booking, onBack }) {
       <div style={{ flex: 1 }} />
       <button className="btn wa" onClick={() => openWa(booking.phone, `Olá ${booking.clientName}! 💚`)}><WaIcon /> WhatsApp</button>
       {!booking.paid && <button className="btn terra" onClick={() => open(<ConfirmPayment booking={booking} />)}>Confirmar pagamento</button>}
-      <button className="btn" onClick={save}>Salvar</button>
     </>}>
       <div className="info-line"><b>Aluno</b><span>{booking.clientName}</span></div>
       <div className="info-line"><b>Telefone</b><span>{booking.phone || "—"}</span></div>
@@ -349,6 +394,11 @@ export function ManageBooking({ booking, onBack }) {
       <div className="info-line"><b>Aula</b><span>{fmtDateLong(booking.date)} · {faixaHorario(booking.time, data.meta?.duracaoAulaMin)}</span></div>
       <div className="info-line"><b>Valor</b><span>{money(booking.value)}</span></div>
       <div className="info-line"><b>Pagamento</b><span>{booking.paid ? `Pago (${booking.paymentMethod})` : "Pendente"}</span></div>
+      {/* Só leitura: o status anda sozinho pelo pagamento e a presença se marca na turma. */}
+      <div className="info-line"><b>Situação</b><span><StatusBadge status={booking.status} /></span></div>
+      <div className="info-line"><b>Presença</b><span>
+        {booking.attendance === "presente" ? "✓ Presente" : booking.attendance === "falta" ? "✕ Faltou" : "○ Não marcada"}
+      </span></div>
 
       {!booking.paid && (
         <div className="field" style={{ marginTop: ".9rem" }}>
@@ -368,40 +418,16 @@ export function ManageBooking({ booking, onBack }) {
         </div>
       )}
 
-      <div className="row2" style={{ marginTop: "1rem" }}>
-        <div className="field"><label>Alterar status</label>
-          <Select
-            value={status}
-            onChange={setStatus}
-            options={Object.keys(STATUS).map((k) => ({ value: k, label: STATUS[k].label, dot: STATUS[k].dot }))}
-          />
-        </div>
-        <div className="field"><label>Presença</label>
-          <Select
-            value={attendance}
-            onChange={setAttendance}
-            defaultOption={{ label: "Não marcado", icon: "○" }}
-            options={[
-              { value: "presente", label: "Presente", dot: "var(--ok)" },
-              { value: "falta", label: "Faltou", dot: "var(--danger)" },
-            ]}
-          />
-        </div>
-      </div>
-      <div className="row2">
-        <div className="field"><label>Remarcar — data</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
-        <div className="field"><label>Hora</label><input type="time" value={hhmm(time)} onChange={(e) => setTime(e.target.value)} /></div>
-      </div>
       <div style={{ marginTop: "1rem", display: "flex", gap: ".5rem", flexWrap: "wrap" }}>
         {booking.status !== "cancelada" && (
           <button className="btn sec sm" onClick={liberar}>🔁 Liberar vaga (a aluna avisou)</button>
         )}
-        <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir aula</button>
+        <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir aluno(a)</button>
       </div>
       <div className="help" style={{ marginTop: ".5rem" }}>
         <b>Liberar</b> cancela a aula e aplica as regras de reposição — vira crédito só se o aviso vier
         com 6h de antecedência (ou até 23:59 do dia anterior, se a aula for antes das 10h).
-        <br /><b>Excluir</b> apaga a marcação de vez, sem gerar crédito.
+        <br /><b>Excluir aluno(a)</b> tira a pessoa desta turma de vez, sem gerar crédito — a vaga volta a ficar livre.
       </div>
     </Modal>
   );
@@ -915,6 +941,95 @@ export function EditSlotForm({ slot }) {
   );
 }
 
+/* ======================= Replicar a TURMA INTEIRA (com alunas) =======================
+   O que a Inêz quer na prática: "essa turma de quinta às 14h continua igual nas
+   próximas semanas". Então o padrão aqui é levar as alunas junto — replicar só o
+   horário vazio virou uma opção (e o modal antigo continua para dias específicos).
+
+   As cópias nascem NÃO PAGAS: cada aula tem o seu próprio pagamento.
+   Reposição e aula experimental nunca são copiadas (ver o endpoint no backend). */
+export function ReplicateTurmaForm({ slot }) {
+  const { data, run } = useStore();
+  const { open } = useModal();
+  const [weeks, setWeeks] = useState(4);
+  const [comAlunas, setComAlunas] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const bks = slotBookings(data, slot.id);
+  // as que realmente vão junto (reposição/experimental ficam de fora)
+  const vaoJunto = bks.filter((b) => !["Reposição", "Matrícula"].includes(b.paymentMethod || ""));
+  const foraCount = bks.length - vaoJunto.length;
+  const ultima = addDays(slot.date, weeks * 7);
+
+  const save = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await run(api.replicateSlot(slot.id, weeks, comAlunas));
+      open(<SlotDetail slotId={slot.id} />);
+      avisarReplicacao(r, weeks);
+    } catch { /* o run já avisou do erro */ } finally { setBusy(false); }
+  };
+
+  const atalhos = [1, 2, 4, 8, 12];
+  return (
+    <Modal title="Replicar turma" footer={<>
+      <button className="btn ghost" onClick={() => open(<SlotDetail slotId={slot.id} />)}>← Voltar</button>
+      <div style={{ flex: 1 }} />
+      <button className="btn" onClick={save} disabled={busy}>
+        {busy ? "Replicando…" : `Replicar por ${weeks} semana(s)`}
+      </button>
+    </>}>
+      <div className="cfg-preview" style={{ marginTop: 0, marginBottom: "1rem" }}>
+        Replicando <b>{slot.unit}</b> · {fmtDateLong(slot.date)} · <b>{faixaHorario(slot.time, data.meta?.duracaoAulaMin)}</b>
+        {comAlunas && <> · <b>{vaoJunto.length} aluna(s)</b> por semana</>}
+      </div>
+
+      <div className="field">
+        <label>Por quantas semanas</label>
+        <div className="wd-chips" style={{ marginBottom: ".6rem" }}>
+          {atalhos.map((n) => (
+            <button key={n} type="button" className={`wd-chip ${weeks === n ? "on" : ""}`} onClick={() => setWeeks(n)}>
+              {n === 1 ? "Próxima" : `${n} sem`}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: ".6rem" }}>
+          <span style={{ fontSize: ".85rem", color: "var(--muted)" }}>ou</span>
+          <input type="number" min="1" max="52" value={weeks} style={{ width: 90 }}
+            onChange={(e) => setWeeks(Math.min(52, Math.max(1, parseInt(e.target.value, 10) || 1)))} />
+          <span style={{ fontSize: ".85rem", color: "var(--muted)" }}>semana(s) — até {fmtDate(ultima)}</span>
+        </div>
+      </div>
+
+      <div className="field">
+        <label>O que replicar</label>
+        <label style={{ display: "flex", alignItems: "center", gap: ".5rem", fontWeight: 400, cursor: "pointer" }}>
+          <input type="checkbox" checked={comAlunas} onChange={(e) => setComAlunas(e.target.checked)} style={{ width: "auto" }} />
+          <span>Levar as alunas junto <span className="help" style={{ fontWeight: 400 }}>(desmarque para repetir só o horário, vazio)</span></span>
+        </label>
+      </div>
+
+      {comAlunas && (
+        <div className="help">
+          Serão criadas até <b>{vaoJunto.length * weeks} aula(s)</b> ({vaoJunto.length} × {weeks} semana(s)), sempre
+          na mesma unidade, dia da semana e horário.
+          {foraCount > 0 && <> {foraCount} reserva(s) desta turma <b>não</b> vão junto (reposição / aula experimental).</>}
+          {" "}As cópias nascem <b>aguardando e não pagas</b>. Quem já estiver marcada é ignorada, e a semana em que
+          a turma estiver lotada ou o horário chocar é pulada — o aviso no fim mostra o que ficou de fora.
+        </div>
+      )}
+      {!comAlunas && <div className="help">Cria só o horário vazio nas próximas {weeks} semana(s).</div>}
+
+      <div style={{ marginTop: "1rem" }}>
+        <button className="btn ghost sm" onClick={() => open(<ReplicateSlotForm slot={slot} />)}>
+          Outras opções de repetição (diária, dias específicos)
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ======================= Replicar só o horário (diária / dias específicos) ======================= */
 export function ReplicateSlotForm({ slot }) {
   const { run } = useStore();
   const { open } = useModal();
