@@ -59,21 +59,46 @@ const ASPAS = /[“”"]/g;                     // " " "        →  (fora)
 const TRACOS = /[‐-―−]/g;              // ‐ ‒ – — ―  −  →  -
 const ESPACOS = /[  -   　\t\r\n]/g;
 const INVISIVEIS = /[​-‍⁠﻿­\p{Cc}\p{Cf}]/gu;
-// o que sobra vive: letra, marca de acento, número, espaço e ' - . ,
-const NAO_E_NOME = /[^\p{L}\p{M}\p{N} '\-.,]/gu;
+// o que sobra vive: letra, marca de acento, número, espaço, parêntese e ' - . ,
+const NAO_E_NOME = /[^\p{L}\p{M}\p{N} '\-.,()]/gu;
+const PARENTESES = /[（）]/g; // versões de largura inteira, que aparecem em texto colado
+
+/* O parêntese guarda o apelido ou o nome da criança — "Vanessa Costa (Alice)"
+   é como a Inêz distingue duas fichas da mesma mãe. Ele fica, mas com
+   espaçamento uniforme: um espaço antes do abre, nenhum logo depois dele, e
+   nenhum antes do fecha. Sem esse passo, "Costa(Alice)" chegava na
+   capitalização como UMA palavra só e virava "Costaalice".
+
+   Parêntese desemparelhado (só o abre, ou só o fecha) é digitação pela metade:
+   os dois somem e o conteúdo continua no nome, porque apagar o texto junto
+   perderia informação que alguém digitou de propósito. */
+function ajeitarParenteses(s) {
+  const t = s
+    .replace(/\(\s*\)/g, "")     // parêntese vazio não diz nada
+    .replace(/\s*\(\s*/g, " (")
+    .replace(/\s*\)/g, ")");
+  const abre = (t.match(/\(/g) || []).length;
+  const fecha = (t.match(/\)/g) || []).length;
+  return abre === fecha ? t : t.replace(/[()]/g, " ");
+}
 
 function limparCaracteres(s) {
-  return s
+  const semLixo = s
     .normalize("NFC")          // "e" + acento solto → "é" (um caractere só)
     .replace(ESPACOS, " ")
     .replace(INVISIVEIS, "")
     .replace(APOSTROFOS, "'")
     .replace(ASPAS, "")
     .replace(TRACOS, "-")
+    .replace(PARENTESES, (c) => (c === "（" ? "(" : ")"))
     .replace(NAO_E_NOME, "")   // emoji, símbolo, seta, o que for
     // Hífen COLADO une o nome composto ("Ana-Maria"); hífen com espaço em
     // volta é só pontuação largada no meio ("Ana — Clara" = "Ana Clara").
-    .replace(/\s+-+\s+/g, " ")
+    .replace(/\s+-+\s+/g, " ");
+
+  // O parêntese entra aqui, ANTES do colapso de espaços: ele insere um espaço
+  // à esquerda do abre e pode encostar num que já existia.
+  return ajeitarParenteses(semLixo)
     .replace(/\s+/g, " ")      // espaço duplicado
     .replace(/\s*'\s*/g, "'")  // "D ' Ávila" → "D'Ávila"
     .replace(/[.,]+$/, "")     // ponto/vírgula sobrando no fim
@@ -113,10 +138,16 @@ function capitalizarPedaco(p) {
     ).join("'");
 }
 
+/* Maiúscula na primeira LETRA, não no primeiro caractere: quando a palavra
+   começa com pontuação — "(alice)" — subir o "(" não faz nada e o nome ficava
+   em minúscula. */
 function capitalizarAtomo(a) {
   if (!a) return a;
   const chars = [...a];
-  return maiuscula(chars[0]) + chars.slice(1).join("");
+  const i = chars.findIndex((ch) => /\p{L}/u.test(ch));
+  if (i < 0) return a; // só pontuação: não há o que capitalizar
+  chars[i] = maiuscula(chars[i]);
+  return chars.join("");
 }
 
 /* ---------------------------------------------------------------------------
