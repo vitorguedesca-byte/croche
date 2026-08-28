@@ -2463,89 +2463,138 @@ async function handleWaMessage(msg) {
   const phone = normalizePhone(msg.from);
   const body = (msg.text || "").trim();
   const low = body.toLowerCase();
+  const rid = msg.replyId || "";
   let conv = await prisma.waConversation.findUnique({ where: { phone } });
   if (!conv) conv = await prisma.waConversation.create({ data: { phone } });
 
   const setConv = (data) => prisma.waConversation.update({ where: { phone }, data });
-  const start = async (prefix = "") => {
-    await setConv({ step: "unit", unit: null, slotId: null, offered: "[]" });
+
+  /* ----- telas ----- */
+  const telaUnidade = async (prefix = "") => {
+    await setConv({ step: "unit", unit: null, slotId: null, offered: "[]", pendingName: null });
     const nome = msg.name ? " " + msg.name.split(" ")[0] : "";
-    await sendUnitMenu(msg.from, `${prefix}Olá${nome}! 💚 Sou o assistente da *Fios que Curam*. Vamos agendar sua aula? Escolha a unidade:`);
+    return sendUnitMenu(msg.from, `${prefix}Olá${nome}! 💚 Sou o assistente da *Fios que Curam*. Vamos agendar sua aula? Escolha a unidade:`);
   };
 
-  // envia a lista tocável de horários de uma unidade
-  const enviarHorarios = async (unit) => {
+  const telaHorarios = async (unit, prefix = "") => {
     const slots = await waAvailableSlots(unit);
-    if (!slots.length) { await setConv({ step: "unit" }); return sendUnitMenu(msg.from, `No momento não há horários livres em *${unit}*. 😢 Quer ver a outra unidade?`); }
-    const top = slots.slice(0, 10);
+    if (!slots.length) {
+      await setConv({ step: "unit", pendingName: null });
+      return sendUnitMenu(msg.from, `No momento não há horários livres em *${unit}*. 😢 Quer ver a outra unidade?`);
+    }
+    const top = slots.slice(0, 9); // 9 horários + a linha de voltar = 10 (limite da Meta)
     const rows = top.map((s) => ({ id: "slot:" + s.id, title: fmtSlotDia(s), description: `${s.time} · ${s.vagas} vaga(s)` }));
-    await setConv({ step: "slot", unit, offered: JSON.stringify(top.map((s) => s.id)) });
-    return waList(msg.from, `📅 Toque para escolher um horário em *${unit}*:`, "Ver horários", rows);
+    rows.push({ id: "back:unit", title: "← Trocar unidade", description: "Escolher outra unidade" });
+    await setConv({ step: "slot", unit, slotId: null, pendingName: null, offered: JSON.stringify(top.map((s) => s.id)) });
+    return waList(msg.from, `${prefix}📅 Toque para escolher um horário em *${unit}*:`, "Ver horários", rows);
   };
 
-  // Saudação / recomeço
-  if (["menu", "oi", "olá", "ola", "agendar", "começar", "comecar", "início", "inicio"].includes(low) || conv.step === "start" || conv.step === "done") {
-    return start();
+  // Nada é reservado sem passar por aqui.
+  const telaConfirmarHorario = async (slot) => {
+    await setConv({ step: "confirm", unit: slot.unit, slotId: slot.id });
+    return waButtons(
+      msg.from,
+      `Confere pra mim antes de reservar 👇\n\n📍 *${slot.unit}*\n🗓️ ${fmtSlotBR(slot)}\n💰 R$ ${SETTINGS.valorPadrao}\n\nEstá correto?`,
+      [{ id: "ok:slot", title: "✅ Confirmar" }, { id: "back:slot", title: "🔄 Outro horário" }, { id: "back:unit", title: "← Trocar unidade" }]
+    );
+  };
+
+  const telaNome = async (prefix = "") => {
+    await setConv({ step: "name", pendingName: null });
+    return waButtons(msg.from, `${prefix}Quase lá! Me diz seu *nome completo* (é só digitar aqui) 💚`, [
+      { id: "back:slot", title: "← Voltar" },
+    ]);
+  };
+
+  const telaConfirmarNome = async (name) => {
+    await setConv({ step: "nameok", pendingName: name });
+    return waButtons(msg.from, `Confirma o nome da reserva?\n\n👤 *${name}*`, [
+      { id: "ok:name", title: "✅ Sim, reservar" },
+      { id: "edit:name", title: "✏️ Corrigir nome" },
+    ]);
+  };
+
+  const reservar = async (name, slot) => {
+    const occ = await prisma.booking.count({ where: { slotId: slot.id, status: { not: "cancelada" } } });
+    if (occ >= slot.capacity) return telaUnidade("Esse horário lotou enquanto conversávamos. 😔 Vamos de novo: ");
+    await createWaBooking(name, phone, slot);
+    await setConv({ step: "done", slotId: null, pendingName: null });
+    await waSend(msg.from, bookingConfirmText(name, slot));
+    return waButtons(msg.from, "Posso ajudar em mais alguma coisa?", [{ id: "new", title: "🔄 Nova reserva" }]);
+  };
+
+  /* ----- navegação por botão: vale em qualquer passo ----- */
+  if (rid === "new" || ["menu", "oi", "olá", "ola", "agendar", "começar", "comecar", "início", "inicio"].includes(low))
+    return telaUnidade();
+  if (rid === "back:unit") return telaUnidade();
+  if (rid === "back:slot") return telaHorarios(conv.unit || SETTINGS.units[0]);
+  if (rid.startsWith("unit:")) {
+    const u = rid.slice(5);
+    if (SETTINGS.units.includes(u)) return telaHorarios(u);
+  }
+  // Tocar num horário (inclusive de mensagem antiga) sempre cai na confirmação,
+  // nunca direto na reserva — foi o que criou a reserva com nome "Ipatinga".
+  if (rid.startsWith("slot:")) {
+    const s = await prisma.slot.findUnique({ where: { id: parseInt(rid.slice(5), 10) } });
+    if (s) return telaConfirmarHorario(s);
   }
 
+  if (conv.step === "start" || conv.step === "done") return telaUnidade();
+
   if (conv.step === "unit") {
-    const unit = msg.replyId?.startsWith("unit:") ? msg.replyId.slice(5) : parseUnitChoice(body);
-    if (!unit || !SETTINGS.units.includes(unit)) return sendUnitMenu(msg.from, `Não entendi 🤔. Escolha a unidade:`);
-    return enviarHorarios(unit);
+    const unit = parseUnitChoice(body);
+    if (!unit || !SETTINGS.units.includes(unit)) return sendUnitMenu(msg.from, `Não entendi 🤔. Toque em uma das unidades:`);
+    return telaHorarios(unit);
   }
 
   if (conv.step === "slot") {
     const offered = JSON.parse(conv.offered || "[]");
-    let slotId = null;
-    // tocou num botão de unidade antigo → troca a unidade em vez de reclamar
-    if (msg.replyId?.startsWith("unit:")) {
-      const u = msg.replyId.slice(5);
-      if (SETTINGS.units.includes(u)) return enviarHorarios(u);
+    const n = parseInt(body, 10);
+    if (n >= 1 && n <= offered.length) {
+      const s = await prisma.slot.findUnique({ where: { id: offered[n - 1] } });
+      if (s) return telaConfirmarHorario(s);
     }
-    if (msg.replyId?.startsWith("slot:")) slotId = parseInt(msg.replyId.slice(5), 10);
-    else { const n = parseInt(body, 10); if (n >= 1 && n <= offered.length) slotId = offered[n - 1]; }
-    if (!slotId) return waSend(msg.from, `Toque em *Ver horários* e escolha um da lista, ou digite *menu* para recomeçar.`);
-    const slot = await prisma.slot.findUnique({ where: { id: slotId } });
-    if (!slot) return start("Esse horário não está mais disponível. ");
-    const occ = await prisma.booking.count({ where: { slotId: slot.id, status: { not: "cancelada" } } });
-    if (occ >= slot.capacity) return waSend(msg.from, `Ops, esse horário acabou de lotar. 😔 Digite *menu* para escolher outro.`);
-    const client = await prisma.client.findFirst({ where: { phone } });
-    if (client && client.name) {
-      await createWaBooking(client.name, phone, slot);
-      await setConv({ step: "done", slotId: null });
-      return waSend(msg.from, bookingConfirmText(client.name, slot));
+    return waSend(msg.from, `Toque em *Ver horários* e escolha um da lista. 💚`);
+  }
+
+  if (conv.step === "confirm") {
+    if (rid === "ok:slot") {
+      const slot = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
+      if (!slot) return telaUnidade("Esse horário expirou. ");
+      const client = await prisma.client.findFirst({ where: { phone } });
+      if (client && client.name) return reservar(client.name, slot);
+      return telaNome();
     }
-    await setConv({ step: "name", slotId: slot.id });
-    return waSend(msg.from, `Perfeito! Para confirmar, me diz seu *nome completo*, por favor. 💚`);
+    return waButtons(msg.from, `Toque em *Confirmar* para reservar, ou escolha outro horário 👇`, [
+      { id: "ok:slot", title: "✅ Confirmar" },
+      { id: "back:slot", title: "🔄 Outro horário" },
+      { id: "back:unit", title: "← Trocar unidade" },
+    ]);
   }
 
   if (conv.step === "name") {
-    // Toque em botão/lista de mensagem ANTIGA não é nome — a pessoa rolou o
-    // histórico e tocou de novo. Sem isso, "Ipatinga" virava o nome da aluna.
-    if (msg.replyId?.startsWith("unit:")) {
-      const u = msg.replyId.slice(5);
-      if (SETTINGS.units.includes(u)) return enviarHorarios(u);
-    }
-    if (msg.replyId?.startsWith("slot:")) {
-      const novo = await prisma.slot.findUnique({ where: { id: parseInt(msg.replyId.slice(5), 10) } });
-      if (novo) {
-        await setConv({ step: "name", unit: novo.unit, slotId: novo.id });
-        return waSend(msg.from, `Anotado: *${fmtSlotBR(novo)}* em ${novo.unit}.\n\nAgora me diz seu *nome completo*, por favor. 💚`);
-      }
-    }
     const name = body.replace(/\s+/g, " ").trim();
     const pareceUnidade = SETTINGS.units.some((u) => u.toLowerCase() === name.toLowerCase());
-    if (name.length < 2 || pareceUnidade) return waSend(msg.from, `Preciso do seu *nome completo* para reservar. 💚\n(ou digite *menu* para recomeçar)`);
-    const slot = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
-    if (!slot) return start("Esse horário expirou. ");
-    const occ = await prisma.booking.count({ where: { slotId: slot.id, status: { not: "cancelada" } } });
-    if (occ >= slot.capacity) return start("Esse horário lotou enquanto conversávamos. Vamos de novo. ");
-    await createWaBooking(name, phone, slot);
-    await setConv({ step: "done", slotId: null });
-    return waSend(msg.from, bookingConfirmText(name, slot));
+    if (name.length < 3 || pareceUnidade || !/\p{L}/u.test(name))
+      return waButtons(msg.from, `Preciso do seu *nome completo* para reservar 💚`, [{ id: "back:slot", title: "← Voltar" }]);
+    return telaConfirmarNome(name);
   }
 
-  return start();
+  if (conv.step === "nameok") {
+    if (rid === "ok:name") {
+      const slot = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
+      if (!slot) return telaUnidade("Esse horário expirou. ");
+      if (!conv.pendingName) return telaNome();
+      return reservar(conv.pendingName, slot);
+    }
+    if (rid === "edit:name") return telaNome("Sem problema! ");
+    // digitou um nome novo em vez de tocar no botão
+    const name = body.replace(/\s+/g, " ").trim();
+    if (name.length >= 3 && /\p{L}/u.test(name)) return telaConfirmarNome(name);
+    return telaConfirmarNome(conv.pendingName || "");
+  }
+
+  return telaUnidade();
 }
 
 /* ---------- CLIENTS ---------- */

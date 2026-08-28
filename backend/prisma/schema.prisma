@@ -208,10 +208,11 @@ model Testimonial {
 
 model WaConversation {
   phone     String   @id @db.VarChar(20) // wa_id normalizado
-  step      String   @default("start") @db.VarChar(20) // start|unit|slot|name|done
+  step      String   @default("start") @db.VarChar(20) // start|unit|slot|confirm|name|nameok|done
   unit      String?  @db.VarChar(60)
-  slotId    Int? // horário escolhido (aguardando nome)
+  slotId    Int? // horário escolhido (aguardando confirmação/nome)
   offered   String   @default("[]") @db.VarChar(500) // JSON dos slotIds oferecidos
+  pendingName String? @db.VarChar(120) // nome digitado, aguardando confirmação
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())
 }
@@ -247,7 +248,8 @@ model Settings {
   // permite combinar o valor de cada mês antes de a cobrança existir.
   geracaoAuto      Boolean @default(false)
   // ----- tabela de preços -----
-  taxaMatricula    Float  @default(20)  // taxa cobrada para agendar a aula experimental
+  // A taxa de matrícula saiu em 28/08/2026: o valor dela foi diluído na
+  // mensalidade e quem se matricula paga a 1ª mensalidade cheia.
   valorPlano1x     Float  @default(120) // mensalidade de 1x por semana (4 aulas/mês)
   valorPlano2x     Float  @default(200) // mensalidade de 2x por semana (8 aulas/mês)
   valorAvulsa      Float  @default(40)  // aula extra avulsa
