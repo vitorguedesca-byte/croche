@@ -4,18 +4,26 @@
    • FIXO   — tem dia e hora fixos; quem monta a agenda dela é a Inêz (em lote).
    • ESCALA — ela mesma marca a aula pelo portal, durante a semana.
 
-   As três regras, valendo tanto para marcar aula normal quanto para marcar
+   As duas regras, valendo tanto para marcar aula normal quanto para marcar
    reposição (remarcação):
 
    1. Sábado não faz parte do plano.
-   2. Horário a partir das 18:00 também não (18:00 já entra no bloqueio).
-   3. Só na escala: a aluna marca a próxima aula NO DIA da aula dela — ou seja,
+   2. Só na escala: a aluna marca a próxima aula NO DIA da aula dela — ou seja,
       a janela de marcação só abre nos dias em que ela tem aula. Quantas aulas
       ela marca nesse dia é com ela; o que a regra prende é o dia.
 
-   As regras 1 e 2 não valem para quem JÁ estava nesses horários quando elas
-   entraram: esse direito herdado está gravado em `podeSabado` / `podeNoite`,
-   preenchidos pela migration 20260822000000. Ninguém novo ganha esses campos.
+   A regra 1 não vale para quem JÁ estava em sábado quando ela entrou: esse
+   direito herdado está gravado em `podeSabado`, preenchido pela migration
+   20260822000000. Ninguém novo ganha esse campo.
+
+   HOUVE UMA TERCEIRA REGRA, removida em 26/08/2026: "horário a partir das 18:00
+   não faz parte do plano". Ela nunca correspondeu à escola — a grade tem 213
+   turmas de 18:00 as 20:00, 190 delas no futuro, em duas unidades, até ago/2027.
+   Pior: o direito herdado foi deduzido da tabela Booking, que tinha 37 aulas no
+   total, então das 141 mensalistas ativas exatamente UMA recebeu `podeNoite` —
+   e ela nem era da turma da noite. Na prática a replicação em lote pulava toda
+   aula das 18h em silêncio. A coluna `podeNoite` continua no banco (não custa
+   nada e é histórico), mas não governa mais nada.
 
    Alunas avulsas, aula experimental e quem está em `firstClass` não passam por
    aqui — a regra é do plano de mensalista.
@@ -25,7 +33,6 @@
    painel conseguir avisar antes de mandar a requisição. Ao mexer numa regra
    aqui, mexa lá também. */
 
-export const NOITE_A_PARTIR = "18:00";
 // Marca que o backend põe no paymentMethod das aulas DO PLANO. É por ela que o
 // teto semanal separa o que conta ("Mensalista") do que é aula à parte
 // ("Reposição", "Avulsa", "Matrícula") e por isso não ocupa vaga da semana.
@@ -38,9 +45,6 @@ export function ehSabado(date) {
   if (!m) return false;
   return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay() === 6;
 }
-
-// 'HH:MM' → true se é 18:00 ou mais tarde (comparação de texto resolve)
-export const ehNoite = (time) => String(time || "") >= NOITE_A_PARTIR;
 
 // "fixo" | "escala" | null (não é mensalista)
 export function tipoMensalista(client) {
@@ -108,33 +112,28 @@ export function tetoSemanal(client, date, aulasAtivas) {
 
 /* Checagem única usada por todos os caminhos de marcação.
 
-   client       — o registro do Client (precisa de plan, mensalistaTipo, podeSabado, podeNoite, weeklyFreq)
-   alvo         — { date, time } do horário escolhido
+   client       — o registro do Client (precisa de plan, mensalistaTipo, podeSabado, weeklyFreq)
+   alvo         — { date, time } do horário escolhido (só `date` é olhado hoje;
+                  `time` segue no contrato porque quem chama já tem os dois e
+                  uma regra de horário pode voltar)
    ctx.hoje     — 'YYYY-MM-DD' pelo relógio de Brasília
    ctx.aulasAtivas — aulas não canceladas da aluna (a escala e o teto usam)
    ctx.ignorarJanela — true em caminhos onde a janela da escala não faz sentido
    ctx.ignorarTeto — true quando a aula não é do plano (reposição, extra)
 
    Devolve { ok:true } ou { ok:false, codigo, motivo }.
-   `codigo` é 'sabado' | 'noite' | 'escala' | 'teto'. */
+   `codigo` é 'sabado' | 'escala' | 'teto'. */
 export function checarRegras(client, alvo, ctx = {}) {
   const tipo = tipoMensalista(client);
   if (!tipo) return { ok: true, codigo: "", motivo: "" }; // avulsa/experimental seguem como antes
 
-  const { date, time } = alvo || {};
+  const { date } = alvo || {};
 
   if (ehSabado(date) && !client.podeSabado)
     return {
       ok: false,
       codigo: "sabado",
       motivo: "Sábado não faz parte do plano de mensalista. Escolha um dia de segunda a sexta. 💚",
-    };
-
-  if (ehNoite(time) && !client.podeNoite)
-    return {
-      ok: false,
-      codigo: "noite",
-      motivo: `Os horários a partir das ${NOITE_A_PARTIR} não fazem parte do plano de mensalista. Escolha um horário mais cedo. 💚`,
     };
 
   if (!ctx.ignorarTeto) {
@@ -226,10 +225,9 @@ export function encargosDaMensalidade(inv, data) {
 /* Versão "só horário": ignora a janela da escala e olha apenas se a data/hora
    cabe no plano da aluna. É o que filtra a lista de horários do portal — a
    janela vira um aviso separado, para a aluna entender por que não dá hoje. */
-export function horarioPermitido(client, { date, time }) {
+export function horarioPermitido(client, { date }) {
   const tipo = tipoMensalista(client);
   if (!tipo) return true;
   if (ehSabado(date) && !client.podeSabado) return false;
-  if (ehNoite(time) && !client.podeNoite) return false;
   return true;
 }

@@ -11,7 +11,7 @@ import {
   bookingKind, competenciasDoAluno, compLabel, mensalidadeDe, matriculaISO,
   compAtual, addComp, precoDaComp, mensalidadeDaComp,
   WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays,
-  NOITE_A_PARTIR, ehSabadoISO, ehNoite, tipoMensalista, TIPO_MENSALISTA_LABEL,
+  ehSabadoISO, tipoMensalista, TIPO_MENSALISTA_LABEL,
   motivoForaDaRegra, motivoForaDaRegraDow,
 } from "./helpers.js";
 
@@ -1847,9 +1847,9 @@ export function planoLabel(c, meta = {}) {
     <span className="badge b-ok">📅 {freq}</span>{" "}
     <span className="badge b-info">{tipo === "escala" ? "🔄" : "📌"} {TIPO_MENSALISTA_LABEL[tipo]}</span>{" "}
     <span className="cli-sub">{money(valor)}/mês</span>
-    {(c.podeSabado || c.podeNoite) && (
-      <> <span className="cli-sub" title="Direito herdado: ela já estava nesse horário quando a regra mudou.">
-        · pode {[c.podeSabado && "sábado", c.podeNoite && `${NOITE_A_PARTIR}+`].filter(Boolean).join(" e ")}
+    {c.podeSabado && (
+      <> <span className="cli-sub" title="Direito herdado: ela já estava marcando no sábado quando a regra mudou.">
+        · pode sábado
       </span></>
     )}
   </>);
@@ -1930,9 +1930,9 @@ export function EnrollForm({ client }) {
   const t = todayISO();
   const livres = data.slots
     .filter((s) => s.date >= t && slotBookings(data, s.id).length < slotCapacity(s))
-    // A 1ª aula oficial já é aula de mensalista: sábado e horário a partir das
-    // 18h saíram do plano e não entram para quem está começando agora.
-    .filter((s) => !ehSabadoISO(s.date) && !ehNoite(s.time))
+    // A 1ª aula oficial já é aula de mensalista: sábado saiu do plano e não
+    // entra para quem está começando agora. A turma das 18h entra normalmente.
+    .filter((s) => !ehSabadoISO(s.date))
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const valor = freq === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120);
 
@@ -1984,7 +1984,7 @@ export function EnrollForm({ client }) {
       </div>
       <div className="field">
         <label>1ª aula oficial <span style={{ color: "var(--muted)", fontWeight: 400 }}>(opcional)</span></label>
-        <div className="help" style={{ marginBottom: ".4rem" }}>Sábado e horários a partir das {NOITE_A_PARTIR} não fazem parte do plano — por isso não aparecem na lista.</div>
+        <div className="help" style={{ marginBottom: ".4rem" }}>Sábado não faz parte do plano — por isso não aparece na lista.</div>
         <Select
           value={slotId}
           onChange={setSlotId}
@@ -2507,10 +2507,10 @@ function ClientFormFields({ f }) {
               <label style={{ display: "block", marginBottom: ".3rem" }}>Tipo de mensalista</label>
               <Select value={f.tipoMens} onChange={f.setTipoMens} options={TIPO_MENSALISTA_OPCOES} />
               <div className="help" style={{ marginTop: ".4rem" }}>
-                Nos dois tipos: sem sábado e sem horário a partir das {NOITE_A_PARTIR}.
-                Na <b>escala</b>, a aluna marca a próxima aula no dia da aula dela.
-                {(client?.podeSabado || client?.podeNoite) && (
-                  <> Esta aluna tem direito herdado a {[client.podeSabado && "sábado", client.podeNoite && `horário a partir das ${NOITE_A_PARTIR}`].filter(Boolean).join(" e ")}.</>
+                Nos dois tipos: sem sábado. Na <b>escala</b>, a aluna marca a próxima aula
+                no dia da aula dela.
+                {client?.podeSabado && (
+                  <> Esta aluna tem direito herdado a sábado.</>
                 )}
               </div>
             </div>

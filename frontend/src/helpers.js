@@ -353,31 +353,31 @@ export function mensalidadeDaComp(c, comp, meta, precos) {
    Ao mexer numa regra, mexa nos dois lugares.
 
    • Sábado não faz parte do plano de mensalista.
-   • Horário a partir das 18:00 também não (18:00 já entra no bloqueio).
    • Escala: a aluna marca a próxima aula no dia da aula dela.
-   Quem já estava em sábado / à noite quando a regra entrou continua podendo —
-   é o que `podeSabado` e `podeNoite` guardam (preenchidos pela migration). */
-export const NOITE_A_PARTIR = "18:00";
+   Quem já estava em sábado quando a regra entrou continua podendo — é o que
+   `podeSabado` guarda (preenchido pela migration).
+
+   A regra "horário a partir das 18:00 também não" saiu em 26/08/2026: a grade
+   tem turma das 18h as 20h nas duas unidades, então ela nunca correspondeu à
+   escola. Ver o cabeçalho de backend/src/regrasAula.js. */
 export const ehSabadoISO = (iso) => new Date(iso + "T00:00").getDay() === 6;
-export const ehNoite = (time) => hhmm(time) >= NOITE_A_PARTIR;
 export const tipoMensalista = (c) =>
   !c || c.plan !== "mensalista" ? null : c.mensalistaTipo === "escala" ? "escala" : "fixo";
 export const TIPO_MENSALISTA_LABEL = { fixo: "Fixo", escala: "Escala" };
 
-/* Por que este horário fura o plano da aluna — ou "" quando está tudo certo.
-   Só olha data/hora: a janela da escala é do portal, não do painel (quem agenda
-   pelo painel é a Inêz, e ela pode marcar quando quiser). */
-export function motivoForaDaRegra(c, { date, time }) {
+/* Por que esta data fura o plano da aluna — ou "" quando está tudo certo.
+   Só olha o dia: a janela da escala é do portal, não do painel (quem agenda
+   pelo painel é a Inêz, e ela pode marcar quando quiser). Continua recebendo o
+   alvo inteiro porque quem chama já tem `time` na mão. */
+export function motivoForaDaRegra(c, { date }) {
   if (!tipoMensalista(c)) return "";
   if (ehSabadoISO(date) && !c.podeSabado) return "sábado não faz parte do plano de mensalista";
-  if (ehNoite(time) && !c.podeNoite) return `horário a partir das ${NOITE_A_PARTIR} não faz parte do plano de mensalista`;
   return "";
 }
-// Mesma checagem a partir de dia-da-semana (Seg=0…Dom=6) + hora — usada no lote,
+// Mesma checagem a partir de dia-da-semana (Seg=0…Dom=6) — usada no lote,
 // que escolhe turmas recorrentes em vez de datas soltas.
-export function motivoForaDaRegraDow(c, dow, time) {
+export function motivoForaDaRegraDow(c, dow) {
   if (!tipoMensalista(c)) return "";
   if (dow === 5 && !c.podeSabado) return "sábado não faz parte do plano de mensalista";
-  if (ehNoite(time) && !c.podeNoite) return `horário a partir das ${NOITE_A_PARTIR} não faz parte do plano de mensalista`;
   return "";
 }

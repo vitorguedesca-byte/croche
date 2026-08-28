@@ -15,7 +15,6 @@ import {
   profFor,
 } from "./prismaClient.js";
 import {
-  NOITE_A_PARTIR,
   PGTO_PLANO,
   JUROS_DIA_PERCENTUAL,
   MULTA_ATRASO_REAIS,
@@ -1881,8 +1880,6 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
     regras: {
       tipo,                                  // "fixo" | "escala" | null
       podeSabado: !!client.podeSabado,
-      podeNoite: !!client.podeNoite,
-      noiteAPartirDe: NOITE_A_PARTIR,
       janela,                                // { aberta, proxima, motivo }
       teto,                                  // { limite, marcadas, restantes } da semana de hoje
     },
@@ -2525,8 +2522,9 @@ app.patch(
     if (firstClass !== undefined) data.firstClass = !!firstClass;
     if (plan !== undefined) data.plan = plan === "mensalista" ? "mensalista" : "avulso";
     // fixo = dia e hora fixos (agenda montada pela Inêz) | escala = ela marca durante a semana.
-    // podeSabado/podeNoite NÃO entram aqui de propósito: são direito herdado,
-    // gravado uma única vez pela migration. Ninguém novo ganha.
+    // podeSabado NÃO entra aqui de propósito: é direito herdado, gravado uma
+    // única vez pela migration. Ninguém novo ganha. (podeNoite ainda existe na
+    // tabela, mas não governa mais nada — a regra das 18h saiu em 26/08/2026.)
     if (mensalistaTipo !== undefined) data.mensalistaTipo = mensalistaTipo === "escala" ? "escala" : "fixo";
     // "cancelado" = rompeu com o curso; perde o direito a reposição
     if (status !== undefined) data.status = status === "cancelado" ? "cancelado" : "ativo";
