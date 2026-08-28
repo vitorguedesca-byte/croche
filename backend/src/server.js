@@ -29,6 +29,7 @@ import {
   tetoSemanal,
   tipoMensalista,
 } from "./regrasAula.js";
+import { padronizarNome } from "./nomes.js";
 import { sicrediConfigured, sicrediMissing, createCharge, getCharge, isPaidStatus, extractPix } from "./sicredi.js";
 import { waConfigured, waVerify, sendWaText, sendWaButtons, sendWaList, parseIncoming, normalizePhone } from "./wa.js";
 
@@ -917,7 +918,8 @@ app.get(
 );
 
 /* ---------- BOOKINGS ---------- */
-async function ensureClient(name, phone, unit, tags, cpf, email, firstClass, extra = {}) {
+async function ensureClient(nomeBruto, phone, unit, tags, cpf, email, firstClass, extra = {}) {
+  const name = padronizarNome(nomeBruto);
   const found = await prisma.client.findFirst({ where: { name } });
   if (found) {
     // se o cliente já existe mas ainda não tem CPF/email/nascimento, completa com o informado
@@ -948,7 +950,7 @@ const jaTeveExperimental = (c) => !!c && (!!c.trialDate || c.matriculaStatus !==
 app.post(
   "/api/bookings",
   wrap(async (req, res) => {
-    const b = req.body;
+    const b = { ...req.body, clientName: padronizarNome(req.body.clientName) };
     if (!b.clientName) return res.status(400).json({ error: "clientName é obrigatório" });
     const unit = b.unit || UNITS[0];
     const time = b.time || "09:00";
@@ -2447,7 +2449,8 @@ async function waAvailableSlots(unit) {
 function bookingConfirmText(name, slot) {
   return `Prontinho, ${name.split(" ")[0]}! 💚\n\nSua aula está *reservada*:\n📍 ${slot.unit}\n🗓️ ${fmtSlotBR(slot)}\n💰 R$ ${SETTINGS.valorPadrao}\n\nStatus: *aguardando pagamento*. Em breve enviaremos os detalhes para confirmar. Até logo! 🧶`;
 }
-async function createWaBooking(name, phone, slot) {
+async function createWaBooking(nomeBruto, phone, slot) {
+  const name = padronizarNome(nomeBruto);
   await prisma.booking.create({
     data: {
       clientName: name, phone: phone || "", unit: slot.unit,
@@ -2506,7 +2509,10 @@ async function handleWaMessage(msg) {
     ]);
   };
 
-  const telaConfirmarNome = async (name) => {
+  // O nome digitado no WhatsApp já entra padronizado ("MARIA DA SILVA" vira
+  // "Maria da Silva") — e a aluna confirma exatamente como vai ficar gravado.
+  const telaConfirmarNome = async (nomeDigitado) => {
+    const name = padronizarNome(nomeDigitado);
     await setConv({ step: "nameok", pendingName: name });
     return waButtons(msg.from, `Confirma o nome da reserva?\n\n👤 *${name}*`, [
       { id: "ok:name", title: "✅ Sim, reservar" },
@@ -2601,7 +2607,8 @@ async function handleWaMessage(msg) {
 app.post(
   "/api/clients",
   wrap(async (req, res) => {
-    const { name, phone, email, cpf, unit, tags, notes, birthday, level, firstClass, plan, mensalistaTipo, monthlyValue, billingDay } = req.body;
+    const { phone, email, cpf, unit, tags, notes, birthday, level, firstClass, plan, mensalistaTipo, monthlyValue, billingDay } = req.body;
+    const name = padronizarNome(req.body.name);
     if (!name) return res.status(400).json({ error: "name é obrigatório" });
     const cpfDigits = onlyDigits(cpf);
     if (cpfDigits) {
@@ -2630,7 +2637,7 @@ app.patch(
     const id = Number(req.params.id);
     const { name, phone, email, cpf, unit, tags, notes, birthday, level, firstClass, plan, mensalistaTipo, status, monthlyValue, billingDay } = req.body;
     const data = {};
-    if (name !== undefined) data.name = name;
+    if (name !== undefined) data.name = padronizarNome(name);
     if (phone !== undefined) data.phone = phone;
     if (email !== undefined) data.email = (email || "").trim() || null;
     if (cpf !== undefined) {
@@ -2661,7 +2668,24 @@ app.patch(
     if (billingDay !== undefined) data.billingDay = billingDay === "" || billingDay == null ? null : Math.min(28, Math.max(1, parseInt(billingDay, 10) || 0)) || null;
 
     const antes = await prisma.client.findUnique({ where: { id } });
-    const client = await prisma.client.update({ where: { id }, data });
+    if (!antes) return res.status(404).json({ error: "Cadastro não encontrado." });
+
+    /* MUDOU DE NOME: a aula é ligada à aluna pelo NOME (Booking.clientName),
+       não pelo id. Trocar só a ficha deixaria todo o histórico órfão — a aluna
+       apareceria com zero aula e a agenda com uma pessoa que não existe mais.
+       Por isso o nome novo desce junto para as aulas e a lista de espera, tudo
+       na mesma transação: ou tudo muda, ou nada muda. */
+    const trocouNome = data.name !== undefined && data.name && data.name !== antes.name;
+    const [client] = await prisma.$transaction([
+      prisma.client.update({ where: { id }, data }),
+      ...(trocouNome
+        ? [
+            prisma.booking.updateMany({ where: { clientName: antes.name }, data: { clientName: data.name } }),
+            prisma.waitlist.updateMany({ where: { name: antes.name }, data: { name: data.name } }),
+          ]
+        : []),
+    ]);
+    if (trocouNome) console.log(`[nome] "${antes.name}" → "${data.name}" (aulas e lista de espera atualizadas)`);
 
     /* Virou INATIVA agora: a agenda e a cobrança dela param junto. Sem isso, a
        aluna que sai continua ocupando vaga nas turmas e recebendo boleto todo
@@ -2714,7 +2738,8 @@ app.post(
   "/api/slots/:id/waitlist",
   wrap(async (req, res) => {
     const slotId = Number(req.params.id);
-    const { name, phone } = req.body;
+    const name = padronizarNome(req.body.name);
+    const { phone } = req.body;
     if (!name) return res.status(400).json({ error: "name é obrigatório" });
     const entry = await prisma.waitlist.create({ data: { slotId, name, phone: phone || "" } });
     res.json(entry);
@@ -2797,7 +2822,7 @@ app.post(
     if (!slot) return res.status(404).json({ error: "Horário não encontrado." });
     if ((await occupancy(slot.id)) >= slot.capacity) return res.status(409).json({ error: "Esta turma acabou de lotar. Escolha outro horário." });
     const cli = (await prisma.client.findMany()).find((c) => onlyDigits(c.phone) === phone);
-    const clientName = (cli && cli.name) || (req.body.name || "").trim();
+    const clientName = (cli && cli.name) || padronizarNome(req.body.name);
     if (!clientName) return res.status(400).json({ error: "Informe seu nome." });
     const booking = await prisma.booking.create({
       data: { clientName, phone: rawPhone, unit: slot.unit, date: slot.date, time: slot.time, prof: slot.prof, slotId: slot.id, status: "aguardando", value: SETTINGS.valorPadrao },
@@ -2996,7 +3021,8 @@ app.get("/api/testimonials", wrap(async (_req, res) => {
 
 // Criar depoimento
 app.post("/api/testimonials", wrap(async (req, res) => {
-  const { name, role = "", text, active = true, order = 0 } = req.body;
+  const { role = "", text, active = true, order = 0 } = req.body;
+  const name = padronizarNome(req.body.name);
   if (!name || !text) return res.status(400).json({ error: "name e text são obrigatórios." });
   const t = await prisma.testimonial.create({ data: { name, role, text, active, order } });
   res.status(201).json(t);

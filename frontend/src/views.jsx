@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import { toast, confirmModal } from "./toast.jsx";
 import { useStore } from "./store.jsx";
 import { useModal, StatusBadge, Select } from "./ui.jsx";
@@ -12,8 +12,8 @@ import {
   todayISO, addDays, weekStart, fmtDate, fmtDateLong, weekdayShort, money, waLink, capitalize, faixaHorario, hhmm,
   bookingsActive, slotBookings, slotBookingsAll, slotCapacity, slotOccupancy, slotWaitlist, clientAttendance,
   bookingKind, BOOKING_KINDS, compAtual, addComp, compLabel, competenciasDoAluno, mensalidadeDe, matriculaISO,
-  mensalidadeDaComp, precoDaComp,
-  clientActiveCount, classifyClient, isNewLead,
+  mensalidadeDaComp, precoDaComp, situacaoMensalidade, clientOfBooking, ehPagamentoDeMatricula,
+  clientMonthClasses, classifyClient, isNewLead,
   aniversariantes, diaMesNasc, diaMesLabel, faltamLabel,
 } from "./helpers.js";
 
@@ -34,8 +34,10 @@ function Alerts({ open }) {
   const inativas = data.clients.filter((c) => { const l = lastByClient[c.name]; return l && daysSince(l) >= 30; })
     .sort((a, b) => daysSince(lastByClient[b.name]) - daysSince(lastByClient[a.name])).slice(0, 5);
 
-  // Fez a experimental, a taxa está paga e ela não virou mensalista: ou converte
-  // ou devolve os R$20. Só cobra atenção depois da aula ter acontecido.
+  /* Fez a experimental, a 1ª mensalidade está paga e ela não virou mensalista:
+     ou você conclui a matrícula, ou devolve o valor. Normalmente isso só aparece
+     quando a conversão automática falhou (Sicredi fora do ar, por exemplo).
+     Só cobra atenção depois da aula ter acontecido. */
   const decidirMatricula = data.clients
     .filter((c) => c.matriculaStatus === "paga" && c.plan !== "mensalista" && c.trialDate && c.trialDate <= t)
     .sort((a, b) => (a.trialDate || "").localeCompare(b.trialDate || ""))
@@ -49,10 +51,14 @@ function Alerts({ open }) {
       <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: "1rem" }}>
         {atrasados.length > 0 && (
           <div>
-            <div className="alert-h" style={{ color: "var(--warn)" }}>⏳ Pagamentos atrasados</div>
+            <div className="alert-h" style={{ color: "var(--warn)" }}>⏳ Reservas sem confirmação</div>
             {atrasados.map((b) => (
               <div className="alert-row" key={b.id}>
-                <div><b>{b.clientName}</b><div className="cli-sub">há {daysSince(b.createdAt)} dias · {money(b.value)}</div></div>
+                {/* Só a reserva da experimental tem dinheiro próprio (é a 1ª
+                    mensalidade). As demais aulas já estão dentro do plano. */}
+                <div><b>{b.clientName}</b><div className="cli-sub">
+                  há {daysSince(b.createdAt)} dias{ehPagamentoDeMatricula(b.paymentMethod) ? ` · 1ª mensalidade de ${money(b.value)}` : ""}
+                </div></div>
                 <button className="btn wa sm" onClick={() => openWa(b.phone, `Olá ${b.clientName}! Vi que sua reserva da aula de ${fmtDate(b.date)} ainda está pendente. Posso te ajudar a confirmar? 💚`)}>Cobrar</button>
               </div>
             ))}
@@ -68,7 +74,7 @@ function Alerts({ open }) {
                   <div>
                     <b>{c.name}</b>
                     <div className="cli-sub">
-                      experimental {dias === 0 ? "hoje" : `há ${dias} dia${dias === 1 ? "" : "s"}`} · matricular ou devolver {money(data.meta?.taxaMatricula ?? 20)}
+                      experimental {dias === 0 ? "hoje" : `há ${dias} dia${dias === 1 ? "" : "s"}`} · concluir a matrícula ou devolver a mensalidade
                     </div>
                   </div>
                   <span className={`badge ${dias >= 7 ? "b-danger" : "b-warn"}`}>{dias >= 7 ? "atrasado" : "decidir"}</span>
@@ -295,7 +301,8 @@ function WeekView({ ref0, agSlots, unit }) {
         return (
           <div key={date} className="day-col">
             <div className={`day-h ${date === t ? "today" : ""}`}><b>{fmtDate(date)}</b><span>{weekdayShort(date)}</span></div>
-            {slots.length ? slots.map((s) => <SlotCard key={s.id} slot={s} showUnit={unit === "Todas"} />) : <div className="day-empty">—</div>}
+            {/* todosAlunos: na semana o cartão mostra a turma inteira, não os 5 primeiros */}
+            {slots.length ? slots.map((s) => <SlotCard key={s.id} slot={s} showUnit={unit === "Todas"} todosAlunos />) : <div className="day-empty">—</div>}
           </div>
         );
       })}
@@ -370,16 +377,22 @@ export function Marcacoes() {
   const { open } = useModal();
   const [tab, setTab] = useState("novos"); // novos | acesso
   const [filter, setFilter] = useState("todas");
+  const [mensF, setMensF] = useState("todas");
   const [search, setSearch] = useState("");
   const segs = [["todas", "Todas"], ["aguardando", "Aguardando"], ["confirmada", "Confirmadas"], ["concluida", "Concluídas"], ["cancelada", "Canceladas"]];
+  const comp = compAtual();
 
   const isNovo = (b) => isNewLead(data, b);
   const novosCount = data.bookings.filter(isNovo).length;
   const acessoCount = data.bookings.length - novosCount;
 
+  // Situação da mensalidade do mês da aluna por trás de cada marcação.
+  const sitDe = (b) => situacaoMensalidade(data, clientOfBooking(data, b), comp);
+
   let list = [...data.bookings].sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
   list = list.filter((b) => (tab === "novos" ? isNovo(b) : !isNovo(b)));
   if (filter !== "todas") list = list.filter((b) => b.status === filter);
+  if (mensF !== "todas") list = list.filter((b) => sitDe(b).estado === mensF);
   if (search) list = list.filter((b) => b.clientName.toLowerCase().includes(search.toLowerCase()));
 
   return (
@@ -393,28 +406,52 @@ export function Marcacoes() {
         : "Marcações de alunas que já têm cadastro e acesso ao portal."}</div>
       <div className="filters">
         <div className="seg">{segs.map((s) => <button key={s[0]} className={filter === s[0] ? "on" : ""} onClick={() => setFilter(s[0])}>{s[1]}</button>)}</div>
+        <Select
+          compact
+          value={mensF}
+          onChange={setMensF}
+          options={[
+            { value: "todas", label: "Mensalidade: todas", icon: "🧾" },
+            { value: "atraso", label: "Em atraso", icon: "⚠️" },
+            { value: "a_receber", label: "A receber", icon: "⏳" },
+            { value: "recebido", label: "Recebido", icon: "✓" },
+            { value: "sem_boleto", label: "Sem mensalidade gerada", icon: "📄" },
+          ]}
+        />
         <input className="grow" placeholder="🔍 Buscar aluno..." value={search} onChange={(e) => setSearch(e.target.value)} />
       </div>
       {list.length ? (
-        <table><thead><tr><th>Aluno</th><th>Unidade</th><th>Dia / Hora</th><th>Valor</th><th>Pagamento</th><th>Status</th><th></th></tr></thead><tbody>
-          {list.map((b) => (
-            <tr key={b.id} style={tab === "novos" ? { background: "rgba(127,194,65,.08)" } : {}}>
-              <td>
-                <span className="cli-name">{b.clientName}</span>
-                {isNovo(b) && <span className="badge b-terra ml">🆕 Novata</span>}
-                <div className="cli-sub">{b.phone}</div>
-              </td>
-              <td><span className="chip">{b.unit}</span></td>
-              <td>{fmtDate(b.date)} · <b>{b.time}</b></td>
-              <td>{money(b.value)}</td>
-              <td>{b.paid ? <span className="badge b-ok">Pago · {b.paymentMethod}</span> : <span className="badge b-warn">Pendente</span>}</td>
-              <td><StatusBadge status={b.status} /></td>
-              <td className="td-actions">
-                <button className="btn wa sm" title="WhatsApp" onClick={() => openWa(b.phone, `Olá ${b.clientName}! 💚`)}><WaIcon /></button>
-                <button className="btn sec sm" onClick={() => open(<ManageBooking booking={b} />)}>Gerir</button>
-              </td>
-            </tr>
-          ))}
+        <table><thead><tr><th>Aluno</th><th>Unidade</th><th>Dia / Hora</th><th>Mensalidade · {compLabel(comp)}</th><th>Status</th><th></th></tr></thead><tbody>
+          {list.map((b) => {
+            /* A aula não tem mais preço próprio: a aluna paga por MÊS. O que
+               interessa aqui é como está a mensalidade da competência atual
+               dela — recebido, a receber ou em atraso. */
+            const cli = clientOfBooking(data, b);
+            const sit = situacaoMensalidade(data, cli, comp);
+            return (
+              <tr key={b.id} style={tab === "novos" ? { background: "rgba(127,194,65,.08)" } : {}}>
+                <td>
+                  <span className="cli-name">{b.clientName}</span>
+                  {isNovo(b) && <span className="badge b-terra ml">🆕 Novata</span>}
+                  <div className="cli-sub">{b.phone}</div>
+                </td>
+                <td><span className="chip">{b.unit}</span></td>
+                <td>{fmtDate(b.date)} · <b>{b.time}</b></td>
+                <td>
+                  <span className={`badge ${sit.cls}`} title={sit.inv ? `Vencimento ${fmtDate(sit.inv.dueDate)}` : ""}>{sit.label}</span>
+                  {sit.estado === "atraso" && (
+                    <div className="cli-sub">{sit.inv.encargos.dias} dia(s) · com multa e juros</div>
+                  )}
+                  {sit.valor > 0 && <div className="cli-sub">{money(sit.valor)}</div>}
+                </td>
+                <td><StatusBadge status={b.status} /></td>
+                <td className="td-actions">
+                  <button className="btn wa sm" title="WhatsApp" onClick={() => openWa(b.phone, `Olá ${b.clientName}! 💚`)}><WaIcon /></button>
+                  <button className="btn sec sm" onClick={() => open(<ManageBooking booking={b} />)}>Gerir</button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody></table>
       ) : <div className="empty"><div className="ic">📝</div><p>Nenhuma marcação nesse filtro.</p></div>}
     </div>
@@ -434,7 +471,10 @@ export function Clientes({ params }) {
   const [unitF, setUnitF] = useState("Todas");
   const [planF, setPlanF] = useState("Todos");
   const [sortBy, setSortBy] = useState("nome");
-  const cntOf = (c) => clientActiveCount(data, c);
+  // "Aulas" na lista = aulas FEITAS no mês corrente (não o total da vida toda).
+  const comp = compAtual();
+  const mesOf = (c) => clientMonthClasses(data, c.name, comp);
+  const cntOf = (c) => mesOf(c).feitas;
 
   const groups = { cliente: [], novato: [] };
   data.clients.forEach((c) => groups[classifyClient(data, c)].push(c));
@@ -501,15 +541,15 @@ export function Clientes({ params }) {
           onChange={setSortBy}
           options={[
             { value: "nome", label: "Ordenar: Nome", icon: "🔤" },
-            { value: "aulas", label: "Ordenar: Mais aulas", icon: "📈" },
+            { value: "aulas", label: "Ordenar: Mais aulas no mês", icon: "📈" },
           ]}
         />
         <span className="count">{list.length} de {groups[tab].length}</span>
       </div>
       {list.length ? (
-        <table><thead><tr><th>Aluno</th><th>Unidade</th><th>Aulas</th><th>Presença</th><th></th></tr></thead><tbody>
+        <table><thead><tr><th>Aluno</th><th>Unidade</th><th title={`Aulas feitas em ${compLabel(comp)}`}>Aulas no mês</th><th>Presença</th><th></th></tr></thead><tbody>
           {list.map((c) => {
-            const cnt = cntOf(c);
+            const mes = mesOf(c);
             const at = clientAttendance(data, c.name);
             return (
               <tr key={c.id} style={tab === "novato" ? { background: "rgba(194,113,79,.06)" } : {}}>
@@ -519,14 +559,17 @@ export function Clientes({ params }) {
                     <div>
                       <span className="cli-name">{c.name}</span>
                       {c.plan === "mensalista" ? <span className="badge b-ok ml">📅 {c.weeklyFreq ? `${c.weeklyFreq}x/semana` : "mensalista"}</span> : null}
-                      {c.matriculaStatus === "paga" && c.plan !== "mensalista" ? <span className="badge b-warn ml">🎟️ matrícula a decidir</span> : null}
+                      {c.matriculaStatus === "paga" && c.plan !== "mensalista" ? <span className="badge b-warn ml">🎟️ matrícula a concluir</span> : null}
                       {tab === "novato" ? <span className="badge b-terra ml">✨ 1ª aula</span> : null}
                       <div className="cli-sub">{c.phone || "sem telefone"}{c.birthday ? " · 🎂 " + fmtDate(c.birthday) : ""}</div>
                     </div>
                   </div>
                 </td>
                 <td><span className="chip">{c.unit}</span></td>
-                <td>{cnt}</td>
+                <td title={`${compLabel(comp)}: ${mes.feitas} aula(s) feita(s)${mes.faltas ? ` · ${mes.faltas} falta(s)` : ""}${mes.futuras ? ` · ${mes.futuras} ainda por vir` : ""}`}>
+                  <b style={{ color: mes.feitas ? "var(--terracota)" : "var(--muted)" }}>{mes.feitas}</b>
+                  {mes.futuras ? <span className="cli-sub"> +{mes.futuras} agendada(s)</span> : null}
+                </td>
                 <td><span className="badge b-ok" title="Presenças">✓ {at.pres}</span>{at.falt ? <> <span className="badge b-danger" title="Faltas">✕ {at.falt}</span></> : null}</td>
                 <td className="td-actions">
                   <button className="btn wa sm" title="WhatsApp" onClick={() => openWa(c.phone, waMsg(c))}><WaIcon /></button>
@@ -755,6 +798,124 @@ function BarChart({ series, color = "var(--sage-deep)" }) {
   );
 }
 
+/* Painel dos Pix da competência: as mensalidades emitidas no mês, separadas em
+   recebido, a receber e em atraso. É a mesma conta da aba Mensalistas, vista
+   pelo lado do dinheiro — aqui você olha quanto entrou e quanto falta entrar,
+   lá você age em cima de cada aluna. */
+function PixDoMes() {
+  const { data } = useStore();
+  const { open } = useModal();
+  const [comp, setComp] = useState(compAtual());
+  const atual = compAtual();
+
+  const cliOf = (inv) => data.clients.find((c) => c.id === inv.clientId);
+  const invs = (data.invoices || [])
+    .filter((i) => i.competencia === comp && i.status !== "cancelado")
+    .map((i) => ({ ...i, cli: cliOf(i) }))
+    .sort((a, b) => (a.dueDate || "").localeCompare(b.dueDate || ""));
+
+  const pagas = invs.filter((i) => i.status === "pago");
+  const abertas = invs.filter((i) => i.status === "pendente");
+  const atrasadas = abertas.filter((i) => i.encargos?.atrasada);
+  const noPrazo = abertas.filter((i) => !i.encargos?.atrasada);
+
+  const soma = (arr, f) => arr.reduce((s, i) => s + f(i), 0);
+  const valorHoje = (i) => (i.encargos ? i.encargos.total : i.amountCents / 100);
+  const recebido = soma(pagas, (i) => i.amountCents / 100);
+  const aReceber = soma(noPrazo, valorHoje);
+  const emAtraso = soma(atrasadas, valorHoje);
+  const emitido = recebido + aReceber + emAtraso;
+  const pctRecebido = emitido ? Math.round((recebido / emitido) * 100) : 0;
+  // Pix sem código emitido: a mensalidade existe, mas não há QR para mandar.
+  const semPix = abertas.filter((i) => !i.pixCode).length;
+
+  const GRUPOS = [
+    { k: "atraso", tit: "⚠️ Em atraso", cls: "b-danger", lista: atrasadas },
+    { k: "aberto", tit: "⏳ A receber", cls: "b-warn", lista: noPrazo },
+    { k: "pago", tit: "✓ Recebido", cls: "b-ok", lista: pagas },
+  ];
+
+  return (
+    <div className="panel" style={{ marginBottom: "1.2rem" }}>
+      <div className="ag-toolbar">
+        <div className="ag-nav">
+          <button className="navbtn" onClick={() => setComp(addComp(comp, -1))}>←</button>
+          <span className="ag-period">💠 Pix de {compLabel(comp)}</span>
+          <button className="navbtn" onClick={() => setComp(addComp(comp, 1))} disabled={comp >= atual}>→</button>
+          {comp !== atual && <button className="btn ghost sm" onClick={() => setComp(atual)}>Mês atual</button>}
+        </div>
+        <span className="cli-sub">{invs.length} mensalidade(s) emitida(s){semPix ? ` · ${semPix} sem Pix gerado` : ""}</span>
+      </div>
+
+      <div className="fch-tot">
+        <div className="fch-card"><div className="l">✓ Recebido</div><div className="v">{money(recebido)}</div><div className="cli-sub">{pagas.length} paga(s) · {pctRecebido}% do emitido</div></div>
+        <div className="fch-card"><div className="l">⏳ A receber</div><div className="v warn">{money(aReceber)}</div><div className="cli-sub">{noPrazo.length} dentro do prazo</div></div>
+        <div className="fch-card"><div className="l">⚠️ Em atraso</div><div className="v" style={{ color: "var(--danger)" }}>{money(emAtraso)}</div><div className="cli-sub">{atrasadas.length} vencida(s){atrasadas.length ? " · com multa e juros" : ""}</div></div>
+        <div className="fch-card"><div className="l">💠 Emitido no mês</div><div className="v terra">{money(emitido)}</div><div className="cli-sub">{invs.length} Pix</div></div>
+      </div>
+
+      {/* Barra de composição: o mês inteiro numa linha só. */}
+      {emitido > 0 && (
+        <div style={{ display: "flex", height: 10, borderRadius: 6, overflow: "hidden", margin: ".2rem 0 1rem", background: "var(--line)" }}
+          title={`Recebido ${money(recebido)} · A receber ${money(aReceber)} · Em atraso ${money(emAtraso)}`}>
+          <div style={{ width: `${(recebido / emitido) * 100}%`, background: "var(--ok)" }} />
+          <div style={{ width: `${(aReceber / emitido) * 100}%`, background: "var(--warn)" }} />
+          <div style={{ width: `${(emAtraso / emitido) * 100}%`, background: "var(--danger)" }} />
+        </div>
+      )}
+
+      {invs.length ? (
+        <table><thead><tr><th>Aluno</th><th>Vencimento</th><th>Valor</th><th>Situação</th><th>Pix</th></tr></thead><tbody>
+          {GRUPOS.filter((g) => g.lista.length).map((g) => (
+            <Fragment key={g.k}>
+              <tr><td colSpan={5} style={{ paddingTop: ".9rem" }}>
+                <b className="cli-sub" style={{ textTransform: "uppercase", letterSpacing: ".04em" }}>{g.tit} · {g.lista.length}</b>
+              </td></tr>
+              {g.lista.map((i) => (
+                <tr key={i.id}>
+                  <td>
+                    {i.cli
+                      ? <span className="cli-name row-click" onClick={() => open(<ClientProfile client={i.cli} />)}>{i.cli.name}</span>
+                      : <span className="cli-name">aluno #{i.clientId}</span>}
+                    {i.cli?.unit ? <div className="cli-sub">{i.cli.unit}</div> : null}
+                  </td>
+                  <td>{fmtDate(i.dueDate)}{i.status === "pago" && i.paidAt ? <div className="cli-sub">pago em {fmtDate(String(i.paidAt).slice(0, 10))}</div> : null}</td>
+                  <td>
+                    <b>{money(valorHoje(i))}</b>
+                    {i.encargos?.atrasada && (
+                      <div className="cli-sub" title={`Multa ${money(i.encargos.multa)} + juros ${money(i.encargos.juros)}`}>
+                        {money(i.amountCents / 100)} + encargos
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    <span className={`badge ${g.cls}`}>{g.tit}</span>
+                    {i.encargos?.atrasada && <div className="cli-sub">há {i.encargos.dias} dia(s)</div>}
+                  </td>
+                  <td>
+                    {i.status === "pago" ? <span className="cli-sub">—</span>
+                      : i.pixCode
+                        ? <button className="btn sec sm" title="Copiar o Pix copia-e-cola"
+                            onClick={() => { navigator.clipboard.writeText(i.pixCode); toast("Código Pix copiado! 📋"); }}>
+                            💠 Copiar{i.pixAtualizado === false ? " (desatualizado)" : ""}
+                          </button>
+                        : <span className="badge b-muted">sem Pix</span>}
+                  </td>
+                </tr>
+              ))}
+            </Fragment>
+          ))}
+        </tbody></table>
+      ) : (
+        <div className="empty"><div className="ic">💠</div>
+          <p>Nenhuma mensalidade emitida em {compLabel(comp)}.</p>
+          <div className="cli-sub">Os Pix são gerados na aba Mensalistas.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Recebimentos() {
   const { data } = useStore();
   const month = new Date().toISOString().slice(0, 7);
@@ -792,6 +953,10 @@ export function Recebimentos() {
   });
 
   return (<>
+    {/* Os Pix das mensalidades vêm primeiro: é a receita recorrente da escola.
+        Os blocos abaixo continuam olhando o dinheiro que entra pelas reservas. */}
+    <PixDoMes />
+
     <div className="grid stats" style={{ marginBottom: "1.2rem" }}>
       <div className="card stat"><div className="lbl">💰 Recebido no mês</div><div className="val">{money(recMes)}</div><div className="foot">mês atual</div></div>
       <div className="card stat"><div className="lbl">⏳ A receber</div><div className="val warn">{money(totalPend)}</div><div className="foot">{pend.length} reservas</div></div>

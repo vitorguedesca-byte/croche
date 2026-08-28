@@ -7,8 +7,10 @@ import { toast, confirmModal, promptModal } from "./toast.jsx";
 import {
   UNITS, PROFS, TAG_OPTIONS, VALOR_PADRAO, CAPACITY_PADRAO,
   unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize, faixaHorario, hhmm,
-  slotById, slotBookings, slotBookingsAll, slotCapacity, slotWaitlist, clientAttendance,
-  bookingKind, competenciasDoAluno, compLabel, mensalidadeDe, matriculaISO,
+  slotById, slotBookings, slotBookingsAll, slotCapacity, slotWaitlist, clientAttendance, nomeCurto,
+  marcadoresDoAluno,
+  bookingKind, MARCAS_MATRICULA, ehPagamentoDeMatricula, situacaoMensalidade, clientOfBooking,
+  competenciasDoAluno, compLabel, mensalidadeDe, matriculaISO,
   compAtual, addComp, precoDaComp, mensalidadeDaComp,
   WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays,
   ehSabadoISO, tipoMensalista, TIPO_MENSALISTA_LABEL,
@@ -77,8 +79,11 @@ function avisarReplicacao(r, semanas) {
   toast(`Replicado por ${semanas} semana(s). ${partes.join(". ")}.`, tom);
 }
 
-/* ======================= Cartão de horário ======================= */
-export function SlotCard({ slot, showUnit }) {
+/* ======================= Cartão de horário =======================
+   `todosAlunos` = a turma inteira aparece na lista, sem o corte "+N mais".
+   É como a visão de SEMANA usa o cartão: ali a Inêz precisa bater o olho na
+   coluna do dia e ver quem está em cada turma, sem abrir turma por turma. */
+export function SlotCard({ slot, showUnit, todosAlunos = false }) {
   const { data } = useStore();
   const { open } = useModal();
   const uc = unitColor(slot.unit);
@@ -99,18 +104,24 @@ export function SlotCard({ slot, showUnit }) {
       </div>
       {showUnit && <div className="n"><b style={{ color: uc }}>{slot.unit}</b></div>}
       {todas.length ? (
-        <div className="sc-roster">
-          {todas.slice(0, 5).map((b) => {
+        <div className={`sc-roster ${todosAlunos ? "sc-todos" : ""}`}>
+          {(todosAlunos ? todas : todas.slice(0, 5)).map((b) => {
             const k = bookingKind(b);
+            // 🎂 aniversário perto do dia da aula · 🔄 mensalista de escala
+            const marcas = marcadoresDoAluno(data, b, slot.date);
+            const dica = [b.clientName, ...marcas.map((m) => m.label), k ? k.label : null].filter(Boolean).join(" · ");
             return (
-              <div key={b.id} className={`sc-al ${b.status === "cancelada" ? "canc" : ""}`} title={`${b.clientName}${k ? " · " + k.label : ""}`}>
+              <div key={b.id} className={`sc-al ${b.status === "cancelada" ? "canc" : ""}`} title={dica}>
                 <span className="sc-dot" style={{ background: k ? k.color : "var(--pink)" }} />
-                <span className="sc-nm">{b.clientName.split(" ")[0]}</span>
+                {marcas.map((m) => (
+                  <span key={m.k} className={`sc-marca ${m.forte ? "" : "fraca"}`} aria-label={m.label}>{m.ic}</span>
+                ))}
+                <span className="sc-nm">{todosAlunos ? nomeCurto(b.clientName) : b.clientName.split(" ")[0]}</span>
                 {k && <span className="sc-tag">{k.ic}</span>}
               </div>
             );
           })}
-          {todas.length > 5 && <div className="sc-more">+{todas.length - 5} mais</div>}
+          {!todosAlunos && todas.length > 5 && <div className="sc-more">+{todas.length - 5} mais</div>}
         </div>
       ) : <div className="n">Livre</div>}
       <div className="occbar"><span style={{ width: pct + "%", background: full ? "var(--danger)" : uc }} /></div>
@@ -392,8 +403,21 @@ export function ManageBooking({ booking, onBack }) {
       <div className="info-line"><b>Telefone</b><span>{booking.phone || "—"}</span></div>
       <div className="info-line"><b>Unidade</b><span>{booking.unit}</span></div>
       <div className="info-line"><b>Aula</b><span>{fmtDateLong(booking.date)} · {faixaHorario(booking.time, data.meta?.duracaoAulaMin)}</span></div>
-      <div className="info-line"><b>Valor</b><span>{money(booking.value)}</span></div>
-      <div className="info-line"><b>Pagamento</b><span>{booking.paid ? `Pago (${booking.paymentMethod})` : "Pendente"}</span></div>
+      {/* A aula não tem preço próprio: só a reserva da experimental carrega
+          dinheiro (é a 1ª mensalidade da aluna). Nas demais, o que importa é
+          como está a mensalidade do mês dela. */}
+      {ehPagamentoDeMatricula(booking.paymentMethod) ? (<>
+        <div className="info-line"><b>1ª mensalidade</b><span>{money(booking.value)}</span></div>
+        <div className="info-line"><b>Pagamento</b><span>{booking.paid ? `Pago (${booking.paymentMethod})` : "Pendente"}</span></div>
+      </>) : (() => {
+        const sit = situacaoMensalidade(data, clientOfBooking(data, booking));
+        return (
+          <div className="info-line"><b>Mensalidade · {compLabel(compAtual())}</b><span>
+            <span className={`badge ${sit.cls}`}>{sit.label}</span>
+            {sit.valor > 0 ? ` ${money(sit.valor)}` : ""}
+          </span></div>
+        );
+      })()}
       {/* Só leitura: o status anda sozinho pelo pagamento e a presença se marca na turma. */}
       <div className="info-line"><b>Situação</b><span><StatusBadge status={booking.status} /></span></div>
       <div className="info-line"><b>Presença</b><span>
@@ -956,7 +980,7 @@ export function ReplicateTurmaForm({ slot }) {
   const [busy, setBusy] = useState(false);
   const bks = slotBookings(data, slot.id);
   // as que realmente vão junto (reposição/experimental ficam de fora)
-  const vaoJunto = bks.filter((b) => !["Reposição", "Matrícula"].includes(b.paymentMethod || ""));
+  const vaoJunto = bks.filter((b) => b.paymentMethod !== "Reposição" && !MARCAS_MATRICULA.includes(b.paymentMethod || ""));
   const foraCount = bks.length - vaoJunto.length;
   const ultima = addDays(slot.date, weeks * 7);
 
@@ -1647,8 +1671,8 @@ function atividadesDoAluno(data, c) {
     if (k.usedAt) add(k.usedAt, "✅", "Reposição marcada", "crédito usado");
   });
   add(c.trialDate, "✨", "Aula experimental", "");
-  add(c.matriculaAt, "🎟️", "Taxa de matrícula paga", "");
-  add(c.matriculaRefundAt, "↩️", "Taxa de matrícula devolvida", "");
+  add(c.matriculaAt, "🎟️", "Matriculada — 1ª mensalidade paga", "");
+  add(c.matriculaRefundAt, "↩️", "Matrícula devolvida", "");
   return out.sort((a, b) => b.d.localeCompare(a.d)).slice(0, 14);
 }
 
@@ -1834,7 +1858,7 @@ export function ClientProfile({ client, initialTab }) {
   );
 }
 
-/* ============ Plano e taxa de matrícula (admin) ============ */
+/* ============ Plano e matrícula (admin) ============ */
 export function planoLabel(c, meta = {}) {
   if (c.plan !== "mensalista") return <span className="badge b-muted">Avulso</span>;
   const valor = c.monthlyValue != null ? c.monthlyValue
@@ -1856,10 +1880,10 @@ export function planoLabel(c, meta = {}) {
 }
 
 const MATRICULA_ROTULO = {
-  pendente: ["b-warn", "Taxa pendente"],
-  paga: ["b-ok", "Taxa paga — aguardando decisão"],
-  convertida: ["b-ok", "Virou matrícula"],
-  devolvida: ["b-muted", "Taxa devolvida"],
+  pendente: ["b-warn", "1ª mensalidade pendente"],
+  paga: ["b-ok", "1ª mensalidade paga — aguardando decisão"],
+  convertida: ["b-ok", "Matriculada"],
+  devolvida: ["b-muted", "Mensalidade devolvida"],
 };
 
 function MatriculaBlock({ client }) {
@@ -1867,25 +1891,33 @@ function MatriculaBlock({ client }) {
   const { open } = useModal();
   if (client.matriculaStatus === "nao_aplica") return null;
   const [cls, txt] = MATRICULA_ROTULO[client.matriculaStatus] || ["b-muted", client.matriculaStatus];
-  const taxa = data.meta?.taxaMatricula ?? 20;
-  /* A devolução vale também depois da conversão: a aluna nova agora já sai
-     matriculada ao pagar a taxa, então "não quis continuar" precisa desfazer
-     essa matrícula — e não só registrar o estorno. */
+  /* Não existe mais taxa de matrícula: o que ela pagou para entrar foi a 1ª
+     mensalidade, no valor cheio do plano. Mostra o que de fato foi cobrado —
+     a reserva da experimental guarda esse valor. */
+  const reservaMatricula = (data.bookings || [])
+    .filter((b) => b.clientName === client.name && MARCAS_MATRICULA.includes(b.paymentMethod))
+    .sort((a, b) => a.date.localeCompare(b.date))[0];
+  const valorEntrada = reservaMatricula?.value ?? mensalidadeDe(client, data.meta);
+  /* A devolução vale também depois da conversão: a aluna nova já sai matriculada
+     ao pagar, então "não quis continuar" precisa desfazer essa matrícula — e não
+     só registrar o estorno. */
   const podeDevolver = client.matriculaStatus === "paga" || client.matriculaStatus === "convertida";
   const podeConverter = client.plan !== "mensalista" && client.matriculaStatus !== "devolvida";
 
   const devolver = async () => {
     const t = todayISO();
     const aulas = (data.bookings || []).filter(
-      (b) => b.clientName === client.name && b.date >= t && b.status !== "cancelada" && b.paymentMethod !== "Matrícula"
+      (b) => b.clientName === client.name && b.date >= t && b.status !== "cancelada" && !MARCAS_MATRICULA.includes(b.paymentMethod)
     ).length;
-    const mensalidades = (data.invoices || []).filter((i) => i.clientId === client.id && i.status === "pendente").length;
+    const compMatricula = (client.matriculaAt || t).slice(0, 7);
+    const mensalidades = (data.invoices || []).filter((i) => i.clientId === client.id
+      && (i.status === "pendente" || (i.status === "pago" && i.competencia === compMatricula))).length;
     if (!(await confirmModal({
-      title: "Devolver a taxa",
-      message: `Confirmar a devolução INTEGRAL de ${money(taxa)} para ${client.name}?\n\n` +
+      title: "Devolver a mensalidade",
+      message: `Confirmar a devolução INTEGRAL de ${money(valorEntrada)} para ${client.name}?\n\n` +
         (client.plan === "mensalista" ? "• A matrícula é desfeita — ela volta a ser avulsa\n" : "") +
         (aulas ? `• ${aulas} aula(s) futura(s) serão canceladas\n` : "") +
-        (mensalidades ? `• ${mensalidades} mensalidade(s) em aberto serão canceladas\n` : "") +
+        (mensalidades ? `• ${mensalidades} mensalidade(s) serão canceladas (inclusive a do mês da matrícula, que está paga)\n` : "") +
         "\nO sistema só registra — o Pix de volta você faz por fora.",
       confirmLabel: "Devolver e desfazer", tone: "danger",
     }))) return;
@@ -1902,12 +1934,12 @@ function MatriculaBlock({ client }) {
   return (
     <div style={{ margin: "1rem 0" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: ".5rem", gap: ".5rem", flexWrap: "wrap" }}>
-        <b style={{ color: "var(--brown)" }}>🎟️ Matrícula · {money(taxa)}</b>
+        <b style={{ color: "var(--brown)" }}>🎟️ Matrícula · {money(valorEntrada)}</b>
         <span className={`badge ${cls}`}>{txt}</span>
       </div>
       <div className="cli-sub">
         {client.trialDate ? <>Aula experimental em <b>{fmtDate(client.trialDate)}</b>. </> : null}
-        {client.matriculaAt ? <>Taxa paga em {fmtDate(client.matriculaAt)}. </> : null}
+        {client.matriculaAt ? <>1ª mensalidade paga em {fmtDate(client.matriculaAt)}. </> : null}
         {client.matriculaRefundAt ? <>Devolvida em {fmtDate(client.matriculaRefundAt)}.</> : null}
       </div>
       <div style={{ display: "flex", gap: ".5rem", marginTop: ".6rem", flexWrap: "wrap" }}>
@@ -1960,8 +1992,8 @@ export function EnrollForm({ client }) {
       <button className="btn" onClick={salvar} disabled={busy}>{busy ? "Matriculando…" : "Matricular"}</button>
     </>}>
       <div className="help">
-        A taxa de matrícula já paga vira a matrícula da aluna. O sistema gera a 1ª mensalidade e
-        passa a emitir boleto todo mês, com vencimento no dia {meta.vencimentoDia || 10}.
+        Matricular gera a mensalidade e passa a emitir o Pix todo mês, com vencimento no dia {meta.vencimentoDia || 10}.
+        Se ela já pagou a 1ª mensalidade pela tela da aula experimental, o mês corrente entra como quitado.
       </div>
       <div className="field" style={{ marginTop: "1rem" }}>
         <label>Plano</label>

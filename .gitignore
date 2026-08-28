@@ -22,6 +22,10 @@ acesso google.txt
 dist/
 build/
 frontend/dist/
+# O Vite escreve um config temporário ao lado do original a cada start e nem
+# sempre apaga; já apareceram 5 deles soltos no repo.
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
 
 # ===== Logs =====
 *.log

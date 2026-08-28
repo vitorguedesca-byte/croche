@@ -7,7 +7,9 @@ export const CAPACITY_PADRAO = 4;
 export const TAG_OPTIONS = [];
 
 export const STATUS = {
-  aguardando: { label: "Aguardando pagamento", badge: "b-warn", dot: "var(--warn)" },
+  // "Aguardando pagamento" saiu em 28/08/2026: a aula não é mais paga uma a uma,
+  // quem paga é a mensalidade. O que falta aqui é a confirmação da presença.
+  aguardando: { label: "Aguardando confirmação", badge: "b-warn", dot: "var(--warn)" },
   confirmada: { label: "Confirmada", badge: "b-ok", dot: "var(--ok)" },
   concluida: { label: "Concluída", badge: "b-info", dot: "var(--info)" },
   cancelada: { label: "Cancelada", badge: "b-danger", dot: "var(--danger)" },
@@ -138,6 +140,18 @@ export function datesForWeekdays(startISO, weekdays, weeks) {
   return [...new Set(out)].sort();
 }
 
+/* Nome curto para caber no cartão da agenda: primeiro nome + inicial do
+   sobrenome ("Maria da Conceição dos Santos" → "Maria S."). Só o primeiro nome
+   não bastava — a escola tem duas Adrianas e três Marias, e na coluna da
+   semana elas ficavam idênticas. Conectivos (da, de, dos) não viram inicial. */
+const CONECTIVOS_NOME = new Set(["da", "das", "de", "del", "di", "do", "dos", "du", "e", "y", "la", "le", "van", "von"]);
+export function nomeCurto(nome) {
+  const partes = String(nome || "").trim().split(/\s+/).filter(Boolean);
+  if (partes.length < 2) return partes[0] || "";
+  const ultimo = [...partes].slice(1).reverse().find((p) => !CONECTIVOS_NOME.has(p.toLowerCase()));
+  return ultimo ? `${partes[0]} ${ultimo[0].toUpperCase()}.` : partes[0];
+}
+
 /* ---- derivados do estado (data = {clients, slots, bookings}) ---- */
 export const bookingsActive = (data) => data.bookings.filter((b) => b.status !== "cancelada");
 export const slotById = (data, id) => data.slots.find((s) => s.id === id);
@@ -190,9 +204,17 @@ export const BOOKING_KINDS = {
   primeira:  { key: "primeira",  label: "1ª aula",    ic: "🎟️", cls: "b-danger", color: "var(--danger)" },
   extra:     { key: "extra",     label: "Aula extra", ic: "✨", cls: "b-ok",     color: "var(--green-mid)" },
 };
+/* Marcas que o backend põe no paymentMethod da reserva da aula experimental —
+   o dinheiro dela é a 1ª MENSALIDADE da aluna, não o preço de uma aula.
+   "Matrícula" é o rótulo antigo, de quando existia a taxa de R$20 separada;
+   segue reconhecido para as reservas que já estão no banco. Espelho de
+   MARCAS_MATRICULA em backend/src/server.js. */
+export const MARCAS_MATRICULA = ["1ª mensalidade", "Matrícula"];
+export const ehPagamentoDeMatricula = (m) => MARCAS_MATRICULA.includes(m);
+
 export const bookingKind = (b) =>
   b.paymentMethod === "Reposição" ? BOOKING_KINDS.reposicao
-  : b.paymentMethod === "Matrícula" ? BOOKING_KINDS.primeira
+  : ehPagamentoDeMatricula(b.paymentMethod) ? BOOKING_KINDS.primeira
   : b.paymentMethod === "Avulsa" ? BOOKING_KINDS.extra
   : null;
 
@@ -261,6 +283,22 @@ export const diaMesLabel = (bd) => {
   return n ? `${String(n.dia).padStart(2, "0")}/${String(n.mes).padStart(2, "0")}` : "—";
 };
 
+/* Distância (em dias) entre o aniversário da aluna e UMA data qualquer —
+   diferente de diasAteAniversario, que mede sempre a partir de hoje. Aqui a
+   referência é o dia da AULA: é isso que faz sentido na agenda, onde a Inêz
+   olha a semana que vem. Negativo = o aniversário já passou naquela semana.
+   Devolve null quando não há data de nascimento. */
+export function diasEntreAniversarioE(bd, data) {
+  const n = diaMesNasc(bd);
+  if (!n || !/^\d{4}-\d{2}-\d{2}$/.test(String(data || ""))) return null;
+  const alvo = new Date(data + "T00:00");
+  // testa o aniversário no ano anterior, no mesmo e no seguinte: a janela pode
+  // atravessar a virada do ano (aula em 30/12, aniversário em 02/01)
+  const candidatos = [-1, 0, 1].map((dy) => new Date(alvo.getFullYear() + dy, n.mes - 1, n.dia));
+  const dias = candidatos.map((d) => Math.round((d - alvo) / 86400000));
+  return dias.reduce((a, b) => (Math.abs(b) < Math.abs(a) ? b : a));
+}
+
 /* Aniversariantes de um período, do mais próximo para o mais distante.
    `periodo`:
      'semana' — a semana corrente, de segunda a domingo (weekStart manda)
@@ -318,7 +356,27 @@ export function compLabel(comp) {
   const [y, m] = comp.split("-").map(Number);
   return capitalize(new Date(y, m - 1, 1).toLocaleDateString("pt-BR", { month: "long", year: "numeric" }));
 }
-// Data da primeira matrícula do aluno (taxa paga → experimental → cadastro).
+
+/* ---- aulas do mês de um aluno (usado na coluna "Aulas" da tela Alunos) ----
+   Contagem real do mês corrente, não o total da vida inteira:
+   • feitas  = marcação não cancelada, com data já passada (ou hoje), que não
+               foi marcada como falta — a aula aconteceu;
+   • faltas  = data já passada e attendance === "falta";
+   • futuras = ainda vai acontecer neste mês.
+   A ligação com o aluno é por clientName, igual ao resto do painel. */
+export function clientMonthClasses(data, name, comp = compAtual()) {
+  const hoje = todayISO();
+  const doMes = bookingsActive(data).filter(
+    (b) => b.clientName === name && String(b.date || "").slice(0, 7) === comp
+  );
+  const passadas = doMes.filter((b) => b.date <= hoje);
+  return {
+    feitas: passadas.filter((b) => b.attendance !== "falta").length,
+    faltas: passadas.filter((b) => b.attendance === "falta").length,
+    futuras: doMes.filter((b) => b.date > hoje).length,
+  };
+}
+// Data da primeira matrícula do aluno (matrícula → experimental → cadastro).
 export const matriculaISO = (c) =>
   c.matriculaAt || c.trialDate || (c.createdAt ? String(c.createdAt).slice(0, 10) : null);
 // Competências da matrícula até `ate` (mais recente primeiro).
@@ -345,6 +403,88 @@ export const precoDaComp = (precos, clientId, comp) =>
 export function mensalidadeDaComp(c, comp, meta, precos) {
   const p = precoDaComp(precos, c.id, comp);
   return p ? p.amountCents / 100 : mensalidadeDe(c, meta);
+}
+
+/* ================= situação da mensalidade do mês =================
+   A marcação de uma aula não tem preço próprio desde 28/08/2026: a aluna paga
+   por MÊS, não por aula. O que importa ao olhar uma marcação é como está a
+   mensalidade da competência atual dela — é isso que estas duas funções
+   respondem, e é o que a coluna de status das Marcações mostra.
+
+   Volta { estado, label, cls, valor, inv }, com `estado` em:
+     recebido | a_receber | atraso | sem_boleto | sem_mensalidade */
+export const SIT_MENSALIDADE = {
+  recebido:        { label: "✓ Recebido",       cls: "b-ok" },
+  a_receber:       { label: "⏳ A receber",      cls: "b-warn" },
+  atraso:          { label: "⚠️ Em atraso",      cls: "b-danger" },
+  sem_boleto:      { label: "📄 Sem mensalidade gerada", cls: "b-muted" },
+  sem_mensalidade: { label: "sem mensalidade",  cls: "b-muted" },
+};
+
+// A ficha da aluna por trás de uma marcação (a reserva guarda nome e telefone,
+// não o id). Casa pelo telefone quando existe; o nome é o desempate.
+export function clientOfBooking(data, booking) {
+  const tel = (booking.phone || "").replace(/\D/g, "");
+  const porTel = tel.length >= 8
+    ? data.clients.find((c) => (c.phone || "").replace(/\D/g, "").endsWith(tel.slice(-8)))
+    : null;
+  return porTel || data.clients.find((c) => c.name === booking.clientName) || null;
+}
+
+/* Marcadores que aparecem ANTES do nome da aluna no cartão da agenda.
+   São as duas coisas que a Inêz precisa saber batendo o olho na turma:
+     🎂 tem aniversariante nesta aula (ou na semana dela)
+     🔄 é mensalista de ESCALA — quem marca a própria aula, então esta
+        presença não é fixa: ela pode não repetir na semana seguinte
+   Devolve [] quando não há nada a dizer. `forte` = destaque cheio (o dia é
+   exatamente hoje/na aula); sem ele o ícone fica esmaecido, como um aviso. */
+const JANELA_ANIVERSARIO = 3; // dias para cada lado do dia da aula
+export function marcadoresDoAluno(data, booking, dataAula) {
+  const c = clientOfBooking(data, booking);
+  if (!c) return [];
+  const marcas = [];
+
+  const dias = diasEntreAniversarioE(c.birthday, dataAula || booking.date);
+  if (dias !== null && Math.abs(dias) <= JANELA_ANIVERSARIO) {
+    const quando = dias === 0 ? "no dia desta aula" : dias === 1 ? "amanhã" : dias === -1 ? "foi ontem"
+      : dias > 0 ? `em ${dias} dias` : `foi há ${-dias} dias`;
+    marcas.push({ k: "bday", ic: "🎂", forte: dias === 0, label: `Aniversário ${quando} (${diaMesLabel(c.birthday)})` });
+  }
+
+  if (tipoMensalista(c) === "escala") {
+    marcas.push({ k: "escala", ic: "🔄", forte: true, label: "Mensalista escala — ela marca a própria aula" });
+  }
+  return marcas;
+}
+
+export function situacaoMensalidade(data, client, comp = compAtual()) {
+  const base = { valor: 0, inv: null, client };
+  // Quem não é mensalista não entra na régua mensal — nem cobrar, nem alarmar.
+  if (!client || client.plan !== "mensalista") {
+    return { ...base, estado: "sem_mensalidade", ...SIT_MENSALIDADE.sem_mensalidade };
+  }
+  const inv = (data.invoices || []).find((i) => i.clientId === client.id && i.competencia === comp);
+  if (!inv) {
+    return {
+      ...base, estado: "sem_boleto", ...SIT_MENSALIDADE.sem_boleto,
+      valor: mensalidadeDaComp(client, comp, data.meta, data.precos),
+    };
+  }
+  // Cancelada é dívida perdoada: não é receita nem cobrança em aberto.
+  if (inv.status === "cancelado") {
+    return { ...base, inv, estado: "sem_mensalidade", ...SIT_MENSALIDADE.sem_mensalidade };
+  }
+  if (inv.status === "pago") {
+    return { ...base, inv, estado: "recebido", ...SIT_MENSALIDADE.recebido, valor: inv.amountCents / 100 };
+  }
+  // Em aberto: o valor a cobrar hoje já vem com multa e juros calculados pelo backend.
+  const atrasada = !!(inv.encargos && inv.encargos.atrasada);
+  return {
+    ...base, inv,
+    estado: atrasada ? "atraso" : "a_receber",
+    ...(atrasada ? SIT_MENSALIDADE.atraso : SIT_MENSALIDADE.a_receber),
+    valor: inv.encargos ? inv.encargos.total : inv.amountCents / 100,
+  };
 }
 
 /* ================= regras de marcação do mensalista =================

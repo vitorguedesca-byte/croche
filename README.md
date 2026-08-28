@@ -76,6 +76,15 @@ Pronto! Abra **http://localhost:5173**. O Vite já redireciona as chamadas `/api
 | `npm run seed` | Recria os dados de exemplo (apaga e popula de novo) |
 | `npm run studio` | Abre o Prisma Studio (visualizador do banco) |
 | `npx prisma migrate dev` | Aplica mudanças no schema ao banco |
+| `node --env-file=.env scripts/padronizar-nomes.mjs` | Mostra quais nomes de alunas seriam padronizados (não grava) |
+| `node --env-file=.env scripts/padronizar-nomes.mjs --aplicar` | Grava a padronização, em cascata para aulas e lista de espera |
+
+> **Nomes de alunas.** A regra de escrita vive em `backend/src/nomes.js` e é a
+> única fonte: o backend aplica em toda entrada de nome (painel, portal,
+> WhatsApp, lista de espera) e o script acima arruma o que já está no banco.
+> Na raiz, `padronizar-nomes.bat` roda a simulação, mostra a lista e pergunta
+> antes de gravar. O script **não adivinha acento que falta** (`Jose` não vira
+> `José`) — isso é correção manual na ficha.
 
 ## Estrutura
 

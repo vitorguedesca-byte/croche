@@ -35,7 +35,7 @@
 
 // Marca que o backend põe no paymentMethod das aulas DO PLANO. É por ela que o
 // teto semanal separa o que conta ("Mensalista") do que é aula à parte
-// ("Reposição", "Avulsa", "Matrícula") e por isso não ocupa vaga da semana.
+// ("Reposição", "Avulsa", "1ª mensalidade") e por isso não ocupa vaga da semana.
 export const PGTO_PLANO = "Mensalista";
 
 // 'YYYY-MM-DD' → true se cai no sábado. Usa UTC para não depender do fuso do
@@ -158,8 +158,9 @@ export function checarRegras(client, alvo, ctx = {}) {
 /* ---------- ciclo de cobrança da mensalidade ----------
    Combinado com a Inêz: o dia em que a aluna se matricula vira o dia de
    vencimento dela, todo mês — e a 1ª mensalidade cai no MÊS SEGUINTE. Quem se
-   matricula em 19/08 paga a taxa de matrícula naquele mês e a 1ª mensalidade
-   vence em 19/09; daí em diante, todo dia 19.
+   matricula em 19/08 paga a mensalidade de agosto naquele dia (é ela que
+   matricula — não existe mais taxa de matrícula à parte) e a seguinte vence em
+   19/09; daí em diante, todo dia 19.
    A Inêz pode trocar o dia no cadastro da aluna (billingDay). */
 
 // 'YYYY-MM' somado de n meses

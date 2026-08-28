@@ -603,7 +603,6 @@ function MiniAgenda({ bookings, available, unit, meta, regras, busy, modo, saldo
 
 /* Convite para continuar no curso, mostrado a quem fez a experimental. */
 function ContinuarCard({ cliente, meta, onContinuar }) {
-  const taxa = meta.taxaMatricula ?? 20;
   const jaPagou = cliente.matriculaStatus === "paga";
   return (
     <div className="pt-repo" style={{ borderLeftColor: "var(--terracota)" }}>
@@ -613,7 +612,7 @@ function ContinuarCard({ cliente, meta, onContinuar }) {
           <div className="pt-sub2">
             Gostou da aula experimental? Escolha o seu plano, pague a primeira mensalidade e já agende a sua 1ª aula oficial.
           </div>
-          {jaPagou && <div className="pt-sub2" style={{ marginTop: ".4rem" }}>✅ Sua matrícula de <b>{money(taxa)}</b> já está paga — não cobramos de novo.</div>}
+          {jaPagou && <div className="pt-sub2" style={{ marginTop: ".4rem" }}>✅ A sua primeira mensalidade já está paga — não cobramos de novo.</div>}
         </div>
       </div>
       <button className="pt-btn" style={{ marginTop: ".8rem" }} onClick={onContinuar}>Quero continuar</button>
