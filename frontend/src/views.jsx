@@ -918,9 +918,28 @@ function PixDoMes() {
 
 export function Recebimentos() {
   const { data } = useStore();
-  const month = new Date().toISOString().slice(0, 7);
+  // compAtual() usa o fuso de São Paulo. new Date().toISOString() usa UTC e
+  // virava o mês 3h antes da meia-noite daqui — no dia 31 à noite, "mês atual"
+  // já era o mês seguinte.
+  const month = compAtual();
   const pagos = data.bookings.filter((b) => b.paid).sort((a, b) => (b.paymentDate || "").localeCompare(a.paymentDate || ""));
-  const pend = data.bookings.filter((b) => b.status === "aguardando");
+  /* "A receber" é do MÊS CORRENTE, pela data da aula. Somar todas as reservas
+     aguardando desde sempre juntava anos de pendência antiga num número só —
+     não era o que a Inêz tem para receber, era o passivo histórico inteiro.
+
+     Fora da conta: a reserva da aula experimental. O dinheiro dela é a 1ª
+     MENSALIDADE da aluna (ver MARCAS_MATRICULA), e a mensalidade já é cobrada
+     no bloco de Pix aqui em cima — contar nos dois lugares dobrava o valor. */
+  const pend = data.bookings.filter(
+    (b) => b.status === "aguardando" &&
+      String(b.date || "").slice(0, 7) === month &&
+      !ehPagamentoDeMatricula(b.paymentMethod)
+  );
+  const experimentais = data.bookings.filter(
+    (b) => b.status === "aguardando" &&
+      String(b.date || "").slice(0, 7) === month &&
+      ehPagamentoDeMatricula(b.paymentMethod)
+  ).length;
   const recMes = pagos.filter((b) => (b.paymentDate || "").slice(0, 7) === month).reduce((a, b) => a + b.value, 0);
   const totalPend = pend.reduce((a, b) => a + b.value, 0);
   const recTotal = pagos.reduce((a, b) => a + b.value, 0);
@@ -958,8 +977,18 @@ export function Recebimentos() {
     <PixDoMes />
 
     <div className="grid stats" style={{ marginBottom: "1.2rem" }}>
-      <div className="card stat"><div className="lbl">💰 Recebido no mês</div><div className="val">{money(recMes)}</div><div className="foot">mês atual</div></div>
-      <div className="card stat"><div className="lbl">⏳ A receber</div><div className="val warn">{money(totalPend)}</div><div className="foot">{pend.length} reservas</div></div>
+      {/* Os dois primeiros cards são do MÊS; "total" e "ticket" são vitalícios.
+          O rótulo de cada um diz qual é qual, para não comparar coisa diferente. */}
+      <div className="card stat"><div className="lbl">💰 Recebido no mês</div><div className="val">{money(recMes)}</div><div className="foot">{compLabel(month)}</div></div>
+      <div
+        className="card stat"
+        title={`Reservas de ${compLabel(month)} ainda não pagas.${experimentais ? ` Fora da conta: ${experimentais} aula(s) experimental(is) — o valor delas é a 1ª mensalidade e já entra no bloco de Pix.` : ""}`}
+      >
+        <div className="lbl">⏳ A receber no mês</div>
+        <div className="val warn">{money(totalPend)}</div>
+        <div className="foot">{pend.length} reserva(s) · {compLabel(month)}</div>
+        {experimentais ? <div className="cli-sub" style={{ fontSize: ".68rem" }}>sem {experimentais} experimental(is) — vão na mensalidade</div> : null}
+      </div>
       <div className="card stat"><div className="lbl">📈 Recebido total</div><div className="val terra">{money(recTotal)}</div><div className="foot">{pagos.length} pagamentos</div></div>
       <div className="card stat"><div className="lbl">🎟️ Ticket médio</div><div className="val">{money(ticket)}</div><div className="foot">por reserva paga</div></div>
     </div>
