@@ -142,7 +142,7 @@ function EscolhaDePlano({ tipo, setTipo, freq, setFreq, valor1x, valor2x }) {
 }
 
 export default function FirstClassBooking({ onBack, fromSite }) {
-  const [meta, setMeta] = useState({ units: [], valorPadrao: 20, pixKey: "", pixName: "" });
+  const [meta, setMeta] = useState({ units: [], pixKey: "", pixName: "" });
   const [available, setAvailable] = useState([]);
   const [loading, setLoading] = useState(true);
   // A 1ª aula OFICIAL não é marcada aqui: pela regra do curso, ela é agendada

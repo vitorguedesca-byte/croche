@@ -24,7 +24,8 @@ const diasEntre = (de, ate) =>
 const segundaISO = (iso) => addDays(iso, -((new Date(iso + "T00:00").getDay() + 6) % 7));
 
 function statusText(b) {
-  if (b.status === "aguardando") return "Aguardando pagamento";
+  // Sem valor próprio não há o que pagar pela aula — ela só espera confirmação.
+  if (b.status === "aguardando") return b.value > 0 ? "Aguardando pagamento" : "Aguardando confirmação";
   if (b.status === "confirmada") return "Confirmada ✓";
   if (b.status === "concluida") return "Concluída";
   return b.status;
@@ -330,7 +331,10 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
           <div className="pt-aula" key={b.id}>
             <div className="pt-when"><b>{fmtDateLong(b.date)}</b><span>{b.time} · {b.unit}</span></div>
             <div className={`pt-status ${b.status}`}>{statusText(b)}</div>
-            {b.status === "aguardando" && (
+            {/* A aula não se paga sozinha: ela já está dentro da mensalidade.
+                Só a experimental (1ª mensalidade) e a aula extra têm valor
+                próprio — o resto era o R$ 20 fantasma, fora desde 30/08/2026. */}
+            {b.status === "aguardando" && b.value > 0 && (
               <button className="pt-pay-cta" onClick={() => openPay(b)}>💳 Pagar reserva · {money(b.value)}</button>
             )}
             <div className="pt-aula-actions">
@@ -879,7 +883,20 @@ function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago 
         </div>
       )}
 
-      {atual && (pixCode ? (<>
+      {/* Mensalidade combinada direto com a escola: o mês anterior teve baixa
+          manual, então esta nasceu sem Pix. Nada de QR nem de botão que falharia —
+          a aluna vê o combinado dela e o caminho do WhatsApp. */}
+      {atual && atual.semPix ? (
+        <>
+          <p className="pt-hint" style={{ marginTop: ".8rem" }}>
+            Esta mensalidade está combinada direto com a escola — não há Pix para ela.
+            Qualquer dúvida sobre o pagamento, é só chamar a gente. 💚
+          </p>
+          <a className="pt-btn pt-btn-wa" href={waLink(WA_ESCOLA, `Olá! Queria falar sobre a minha mensalidade de ${atual ? compLabel(atual.competencia) : ""}. 💚`)} target="_blank" rel="noreferrer">
+            <WaIcon size={20} /> Falar com a escola
+          </a>
+        </>
+      ) : atual && (pixCode ? (<>
         <PixQR code={pixCode} size={kiosk ? 300 : 230} legenda="Aponte a câmera do seu celular para pagar" />
         <details className="pt-pix-det">
           <summary>Prefiro copiar o código</summary>

@@ -64,7 +64,9 @@ export const api = {
   releaseBooking: (id, reason) => req("POST", `/api/bookings/${id}/release`, { reason: reason || "" }),
   gerarMensalidade: (clientId, competencia) => req("POST", `/api/clients/${clientId}/invoice`, competencia ? { competencia } : {}),
   gerarMensalidadesMes: () => req("POST", "/api/invoices/gerar-mes"),
-  payInvoice: (id) => req("POST", `/api/invoices/${id}/pay`),
+  // Baixa manual: marca paga E suprime o Pix da mensalidade seguinte (a aluna
+  // acerta por fora). `manual: false` só para conciliação, sem essa consequência.
+  payInvoice: (id, opts = {}) => req("POST", `/api/invoices/${id}/pay`, opts),
   cancelInvoice: (id) => req("POST", `/api/invoices/${id}/cancel`),
 
   /* Alterar o valor da mensalidade. `data.escopo` diz o alcance:

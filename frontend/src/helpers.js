@@ -434,7 +434,7 @@ export function clientOfBooking(data, booking) {
 /* Marcadores que aparecem ANTES do nome da aluna no cartão da agenda.
    São as duas coisas que a Inêz precisa saber batendo o olho na turma:
      🎂 tem aniversariante nesta aula (ou na semana dela)
-     🔄 é mensalista de ESCALA — quem marca a própria aula, então esta
+     🙋 é mensalista de ESCALA — quem marca a própria aula, então esta
         presença não é fixa: ela pode não repetir na semana seguinte
    Devolve [] quando não há nada a dizer. `forte` = destaque cheio (o dia é
    exatamente hoje/na aula); sem ele o ícone fica esmaecido, como um aviso. */
@@ -452,7 +452,7 @@ export function marcadoresDoAluno(data, booking, dataAula) {
   }
 
   if (tipoMensalista(c) === "escala") {
-    marcas.push({ k: "escala", ic: "🔄", forte: true, label: "Mensalista escala — ela marca a própria aula" });
+    marcas.push({ k: "escala", ic: "🙋", forte: true, label: "Mensalista escala — ela marca a própria aula" });
   }
   return marcas;
 }

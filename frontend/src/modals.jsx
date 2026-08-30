@@ -31,7 +31,7 @@ const profOptions = (meta) => meta.profs.map((p) => ({ value: p, label: p, icon:
 /* Os dois jeitos de a mensalista ocupar a agenda (ver backend/src/regrasAula.js) */
 const TIPO_MENSALISTA_OPCOES = [
   { value: "fixo", label: "Fixo", hint: "dia e hora fixos — você monta a agenda dela", icon: "📌" },
-  { value: "escala", label: "Escala", hint: "ela marca a própria aula, no dia da aula dela", icon: "🔄" },
+  { value: "escala", label: "Escala", hint: "ela marca a própria aula, no dia da aula dela", icon: "🙋" },
 ];
 
 /* Resultado da criação de horários: as aulas duram 2h, então o servidor recusa
@@ -107,7 +107,7 @@ export function SlotCard({ slot, showUnit, todosAlunos = false }) {
         <div className={`sc-roster ${todosAlunos ? "sc-todos" : ""}`}>
           {(todosAlunos ? todas : todas.slice(0, 5)).map((b) => {
             const k = bookingKind(b);
-            // 🎂 aniversário perto do dia da aula · 🔄 mensalista de escala
+            // 🎂 aniversário perto do dia da aula · 🙋 mensalista de escala
             const marcas = marcadoresDoAluno(data, b, slot.date);
             const dica = [b.clientName, ...marcas.map((m) => m.label), k ? k.label : null].filter(Boolean).join(" · ");
             return (
@@ -241,7 +241,7 @@ export function SlotDetail({ slotId }) {
         <button className="btn sec sm" onClick={() => open(<EditSlotForm slot={slot} />)}>✏️ Editar turma</button>
         <button className="btn sec sm" onClick={replicarProxima} disabled={repBusy}
           title="Repete esta turma (com as alunas) na semana que vem">
-          {repBusy ? "Replicando…" : "🔁 Próxima semana"}
+          {repBusy ? "Replicando…" : "⏭️ Próxima semana"}
         </button>
         <button className="btn sec sm" onClick={() => open(<ReplicateTurmaForm slot={slot} />)}
           title="Repetir esta turma por várias semanas">🗓 Replicar por X semanas</button>
@@ -327,6 +327,11 @@ export function ManageBooking({ booking, onBack }) {
   const [pix, setPix] = useState(booking.pixCode || "");
   const [genBusy, setGenBusy] = useState(false);
   const slotExists = !!slotById(data, booking.slotId);
+  /* Duas reservas — e só essas duas — carregam dinheiro próprio: a experimental
+     (é a 1ª mensalidade da aluna) e a aula extra, que é compra avulsa. Toda
+     aula comum já está paga dentro da mensalidade do mês; cobrar por ela era o
+     R$ 20 fantasma que saiu do sistema em 30/08/2026. */
+  const cobraNaReserva = ehPagamentoDeMatricula(booking.paymentMethod) || booking.paymentMethod === "Avulsa";
   /* Este modal é só de CONSULTA + as três ações que a Inêz de fato usa:
      cobrar o Pix, liberar a vaga e tirar a aluna da turma.
      Editar status / presença / data / hora à mão saiu daqui em 26/08/2026: o
@@ -397,7 +402,10 @@ export function ManageBooking({ booking, onBack }) {
           : <button className="btn ghost" onClick={close}>Fechar</button>}
       <div style={{ flex: 1 }} />
       <button className="btn wa" onClick={() => openWa(booking.phone, `Olá ${booking.clientName}! 💚`)}><WaIcon /> WhatsApp</button>
-      {!booking.paid && <button className="btn terra" onClick={() => open(<ConfirmPayment booking={booking} />)}>Confirmar pagamento</button>}
+      {/* Confirmar pagamento só existe quando a reserva TEM dinheiro próprio:
+          a experimental (1ª mensalidade) e a aula extra. Nas demais, quem se
+          paga é a mensalidade do mês — não a aula. */}
+      {cobraNaReserva && !booking.paid && <button className="btn terra" onClick={() => open(<ConfirmPayment booking={booking} />)}>Confirmar pagamento</button>}
     </>}>
       <div className="info-line"><b>Aluno</b><span>{booking.clientName}</span></div>
       <div className="info-line"><b>Telefone</b><span>{booking.phone || "—"}</span></div>
@@ -406,8 +414,8 @@ export function ManageBooking({ booking, onBack }) {
       {/* A aula não tem preço próprio: só a reserva da experimental carrega
           dinheiro (é a 1ª mensalidade da aluna). Nas demais, o que importa é
           como está a mensalidade do mês dela. */}
-      {ehPagamentoDeMatricula(booking.paymentMethod) ? (<>
-        <div className="info-line"><b>1ª mensalidade</b><span>{money(booking.value)}</span></div>
+      {cobraNaReserva ? (<>
+        <div className="info-line"><b>{ehPagamentoDeMatricula(booking.paymentMethod) ? "1ª mensalidade" : "Aula extra"}</b><span>{money(booking.value)}</span></div>
         <div className="info-line"><b>Pagamento</b><span>{booking.paid ? `Pago (${booking.paymentMethod})` : "Pendente"}</span></div>
       </>) : (() => {
         const sit = situacaoMensalidade(data, clientOfBooking(data, booking));
@@ -424,7 +432,7 @@ export function ManageBooking({ booking, onBack }) {
         {booking.attendance === "presente" ? "✓ Presente" : booking.attendance === "falta" ? "✕ Faltou" : "○ Não marcada"}
       </span></div>
 
-      {!booking.paid && (
+      {cobraNaReserva && !booking.paid && (
         <div className="field" style={{ marginTop: ".9rem" }}>
           {pix ? (
             <>
@@ -444,7 +452,7 @@ export function ManageBooking({ booking, onBack }) {
 
       <div style={{ marginTop: "1rem", display: "flex", gap: ".5rem", flexWrap: "wrap" }}>
         {booking.status !== "cancelada" && (
-          <button className="btn sec sm" onClick={liberar}>🔁 Liberar vaga (a aluna avisou)</button>
+          <button className="btn sec sm" onClick={liberar}>🔓 Liberar vaga (a aluna avisou)</button>
         )}
         <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir aluno(a)</button>
       </div>
@@ -487,7 +495,9 @@ export function ConfirmPayment({ booking }) {
 export function PaymentRegister() {
   const { data, run } = useStore();
   const { close } = useModal();
-  const pend = data.bookings.filter((b) => b.status === "aguardando");
+  // Só reservas com dinheiro próprio: experimental (1ª mensalidade) e aula extra.
+  const pend = data.bookings.filter((b) => b.status === "aguardando" &&
+    (ehPagamentoDeMatricula(b.paymentMethod) || b.paymentMethod === "Avulsa"));
   const [id, setId] = useState(pend[0]?.id || "");
   const [method, setMethod] = useState("Pix");
   const [pdate, setPdate] = useState(todayISO());
@@ -678,7 +688,6 @@ export function BookingForm({ slotId }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [unit, setUnit] = useState(slot ? slot.unit : meta.units[0]);
-  const [value, setValue] = useState(meta.valorPadrao);
   const [date, setDate] = useState(slot ? slot.date : todayISO());
   const [time, setTime] = useState(slot ? slot.time : "09:00");
   // repetição (igual à criação de horários): dias da semana × nº de semanas
@@ -720,7 +729,8 @@ export function BookingForm({ slotId }) {
       });
       if (!ok) return;
     }
-    const payload = { clientName: name.trim(), phone: phone.trim(), unit, value, date, time, slotId: slot && !repetindo ? slot.id : undefined };
+    // value 0: a aula não tem preço próprio — quem se paga é a mensalidade do mês.
+    const payload = { clientName: name.trim(), phone: phone.trim(), unit, value: 0, date, time, slotId: slot && !repetindo ? slot.id : undefined };
     if (repetindo) payload.dates = dates;
     const r = await run(api.createBooking(payload));
     close();
@@ -1581,12 +1591,56 @@ export function ReajusteGeral() {
   );
 }
 
+/* ====== Baixa manual de uma mensalidade ======
+
+   Toda baixa dada pelo painel é manual: o Pix pago cai sozinho pelo webhook do
+   Sicredi, sem passar por aqui. Então clicar em "Baixar" é dizer "recebi por
+   fora" — e quem paga por fora não usa Pix. Por isso a mensalidade SEGUINTE
+   nasce sem QR, e a aluna não recebe cobrança daquele mês.
+
+   O aviso está no texto da confirmação de propósito: é a última tela antes da
+   consequência, e ela não tem desfazer automático (o caminho de volta é o botão
+   "Gerar Pix" da mensalidade seguinte). Devolve true quando a baixa aconteceu.
+
+   Usado no perfil da aluna (MensalidadesPanel) e na aba Mensalistas — o mesmo
+   ato precisa ter o mesmo efeito nos dois lugares. */
+export const NOTA_BAIXA_MANUAL =
+  "Ao dar baixa, a próxima mensalidade (a vencer) nasce sem Pix: nenhum código é enviado para o WhatsApp da aluna nem aparece no portal dela. Use quando ela acertar por fora (dinheiro, transferência, combinado).";
+
+export async function baixarMensalidade(inv, run, nome = "") {
+  const prox = compLabel(addComp(inv.competencia, 1));
+  const ok = await confirmModal({
+    title: "Dar baixa na mensalidade",
+    message:
+      `Marcar a mensalidade de ${compLabel(inv.competencia)}${nome ? ` de ${nome}` : ""} como PAGA?\n\n` +
+      `Ela sai de "a receber" e entra no recebido do mês, no Financeiro.\n\n` +
+      `⚠️ A mensalidade de ${prox} não terá Pix: a aluna não recebe o código no WhatsApp nem vê o QR no portal. ` +
+      `Se precisar do Pix desse mês mesmo assim, use o botão "Gerar Pix" na mensalidade dele.`,
+    confirmLabel: "✓ Dar baixa",
+    cancelLabel: "Voltar",
+  });
+  if (!ok) return false;
+  try {
+    const r = await run(api.payInvoice(inv.id));
+    toast(
+      r?.proximaSemPix
+        ? `Baixa registrada. A mensalidade de ${compLabel(r.proximaSemPix)} ficou sem Pix.`
+        : "Baixa registrada. A próxima mensalidade nascerá sem Pix.",
+      "success"
+    );
+    return true;
+  } catch {
+    return false; // o erro já foi mostrado pelo run
+  }
+}
+
 /* ====== Mensalidades do aluno (fechamento + pagamento) ======
    Mês a mês desde a primeira matrícula. Meses sem boleto aparecem como
    "não gerado" — o sistema não cria cobrança retroativa. */
 function MensalidadesPanel({ client }) {
-  const { data } = useStore();
+  const { data, run } = useStore();
   const { open } = useModal();
+  const [busy, setBusy] = useState(false);
   const comps = competenciasDoAluno(client);
   const invs = (data.invoices || []).filter((i) => i.clientId === client.id);
   const valorPadrao = mensalidadeDe(client, data.meta);
@@ -1603,6 +1657,23 @@ function MensalidadesPanel({ client }) {
     .sort()
     .reverse();
   const linhas = [...futurosComCombinado, ...comps];
+  const temAberto = invs.some((i) => i.status === "pendente");
+
+  const baixar = async (inv) => {
+    setBusy(true);
+    try { await baixarMensalidade(inv, run, client.name); }
+    finally { setBusy(false); }
+  };
+  /* Saída da supressão: pedir o Pix limpa a marca no backend e emite o QR. */
+  const gerarPix = async (inv) => {
+    setBusy(true);
+    try {
+      const r = await run(api.reemitirPix(inv.id));
+      if (r?.pixCode) { navigator.clipboard?.writeText(r.pixCode); toast("Pix gerado e copiado! 📋", "success"); }
+      else toast("Pix gerado.", "success");
+    } catch { /* erro já reportado pelo run */ }
+    finally { setBusy(false); }
+  };
 
   return (
     <div className="prof-panel">
@@ -1621,6 +1692,17 @@ function MensalidadesPanel({ client }) {
           💰 Alterar valor
         </button>
       </div>
+
+      {/* O aviso fica na tela, e não só na confirmação: quem chega aqui para dar
+          baixa precisa saber da consequência antes de mirar no botão. */}
+      {temAberto && (
+        <div className="cfg-warn" style={{ marginBottom: ".6rem" }}>
+          ⚠️ <b>Baixar</b> marca a mensalidade como paga por fora. A próxima mensalidade
+          (a vencer) <b>não terá Pix</b> — nenhum código é enviado para o WhatsApp da aluna
+          nem aparece no portal dela. Se precisar do Pix desse mês, use <b>💠 Gerar Pix</b> nele.
+        </div>
+      )}
+
       <div>
         {linhas.map((comp) => {
           const inv = invs.find((i) => i.competencia === comp);
@@ -1640,11 +1722,26 @@ function MensalidadesPanel({ client }) {
               </span>
               <span className="hist-st">
                 {!inv ? <span className={combinado ? "badge b-warn" : "badge b-muted"}>{combinado ? "🎁 valor combinado" : "não gerado"}</span>
-                  : inv.status === "pago" ? <span className="badge b-ok">✓ {inv.paidAt ? fmtDate(String(inv.paidAt).slice(0, 10)) : "pago"}</span>
+                  : inv.status === "pago" ? <span className="badge b-ok" title={inv.baixaManual ? "Baixa dada no painel — recebido por fora do Pix" : "Confirmado pelo Sicredi"}>
+                      ✓ {inv.paidAt ? fmtDate(String(inv.paidAt).slice(0, 10)) : "pago"}{inv.baixaManual ? " · baixa manual" : ""}
+                    </span>
                   : inv.status === "cancelado" ? <span className="badge b-danger">cancelado</span>
                   : inv.encargos?.atrasada ? <span className="badge b-danger">⚠️ {inv.encargos.dias} dia(s) de atraso</span>
                   : <span className="badge b-warn">⏳ vence {fmtDate(inv.dueDate)}</span>}
+                {inv?.status === "pendente" && inv.semPix && (
+                  <span className="badge b-muted ml" title="A mensalidade anterior teve baixa manual, então esta nasceu sem Pix. O botão ao lado gera o código assim mesmo.">
+                    💠 sem Pix
+                  </span>
+                )}
               </span>
+              {inv && inv.status === "pendente" && (
+                <span className="hist-act">
+                  {inv.semPix && (
+                    <button className="btn sec sm" disabled={busy} onClick={() => gerarPix(inv)}>💠 Gerar Pix</button>
+                  )}
+                  <button className="btn sm" disabled={busy} onClick={() => baixar(inv)}>✓ Baixar</button>
+                </span>
+              )}
             </div>
           );
         })}
@@ -1869,7 +1966,7 @@ export function planoLabel(c, meta = {}) {
   const tipo = tipoMensalista(c);
   return (<>
     <span className="badge b-ok">📅 {freq}</span>{" "}
-    <span className="badge b-info">{tipo === "escala" ? "🔄" : "📌"} {TIPO_MENSALISTA_LABEL[tipo]}</span>{" "}
+    <span className="badge b-info">{tipo === "escala" ? "🙋" : "📌"} {TIPO_MENSALISTA_LABEL[tipo]}</span>{" "}
     <span className="cli-sub">{money(valor)}/mês</span>
     {c.podeSabado && (
       <> <span className="cli-sub" title="Direito herdado: ela já estava marcando no sábado quando a regra mudou.">

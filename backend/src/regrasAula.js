@@ -38,6 +38,20 @@
 // ("Reposição", "Avulsa", "1ª mensalidade") e por isso não ocupa vaga da semana.
 export const PGTO_PLANO = "Mensalista";
 
+/* Horário sempre em 'HH:MM', exatamente 5 caracteres.
+
+   O `time` do horário e da reserva é texto livre no banco, e nem toda rota
+   normalizava na gravação — daí aparecerem valores como "9:00", "09:00:00" ou
+   até a faixa inteira ("09:00 às 11:00"). Ordenação e comparação de hora
+   sobrevivem a isso, mas MakeupCredit.originTime é VARCHAR(5): passar de 5
+   caracteres derruba a criação do crédito de reposição com "value too long".
+
+   Devolve "" quando não há hora reconhecível — quem grava decide o que fazer. */
+export function hhmm(t) {
+  const m = String(t || "").match(/(\d{1,2}):(\d{2})/);
+  return m ? `${String(m[1]).padStart(2, "0")}:${m[2]}` : "";
+}
+
 // 'YYYY-MM-DD' → true se cai no sábado. Usa UTC para não depender do fuso do
 // servidor (que roda em UTC em produção e em America/Sao_Paulo no dev).
 export function ehSabado(date) {

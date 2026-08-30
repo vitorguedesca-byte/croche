@@ -881,6 +881,10 @@
   .hist-comp{font-weight:800;font-size:.86rem;min-width:104px;text-transform:capitalize}
   .hist-val{font-size:.86rem;color:var(--muted)}
   .hist-st{margin-left:auto}
+  /* Ações da linha (baixar / gerar Pix). Ficam depois do status e quebram para
+     baixo quando o modal aperta, em vez de espremer o valor. */
+  .hist-act{display:flex;gap:.4rem;flex-wrap:wrap}
+  .hist-row{flex-wrap:wrap}
   @media(max-width:900px){ .fch-tot{grid-template-columns:1fr 1fr} }
 
   /* ===== Perfil do aluno (dossiê em 2 colunas) ===== */

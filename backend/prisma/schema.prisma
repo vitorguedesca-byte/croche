@@ -131,6 +131,14 @@ model Invoice {
   // se sabe quando o QR ficou desatualizado e precisa ser reemitido.
   encargosAte   String?  @db.VarChar(10)
   paidAt        String?  @db.VarChar(30)
+  // Baixa dada na mão pela escola (dinheiro, transferência, acerto pessoal) em
+  // vez de confirmada pelo Sicredi. Quem paga assim não usa o Pix, então a
+  // mensalidade SEGUINTE nasce sem QR — ver `semPix` logo abaixo.
+  baixaManual   Boolean  @default(false)
+  // Esta mensalidade não emite Pix: nasceu depois de uma baixa manual. O portal
+  // não oferece QR e a rodada automática não emite. O botão "Gerar Pix" do
+  // painel limpa a marca — é a saída para quando a aluna pedir o código.
+  semPix        Boolean  @default(false)
   createdAt     DateTime @default(now())
 
   @@index([clientId])

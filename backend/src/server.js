@@ -21,6 +21,7 @@ import {
   checarRegras,
   diaDoMes,
   encargosDaMensalidade,
+  hhmm,
   horarioPermitido,
   janelaEscala,
   mesmaSemana,
@@ -359,7 +360,9 @@ async function concederCredito(client, booking) {
       expiresOn: fimDoMesSeguinte(competencia),
       originBookingId: booking.id,
       originDate: booking.date,
-      originTime: booking.time,
+      // originTime é VARCHAR(5): hora solta do banco ("09:00:00", faixa
+      // inteira) estourava a coluna e derrubava a liberação da vaga.
+      originTime: hhmm(booking.time) || String(booking.time || "").slice(0, 5),
     },
   });
   return { credito, motivo: "" };
@@ -640,8 +643,14 @@ app.get(
 app.post(
   "/api/slots",
   wrap(async (req, res) => {
-    const { unit, prof, date, time, capacity, weeks, dates, baseSlotId } = req.body;
-    if (!unit || !time) return res.status(400).json({ error: "unit e time são obrigatórios" });
+    const { unit, prof, date, capacity, weeks, dates, baseSlotId } = req.body;
+    if (!unit || !req.body.time) return res.status(400).json({ error: "unit e time são obrigatórios" });
+    /* Normaliza na porta de entrada, como o PATCH já fazia: o horário guardado
+       é sempre 'HH:MM'. Sem isso, um "9:00" ou "09:00:00" entra no banco e volta
+       para morder em toda comparação de hora — e na coluna de 5 caracteres do
+       crédito de reposição. */
+    const time = hhmm(req.body.time);
+    if (!time) return res.status(400).json({ error: "Horário inválido — use HH:MM." });
     const cap = Math.max(1, parseInt(capacity, 10) || SETTINGS.capacidadePadrao);
     // O frontend pode mandar uma lista de datas já calculada (criação com dias
     // da semana / replicação). Como fallback, usa date + weeks (repetição semanal).
@@ -1019,7 +1028,7 @@ app.post(
           prof: slot.prof,
           slotId: slot.id,
           status: "aguardando",
-          value: experimental ? valorDoPlano(freqEscolhida) : (Number(b.value) || SETTINGS.valorPadrao),
+          value: experimental ? valorDoPlano(freqEscolhida) : (Number(b.value) || 0),
           paymentMethod: experimental ? MARCA_MATRICULA : null,
         },
       });
@@ -1215,7 +1224,12 @@ app.post(
     }
     const cpf = (req.body.cpf || "").replace(/\D/g, "") || (await clientCpfByName(booking.clientName));
     if (!cpf) return res.status(400).json({ error: "CPF do pagador é obrigatório. Cadastre o CPF da aluna antes de gerar a cobrança." });
-    const amountCents = Math.round((booking.value || SETTINGS.valorPadrao) * 100);
+    /* Sem valor próprio não há o que cobrar: a aula está dentro da mensalidade
+       do mês (o Pix dela se gera em /api/invoices, na aba Mensalistas). */
+    const amountCents = Math.round((Number(booking.value) || 0) * 100);
+    if (amountCents <= 0) {
+      return res.status(400).json({ error: "Esta aula não tem cobrança própria — o valor está dentro da mensalidade do mês. Gere o Pix da mensalidade na aba Mensalistas." });
+    }
     const txid = txidBooking(id);
     const cob = await createCharge({
       txid,
@@ -1395,8 +1409,18 @@ async function gerarMensalidade(clientId, competencia) {
   if (!valor) throw Object.assign(new Error("Defina o valor da mensalidade (no aluno ou nas Configurações)."), { code: 400 });
   const dueDate = vencimentoDe(client, comp);
   const valorCents = Math.round(valor * 100);
+  /* Mês anterior baixado na mão = a aluna acerta fora do sistema. A mensalidade
+     seguinte nasce SEM Pix: ela não recebe QR nenhum, nem pelo portal nem pela
+     cobrança do painel. É uma marca de um mês só — o mês depois deste volta ao
+     normal, a não ser que também leve baixa manual. */
+  const anterior = await prisma.invoice.findFirst({
+    where: { clientId, competencia: somarComp(comp, -1) },
+  });
+  const semPix = !!anterior?.baixaManual;
   let txid = null, pixCode = null, pixExpiresOn = null;
-  if (sicrediConfigured()) {
+  if (semPix) {
+    console.log(`[mensalidade] ${client.name} (${comp}): sem Pix — ${anterior.competencia} teve baixa manual.`);
+  } else if (sicrediConfigured()) {
     // Se o Sicredi falhar, a mensalidade ainda precisa existir aqui — senão a aluna
     // fica sem cobrança nenhuma. Fica sem Pix e a tela oferece gerar de novo.
     try {
@@ -1412,7 +1436,7 @@ async function gerarMensalidade(clientId, competencia) {
     }
   }
   return prisma.invoice.create({
-    data: { clientId, competencia: comp, amountCents: valorCents, dueDate, status: "pendente", txid, pixCode, pixExpiresOn },
+    data: { clientId, competencia: comp, amountCents: valorCents, dueDate, status: "pendente", txid, pixCode, pixExpiresOn, semPix },
   });
 }
 
@@ -1459,6 +1483,16 @@ const SEQ_LIMITE_REEMISSAO = 90;
  */
 async function pixPagavelDaMensalidade(invoice) {
   const hoje = todayISO();
+  /* Mensalidade marcada para não emitir Pix (veio depois de uma baixa manual:
+     a aluna acerta fora do sistema). Nada de QR — nem aqui, nem no portal. Quem
+     precisar do código passa pelo botão "Gerar Pix" do painel, que limpa a marca
+     antes de chamar esta função. */
+  if (invoice.semPix) {
+    throw Object.assign(
+      new Error("Esta mensalidade está marcada para não emitir Pix — a anterior teve baixa manual."),
+      { code: 409, codigo: "SEM_PIX" }
+    );
+  }
   const devido = encargosHoje(invoice, hoje);
   const valorMudou = invoice.pixCode ? totalDoPixAtual(invoice) !== devido.totalCents : false;
   // Reaproveitar enquanto vale E enquanto o valor não muda é o que impede a
@@ -1510,13 +1544,38 @@ app.post("/api/clients/:id/invoice", wrap(async (req, res) => {
   }
 }));
 
-// Marcar mensalidade como paga (manual)
+/* Marcar mensalidade como paga (baixa manual).
+
+   Toda baixa dada pelo painel é manual por definição: o Sicredi confirma sozinho
+   pelo webhook (confirmarPagamentoPorTxid), sem passar por aqui. Então quem
+   clica está dizendo "recebi por fora" — e quem paga por fora não usa Pix.
+   Por isso a mensalidade SEGUINTE nasce sem QR (ver gerarMensalidade).
+
+   `manual: false` no corpo existe para conciliação/importação: registra o
+   pagamento sem carimbar a marca que suprime o Pix do mês que vem. */
 app.post("/api/invoices/:id/pay", wrap(async (req, res) => {
+  const manual = req.body?.manual !== false;
   const inv = await prisma.invoice.update({
     where: { id: Number(req.params.id) },
-    data: { status: "pago", paidAt: req.body?.paidAt || todayISO() },
+    data: { status: "pago", paidAt: req.body?.paidAt || todayISO(), baixaManual: manual },
   });
-  res.json(inv);
+  /* Se a mensalidade do mês seguinte JÁ existe, a marca chega tarde para o
+     gerarMensalidade — então aplica direto aqui. O QR que ela porventura tenha
+     é apagado: continuar oferecendo cobrança a quem paga por fora é o que a
+     baixa manual existe para evitar. */
+  let proximaSemPix = null;
+  if (manual) {
+    const prox = await prisma.invoice.findFirst({
+      where: { clientId: inv.clientId, competencia: somarComp(inv.competencia, 1), status: "pendente" },
+    });
+    if (prox) {
+      proximaSemPix = await prisma.invoice.update({
+        where: { id: prox.id },
+        data: { semPix: true, pixCode: null, txid: null, pixExpiresOn: null, encargosAte: null },
+      });
+    }
+  }
+  res.json({ ...inv, proximaSemPix: proximaSemPix ? proximaSemPix.competencia : null });
 }));
 
 // Cancelar mensalidade
@@ -1530,9 +1589,14 @@ app.post("/api/invoices/:id/cancel", wrap(async (req, res) => {
    Inêz precisa do código novo na mão para mandar pelo WhatsApp — sem depender de
    a aluna abrir o portal primeiro. */
 app.post("/api/invoices/:id/pix", wrap(async (req, res) => {
-  const inv = await prisma.invoice.findUnique({ where: { id: Number(req.params.id) } });
+  let inv = await prisma.invoice.findUnique({ where: { id: Number(req.params.id) } });
   if (!inv) return res.status(404).json({ error: "Mensalidade não encontrada." });
   if (inv.status !== "pendente") return res.status(400).json({ error: "Esta mensalidade não está em aberto." });
+  /* Saída da supressão: pedir o Pix aqui é a Inêz dizendo que desta vez quer o
+     código na mão. A marca da baixa manual sai e a emissão segue normal. */
+  if (inv.semPix) {
+    inv = await prisma.invoice.update({ where: { id: inv.id }, data: { semPix: false } });
+  }
   try {
     res.json(comEncargos(await pixPagavelDaMensalidade(inv)));
   } catch (e) {
@@ -1940,6 +2004,14 @@ app.post("/api/portal/:key/invoice/:id/pix", wrap(async (req, res) => {
   try {
     res.json(comEncargos(await pixPagavelDaMensalidade(inv)));
   } catch (e) {
+    /* Mensalidade sem Pix por decisão da escola (o mês anterior teve baixa
+       manual): a aluna não vê um erro técnico, vê o combinado dela. */
+    if (e.codigo === "SEM_PIX") {
+      return res.status(409).json({
+        error: "Esta mensalidade está combinada direto com a escola — não há Pix para ela. Qualquer dúvida, chame a gente no WhatsApp. 💚",
+        codigo: "SEM_PIX",
+      });
+    }
     // O portal é público: erro de configuração vira recado para procurar a Inêz,
     // sem expor qual credencial do banco está faltando.
     const publico = e.code === 400 || e.code === 404;
@@ -2044,7 +2116,8 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
       clientName: client.name, phone: client.phone || "", unit: slot.unit, date: slot.date, time: slot.time, prof: slot.prof || profFor(slot.unit),
       slotId: slot.id,
       status: mensalista ? "confirmada" : "aguardando",
-      value: mensalista ? 0 : SETTINGS.valorPadrao,
+      // A aula não tem preço próprio: quem se paga é a mensalidade do mês.
+      value: 0,
       paid: false,
       paymentMethod: mensalista ? "Mensalista" : null,
     },
@@ -2075,8 +2148,22 @@ async function liberarAula(client, b, extra = {}, { devolverRepo = false } = {})
     // Aula extra é compra: liberar a vaga não devolve o valor nem gera crédito.
     return { credito: false, devolvido: false, motivo: "Esta era uma aula extra — o valor pago não é devolvido." };
   }
-  const { credito, motivo } = await concederCredito(client, b);
-  return { credito: !!credito, devolvido: false, motivo };
+  /* A vaga JÁ foi liberada na linha de cima. Se a concessão do crédito falhar,
+     a liberação não pode falhar junto: quem avisou que não vem não fica presa na
+     turma por causa de um erro na regra de reposição. O erro vai para o log e a
+     tela diz o que aconteceu. (Foi o que quebrou em 29/08/2026: horário fora do
+     formato estourando MakeupCredit.originTime, VARCHAR(5).) */
+  try {
+    const { credito, motivo } = await concederCredito(client, b);
+    return { credito: !!credito, devolvido: false, motivo };
+  } catch (e) {
+    console.error(`[reposição] vaga de ${client.name} liberada, mas o crédito falhou: ${e.message}`);
+    return {
+      credito: false,
+      devolvido: false,
+      motivo: "A vaga foi liberada, mas não consegui registrar o crédito de reposição. Confira com a escola.",
+    };
+  }
 }
 
 // Cancelar aula (libera a vaga)
@@ -2447,7 +2534,7 @@ async function waAvailableSlots(unit) {
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
 }
 function bookingConfirmText(name, slot) {
-  return `Prontinho, ${name.split(" ")[0]}! 💚\n\nSua aula está *reservada*:\n📍 ${slot.unit}\n🗓️ ${fmtSlotBR(slot)}\n💰 R$ ${SETTINGS.valorPadrao}\n\nStatus: *aguardando pagamento*. Em breve enviaremos os detalhes para confirmar. Até logo! 🧶`;
+  return `Prontinho, ${name.split(" ")[0]}! 💚\n\nSua aula está *reservada*:\n📍 ${slot.unit}\n🗓️ ${fmtSlotBR(slot)}\n\nStatus: *aguardando confirmação*. Em breve falamos com você para acertar os detalhes. Até logo! 🧶`;
 }
 async function createWaBooking(nomeBruto, phone, slot) {
   const name = padronizarNome(nomeBruto);
@@ -2455,7 +2542,7 @@ async function createWaBooking(nomeBruto, phone, slot) {
     data: {
       clientName: name, phone: phone || "", unit: slot.unit,
       date: slot.date, time: slot.time, prof: slot.prof, slotId: slot.id,
-      status: "aguardando", value: SETTINGS.valorPadrao,
+      status: "aguardando", value: 0,
     },
   });
   // sem etiqueta: "Lead" saiu do sistema (ver VALID_TAGS lá em cima)
@@ -2497,7 +2584,7 @@ async function handleWaMessage(msg) {
     await setConv({ step: "confirm", unit: slot.unit, slotId: slot.id });
     return waButtons(
       msg.from,
-      `Confere pra mim antes de reservar 👇\n\n📍 *${slot.unit}*\n🗓️ ${fmtSlotBR(slot)}\n💰 R$ ${SETTINGS.valorPadrao}\n\nEstá correto?`,
+      `Confere pra mim antes de reservar 👇\n\n📍 *${slot.unit}*\n🗓️ ${fmtSlotBR(slot)}\n\nEstá correto?`,
       [{ id: "ok:slot", title: "✅ Confirmar" }, { id: "back:slot", title: "🔄 Outro horário" }, { id: "back:unit", title: "← Trocar unidade" }]
     );
   };
@@ -2772,7 +2859,7 @@ app.post(
         prof: w.slot.prof,
         slotId: w.slotId,
         status: "aguardando",
-        value: SETTINGS.valorPadrao,
+        value: 0,
       },
     });
     await ensureClient(w.name, w.phone, w.slot.unit, []);
@@ -2825,7 +2912,7 @@ app.post(
     const clientName = (cli && cli.name) || padronizarNome(req.body.name);
     if (!clientName) return res.status(400).json({ error: "Informe seu nome." });
     const booking = await prisma.booking.create({
-      data: { clientName, phone: rawPhone, unit: slot.unit, date: slot.date, time: slot.time, prof: slot.prof, slotId: slot.id, status: "aguardando", value: SETTINGS.valorPadrao },
+      data: { clientName, phone: rawPhone, unit: slot.unit, date: slot.date, time: slot.time, prof: slot.prof, slotId: slot.id, status: "aguardando", value: 0 },
     });
     // sem etiqueta: "Lead" saiu do sistema (ver VALID_TAGS lá em cima)
     if (!cli) await prisma.client.create({ data: { name: clientName, phone: rawPhone, unit: slot.unit, tags: "[]", notes: "Cadastrou-se pelo portal do aluno." } });

@@ -5,7 +5,8 @@ import { useModal, StatusBadge, Select } from "./ui.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import {
-  SlotCard, DayModal, ManageBooking, ConfirmPayment, ClientProfile, SlotDetail, AlterarMensalidade,
+  SlotCard, DayModal, ManageBooking, ClientProfile, SlotDetail, AlterarMensalidade,
+  baixarMensalidade,
 } from "./modals.jsx";
 import {
   UNITS, STATUS, unitColor,
@@ -25,7 +26,11 @@ function Alerts({ open }) {
   const t = todayISO();
   const daysSince = (iso) => Math.floor((new Date(t + "T00:00") - new Date((iso || "").slice(0, 10) + "T00:00")) / 86400000);
 
-  const atrasados = data.bookings.filter((b) => b.status === "aguardando" && daysSince(b.createdAt) >= 3)
+  /* Só a reserva da experimental entra aqui: o dinheiro dela é a 1ª mensalidade
+     da aluna. As demais aulas não têm preço próprio — já estão dentro do plano —
+     e cobrar por elas era o R$ 20 fantasma que saiu do sistema em 30/08/2026. */
+  const atrasados = data.bookings.filter((b) => b.status === "aguardando" &&
+    ehPagamentoDeMatricula(b.paymentMethod) && daysSince(b.createdAt) >= 3)
     .sort((a, b) => daysSince(b.createdAt) - daysSince(a.createdAt)).slice(0, 5);
   const quase = data.slots.filter((s) => s.date >= t && slotCapacity(s) > 1 && slotCapacity(s) - slotOccupancy(data, s.id) === 1)
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).slice(0, 5);
@@ -51,15 +56,13 @@ function Alerts({ open }) {
       <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: "1rem" }}>
         {atrasados.length > 0 && (
           <div>
-            <div className="alert-h" style={{ color: "var(--warn)" }}>⏳ Reservas sem confirmação</div>
+            <div className="alert-h" style={{ color: "var(--warn)" }}>⏳ 1ª mensalidade pendente</div>
             {atrasados.map((b) => (
               <div className="alert-row" key={b.id}>
-                {/* Só a reserva da experimental tem dinheiro próprio (é a 1ª
-                    mensalidade). As demais aulas já estão dentro do plano. */}
                 <div><b>{b.clientName}</b><div className="cli-sub">
-                  há {daysSince(b.createdAt)} dias{ehPagamentoDeMatricula(b.paymentMethod) ? ` · 1ª mensalidade de ${money(b.value)}` : ""}
+                  há {daysSince(b.createdAt)} dias · {money(b.value)}
                 </div></div>
-                <button className="btn wa sm" onClick={() => openWa(b.phone, `Olá ${b.clientName}! Vi que sua reserva da aula de ${fmtDate(b.date)} ainda está pendente. Posso te ajudar a confirmar? 💚`)}>Cobrar</button>
+                <button className="btn wa sm" onClick={() => openWa(b.phone, `Olá ${b.clientName}! Vi que sua matrícula da aula de ${fmtDate(b.date)} ainda está pendente. Posso te ajudar a confirmar? 💚`)}>Cobrar</button>
               </div>
             ))}
           </div>
@@ -116,7 +119,6 @@ export function Dashboard({ go }) {
   const { open } = useModal();
   const t = todayISO();
   const hoje = bookingsActive(data).filter((b) => b.date === t).sort((a, b) => a.time.localeCompare(b.time));
-  const aguardando = data.bookings.filter((b) => b.status === "aguardando").sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const month = new Date().toISOString().slice(0, 7);
   const wk = weekStart(t), wkEnd = addDays(wk, 6);
   const aulasSemana = bookingsActive(data).filter((b) => b.date >= wk && b.date <= wkEnd).length;
@@ -153,38 +155,19 @@ export function Dashboard({ go }) {
 
     <Alerts open={open} />
 
-    <div className="dash-cols">
-      <div className="panel">
-        <div className="panel-h"><h2>⏳ Confirmar pagamento</h2><button className="btn sec sm" onClick={() => go("marcacoes")}>Ver todas</button></div>
-        {aguardando.length ? (
-          <table><thead><tr><th>Aluno</th><th>Dia</th><th>Valor</th><th></th></tr></thead><tbody>
-            {aguardando.slice(0, 6).map((b) => (
-              <tr key={b.id}>
-                <td><span className="cli-name">{b.clientName}</span><div className="cli-sub">{b.unit}</div></td>
-                <td>{fmtDate(b.date)} · {b.time}</td>
-                <td><b>{money(b.value)}</b></td>
-                <td className="td-actions">
-                  <button className="btn wa sm" onClick={() => openWa(b.phone, `Olá ${b.clientName}! Para confirmar sua aula de ${fmtDate(b.date)} às ${b.time}, a reserva é de ${money(b.value)}. Pode me enviar o comprovante? 💚`)}><WaIcon /></button>
-                  <button className="btn sm" onClick={() => open(<ConfirmPayment booking={b} />)}>✓ Pago</button>
-                </td>
-              </tr>
-            ))}
-          </tbody></table>
-        ) : <div className="empty"><div className="ic">✅</div><p>Nenhuma pendência. Tudo em dia!</p></div>}
-      </div>
-
-      <div className="panel">
-        <div className="panel-h"><h2>🧶 Aulas de hoje</h2><button className="btn sec sm" onClick={() => go("agenda")}>Agenda</button></div>
-        {hoje.length ? (
-          <table><thead><tr><th>Hora</th><th>Aluno</th><th>Unidade</th><th>Status</th></tr></thead><tbody>
-            {hoje.map((b) => (
-              <tr key={b.id} onClick={() => open(<ManageBooking booking={b} />)} className="row-click">
-                <td><b>{b.time}</b></td><td>{b.clientName}</td><td><span className="chip">{b.unit}</span></td><td><StatusBadge status={b.status} /></td>
-              </tr>
-            ))}
-          </tbody></table>
-        ) : <div className="empty"><div className="ic">☕</div><p>Nenhuma aula hoje.</p></div>}
-      </div>
+    {/* A aula não se cobra sozinha: a aluna paga por MÊS. O que precisa de olho
+        no dinheiro está no Financeiro (Pix das mensalidades), não aqui. */}
+    <div className="panel">
+      <div className="panel-h"><h2>🧶 Aulas de hoje</h2><button className="btn sec sm" onClick={() => go("agenda")}>Agenda</button></div>
+      {hoje.length ? (
+        <table><thead><tr><th>Hora</th><th>Aluno</th><th>Unidade</th><th>Status</th></tr></thead><tbody>
+          {hoje.map((b) => (
+            <tr key={b.id} onClick={() => open(<ManageBooking booking={b} />)} className="row-click">
+              <td><b>{b.time}</b></td><td>{b.clientName}</td><td><span className="chip">{b.unit}</span></td><td><StatusBadge status={b.status} /></td>
+            </tr>
+          ))}
+        </tbody></table>
+      ) : <div className="empty"><div className="ic">☕</div><p>Nenhuma aula hoje.</p></div>}
     </div>
 
     <div className="panel">
@@ -379,18 +362,33 @@ export function Marcacoes() {
   const [filter, setFilter] = useState("todas");
   const [mensF, setMensF] = useState("todas");
   const [search, setSearch] = useState("");
+  // Semana visível da aba "Novos" — segunda a domingo, como no resto do sistema.
+  const [semana, setSemana] = useState(() => weekStart(todayISO()));
+  const semanaFim = addDays(semana, 6);
+  const semanaAtual = weekStart(todayISO());
   const segs = [["todas", "Todas"], ["aguardando", "Aguardando"], ["confirmada", "Confirmadas"], ["concluida", "Concluídas"], ["cancelada", "Canceladas"]];
   const comp = compAtual();
 
   const isNovo = (b) => isNewLead(data, b);
-  const novosCount = data.bookings.filter(isNovo).length;
-  const acessoCount = data.bookings.length - novosCount;
+  const novos = data.bookings.filter(isNovo);
+  const acessoCount = data.bookings.length - novos.length;
+  // O badge da aba conta a SEMANA, não o acervo: é o tamanho do trabalho de agora.
+  const novosSemana = novos.filter((b) => b.date >= semana && b.date <= semanaFim).length;
 
   // Situação da mensalidade do mês da aluna por trás de cada marcação.
   const sitDe = (b) => situacaoMensalidade(data, clientOfBooking(data, b), comp);
 
   let list = [...data.bookings].sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
   list = list.filter((b) => (tab === "novos" ? isNovo(b) : !isNovo(b)));
+  /* "Novos" é uma caixa de entrada, não um arquivo: são milhares de solicitações
+     acumuladas desde sempre, e a Inêz só trabalha as da semana. A navegação por
+     semana é a mesma da agenda — ← período → — para não inventar um jeito novo
+     de andar no tempo dentro do mesmo sistema.
+
+     Buscar pelo nome escapa da semana de propósito: quem digita um nome está
+     procurando uma pessoa, não conferindo a semana, e não faz sentido esconder
+     a marcação dela porque caiu em outro período. */
+  if (tab === "novos" && !search) list = list.filter((b) => b.date >= semana && b.date <= semanaFim);
   if (filter !== "todas") list = list.filter((b) => b.status === filter);
   if (mensF !== "todas") list = list.filter((b) => sitDe(b).estado === mensF);
   if (search) list = list.filter((b) => b.clientName.toLowerCase().includes(search.toLowerCase()));
@@ -398,12 +396,26 @@ export function Marcacoes() {
   return (
     <div className="panel">
       <div className="seg seg-tabs" style={{ marginBottom: "1rem" }}>
-        <button className={tab === "novos" ? "on" : ""} onClick={() => setTab("novos")}>🆕 Novos <span className="seg-count">{novosCount}</span></button>
+        <button className={tab === "novos" ? "on" : ""} onClick={() => setTab("novos")}>🆕 Novos <span className="seg-count">{novosSemana}</span></button>
         <button className={tab === "acesso" ? "on" : ""} onClick={() => setTab("acesso")}>👤 Com acesso <span className="seg-count">{acessoCount}</span></button>
       </div>
       <div className="seg-hint">{tab === "novos"
-        ? "Solicitações de quem ainda não tem acesso (sem PIN) ou está na primeira aula."
+        ? "Solicitações de quem ainda não tem acesso (sem PIN) ou está na primeira aula — uma semana por vez."
         : "Marcações de alunas que já têm cadastro e acesso ao portal."}</div>
+
+      {tab === "novos" && (
+        <div className="ag-toolbar">
+          <div className="ag-nav">
+            <button className="navbtn" onClick={() => setSemana(addDays(semana, -7))}>←</button>
+            <span className="ag-period">{fmtDate(semana)} – {fmtDate(semanaFim)}</span>
+            <button className="navbtn" onClick={() => setSemana(addDays(semana, 7))}>→</button>
+            {semana !== semanaAtual && <button className="btn ghost sm" onClick={() => setSemana(semanaAtual)}>Semana atual</button>}
+          </div>
+          <span className="cli-sub">
+            {search ? "🔍 busca ativa — mostrando todas as semanas" : `${novosSemana} solicitação(ões) nesta semana`}
+          </span>
+        </div>
+      )}
       <div className="filters">
         <div className="seg">{segs.map((s) => <button key={s[0]} className={filter === s[0] ? "on" : ""} onClick={() => setFilter(s[0])}>{s[1]}</button>)}</div>
         <Select
@@ -420,8 +432,11 @@ export function Marcacoes() {
         />
         <input className="grow" placeholder="🔍 Buscar aluno..." value={search} onChange={(e) => setSearch(e.target.value)} />
       </div>
+      {/* A coluna Status saiu em 30/08/2026: aqui é quase tudo "aguardando
+          confirmação", e o que a Inêz decide olhando esta lista é a mensalidade.
+          O status continua filtrável acima e aparece inteiro no "Gerir". */}
       {list.length ? (
-        <table><thead><tr><th>Aluno</th><th>Unidade</th><th>Dia / Hora</th><th>Mensalidade · {compLabel(comp)}</th><th>Status</th><th></th></tr></thead><tbody>
+        <table><thead><tr><th>Aluno</th><th>Unidade</th><th>Dia / Hora</th><th>Mensalidade · {compLabel(comp)}</th><th></th></tr></thead><tbody>
           {list.map((b) => {
             /* A aula não tem mais preço próprio: a aluna paga por MÊS. O que
                interessa aqui é como está a mensalidade da competência atual
@@ -444,7 +459,6 @@ export function Marcacoes() {
                   )}
                   {sit.valor > 0 && <div className="cli-sub">{money(sit.valor)}</div>}
                 </td>
-                <td><StatusBadge status={b.status} /></td>
                 <td className="td-actions">
                   <button className="btn wa sm" title="WhatsApp" onClick={() => openWa(b.phone, `Olá ${b.clientName}! 💚`)}><WaIcon /></button>
                   <button className="btn sec sm" onClick={() => open(<ManageBooking booking={b} />)}>Gerir</button>
@@ -453,7 +467,12 @@ export function Marcacoes() {
             );
           })}
         </tbody></table>
-      ) : <div className="empty"><div className="ic">📝</div><p>Nenhuma marcação nesse filtro.</p></div>}
+      ) : (
+        <div className="empty"><div className="ic">📝</div>
+          <p>{tab === "novos" ? "Nenhuma solicitação nesta semana." : "Nenhuma marcação nesse filtro."}</p>
+          {tab === "novos" && <div className="cli-sub">Use as setas acima para ver outra semana.</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -614,7 +633,13 @@ export function Mensalistas() {
     try { const r = await run(api.gerarMensalidadesMes()); toast(`${r?.geradas ?? 0} boleto(s) gerado(s)/reaproveitado(s).`); }
     finally { setBusy(false); }
   };
-  const marcarPago = async (inv) => { await run(api.payInvoice(inv.id)); };
+  /* Mesma baixa do perfil da aluna — é o mesmo ato, então tem o mesmo efeito:
+     confirma, marca paga e deixa a mensalidade seguinte sem Pix. */
+  const marcarPago = async (c, inv) => {
+    setBusy(true);
+    try { await baixarMensalidade(inv, run, c.name); }
+    finally { setBusy(false); }
+  };
   const copyPix = (code) => { navigator.clipboard.writeText(code); toast("Código Pix copiado! 📋"); };
   /* Refaz o QR e já entrega o código na área de transferência: quem clica aqui
      está prestes a colar no WhatsApp da aluna. */
@@ -703,6 +728,16 @@ export function Mensalistas() {
 
       {!ehMesAtual && <div className="seg-hint">📅 Mês fechado — os boletos são gerados apenas para o mês atual. Meses anteriores sem boleto aparecem como “não gerado”.</div>}
 
+      {/* A consequência do "Baixar" fica escrita antes do botão, não só na
+          confirmação: é uma decisão que muda o mês seguinte. */}
+      {pendArr.length > 0 && (
+        <div className="seg-hint">
+          ⚠️ <b>Baixar</b> registra que a mensalidade foi paga por fora. A mensalidade seguinte
+          nasce <b>sem Pix</b> — nada é enviado para o WhatsApp da aluna nem aparece no portal dela.
+          Precisando do código naquele mês, use <b>💠 Gerar Pix</b> nele.
+        </div>
+      )}
+
       {mensalistas.length ? (
         <table><thead><tr><th>Aluno</th><th>Mensalidade</th><th>Vencimento</th><th>Status do mês</th><th></th></tr></thead><tbody>
           {mensalistas.map((c) => {
@@ -737,10 +772,15 @@ export function Mensalistas() {
                 <td>{inv ? fmtDate(inv.dueDate) : "dia " + vencDe(c)}</td>
                 <td>
                   {!inv ? <span className="badge b-muted">não gerado</span>
-                    : inv.status === "pago" ? <span className="badge b-ok">✓ pago{inv.paidAt ? " em " + fmtDate(String(inv.paidAt).slice(0, 10)) : ""}</span>
+                    : inv.status === "pago" ? <span className="badge b-ok" title={inv.baixaManual ? "Baixa dada no painel — recebido por fora do Pix" : "Confirmado pelo Sicredi"}>
+                        ✓ pago{inv.paidAt ? " em " + fmtDate(String(inv.paidAt).slice(0, 10)) : ""}{inv.baixaManual ? " · baixa manual" : ""}
+                      </span>
                     : inv.status === "cancelado" ? <span className="badge b-danger">cancelado</span>
                     : inv.encargos?.atrasada ? <span className="badge b-danger">⚠️ em atraso há {inv.encargos.dias} dia(s)</span>
                     : <span className="badge b-warn">⏳ pendente · vence {fmtDate(inv.dueDate)}</span>}
+                  {inv?.status === "pendente" && inv.semPix && (
+                    <div className="cli-sub" title="O mês anterior teve baixa manual, então esta mensalidade nasceu sem Pix.">💠 sem Pix · baixa manual no mês anterior</div>
+                  )}
                 </td>
                 <td className="td-actions">
                   {/* Alterar o valor a partir daqui já chega com o mês da tela
@@ -757,10 +797,15 @@ export function Mensalistas() {
                     {inv.boletoUrl && <a className="btn sec sm" href={inv.boletoUrl} target="_blank" rel="noreferrer">📄 Boleto</a>}
                     {inv.pixCode
                       ? <button className="btn sec sm" onClick={() => copyPix(inv.pixCode)}>💠 Pix</button>
-                      /* Sem QR: o valor foi alterado (o antigo cobrava o preço
-                         velho) ou o Sicredi falhou na emissão. Um clique refaz. */
-                      : <button className="btn sec sm" disabled={busy} onClick={() => reemitir(inv)}>💠 Gerar Pix</button>}
-                    <button className="btn sm" onClick={() => marcarPago(inv)}>✓ Marcar pago</button>
+                      /* Sem QR: nasceu sem Pix por baixa manual do mês anterior,
+                         o valor foi alterado (o antigo cobrava o preço velho) ou
+                         o Sicredi falhou. Um clique refaz — e, no primeiro caso,
+                         é a saída deliberada da supressão. */
+                      : <button className="btn sec sm" disabled={busy} onClick={() => reemitir(inv)}
+                          title={inv.semPix ? "Esta mensalidade nasceu sem Pix (o mês anterior teve baixa manual). Gerar aqui libera o código." : ""}>
+                          💠 Gerar Pix
+                        </button>}
+                    <button className="btn sm" disabled={busy} onClick={() => marcarPago(c, inv)}>✓ Baixar</button>
                   </>}
                 </td>
               </tr>
@@ -922,32 +967,31 @@ export function Recebimentos() {
   // virava o mês 3h antes da meia-noite daqui — no dia 31 à noite, "mês atual"
   // já era o mês seguinte.
   const month = compAtual();
-  const pagos = data.bookings.filter((b) => b.paid).sort((a, b) => (b.paymentDate || "").localeCompare(a.paymentDate || ""));
-  /* "A receber" é do MÊS CORRENTE, pela data da aula. Somar todas as reservas
-     aguardando desde sempre juntava anos de pendência antiga num número só —
-     não era o que a Inêz tem para receber, era o passivo histórico inteiro.
 
-     Fora da conta: a reserva da aula experimental. O dinheiro dela é a 1ª
-     MENSALIDADE da aluna (ver MARCAS_MATRICULA), e a mensalidade já é cobrada
-     no bloco de Pix aqui em cima — contar nos dois lugares dobrava o valor. */
-  const pend = data.bookings.filter(
-    (b) => b.status === "aguardando" &&
-      String(b.date || "").slice(0, 7) === month &&
-      !ehPagamentoDeMatricula(b.paymentMethod)
-  );
-  const experimentais = data.bookings.filter(
-    (b) => b.status === "aguardando" &&
-      String(b.date || "").slice(0, 7) === month &&
-      ehPagamentoDeMatricula(b.paymentMethod)
-  ).length;
-  const recMes = pagos.filter((b) => (b.paymentDate || "").slice(0, 7) === month).reduce((a, b) => a + b.value, 0);
-  const totalPend = pend.reduce((a, b) => a + b.value, 0);
-  const recTotal = pagos.reduce((a, b) => a + b.value, 0);
+  /* O dinheiro da escola é a MENSALIDADE, não a aula. A aula não tem preço
+     próprio (o R$ 20 por reserva saiu do sistema em 30/08/2026), então todos os
+     números daqui saem das mensalidades emitidas — as mesmas do bloco de Pix. */
+  const cliOf = (i) => data.clients.find((c) => c.id === i.clientId);
+  const invs = (data.invoices || []).filter((i) => i.status !== "cancelado");
+  const valorHoje = (i) => (i.encargos ? i.encargos.total : i.amountCents / 100);
+  const diaPgto = (i) => String(i.paidAt || "").slice(0, 10);
+
+  const pagos = invs.filter((i) => i.status === "pago")
+    .map((i) => ({ ...i, cli: cliOf(i) }))
+    .sort((a, b) => diaPgto(b).localeCompare(diaPgto(a)));
+  // "A receber" é o que está em aberto na competência corrente — não o passivo
+  // histórico inteiro, que juntaria anos de pendência num número só.
+  const pend = invs.filter((i) => i.status === "pendente" && i.competencia === month);
+  const atrasadas = pend.filter((i) => i.encargos?.atrasada).length;
+
+  const recMes = pagos.filter((i) => diaPgto(i).slice(0, 7) === month).reduce((a, i) => a + i.amountCents / 100, 0);
+  const totalPend = pend.reduce((a, i) => a + valorHoje(i), 0);
+  const recTotal = pagos.reduce((a, i) => a + i.amountCents / 100, 0);
   const ticket = pagos.length ? recTotal / pagos.length : 0;
 
   const sumBetween = (fromISO, toISO) => pagos
-    .filter((b) => { const d = (b.paymentDate || "").slice(0, 10); return d >= fromISO && d <= toISO; })
-    .reduce((a, b) => a + b.value, 0);
+    .filter((i) => { const d = diaPgto(i); return d >= fromISO && d <= toISO; })
+    .reduce((a, i) => a + i.amountCents / 100, 0);
 
   const t = todayISO();
   // Por dia (últimos 14 dias)
@@ -972,25 +1016,22 @@ export function Recebimentos() {
   });
 
   return (<>
-    {/* Os Pix das mensalidades vêm primeiro: é a receita recorrente da escola.
-        Os blocos abaixo continuam olhando o dinheiro que entra pelas reservas. */}
+    {/* Os Pix das mensalidades vêm primeiro: é a receita recorrente da escola —
+        e, desde 30/08/2026, a única. A aula em si não se cobra. */}
     <PixDoMes />
 
     <div className="grid stats" style={{ marginBottom: "1.2rem" }}>
       {/* Os dois primeiros cards são do MÊS; "total" e "ticket" são vitalícios.
           O rótulo de cada um diz qual é qual, para não comparar coisa diferente. */}
       <div className="card stat"><div className="lbl">💰 Recebido no mês</div><div className="val">{money(recMes)}</div><div className="foot">{compLabel(month)}</div></div>
-      <div
-        className="card stat"
-        title={`Reservas de ${compLabel(month)} ainda não pagas.${experimentais ? ` Fora da conta: ${experimentais} aula(s) experimental(is) — o valor delas é a 1ª mensalidade e já entra no bloco de Pix.` : ""}`}
-      >
+      <div className="card stat" title={`Mensalidades de ${compLabel(month)} ainda em aberto, já com multa e juros das vencidas.`}>
         <div className="lbl">⏳ A receber no mês</div>
         <div className="val warn">{money(totalPend)}</div>
-        <div className="foot">{pend.length} reserva(s) · {compLabel(month)}</div>
-        {experimentais ? <div className="cli-sub" style={{ fontSize: ".68rem" }}>sem {experimentais} experimental(is) — vão na mensalidade</div> : null}
+        <div className="foot">{pend.length} mensalidade(s) · {compLabel(month)}</div>
+        {atrasadas ? <div className="cli-sub" style={{ fontSize: ".68rem" }}>{atrasadas} em atraso · com encargos</div> : null}
       </div>
-      <div className="card stat"><div className="lbl">📈 Recebido total</div><div className="val terra">{money(recTotal)}</div><div className="foot">{pagos.length} pagamentos</div></div>
-      <div className="card stat"><div className="lbl">🎟️ Ticket médio</div><div className="val">{money(ticket)}</div><div className="foot">por reserva paga</div></div>
+      <div className="card stat"><div className="lbl">📈 Recebido total</div><div className="val terra">{money(recTotal)}</div><div className="foot">{pagos.length} mensalidade(s) paga(s)</div></div>
+      <div className="card stat"><div className="lbl">🎟️ Ticket médio</div><div className="val">{money(ticket)}</div><div className="foot">por mensalidade paga</div></div>
     </div>
 
     <div className="panel">
@@ -1011,12 +1052,19 @@ export function Recebimentos() {
     <div className="panel">
       <div className="panel-h"><h2>✅ Recebimentos confirmados</h2><span className="cli-sub">{pagos.length} registro(s)</span></div>
       {pagos.length ? (
-        <table><thead><tr><th>Aluno</th><th>Unidade</th><th>Aula</th><th>Forma</th><th>Data pgto.</th><th>Valor</th></tr></thead><tbody>
-          {pagos.map((b) => (
-            <tr key={b.id}><td className="cli-name">{b.clientName}</td><td><span className="chip">{b.unit}</span></td><td>{fmtDate(b.date)} · {b.time}</td><td><span className="badge b-sage">{b.paymentMethod || "—"}</span></td><td>{b.paymentDate ? fmtDate(b.paymentDate) : "—"}</td><td><b>{money(b.value)}</b></td></tr>
+        <table><thead><tr><th>Aluno</th><th>Unidade</th><th>Competência</th><th>Vencimento</th><th>Data pgto.</th><th>Valor</th></tr></thead><tbody>
+          {pagos.map((i) => (
+            <tr key={i.id}>
+              <td className="cli-name">{i.cli?.name || `aluno #${i.clientId}`}</td>
+              <td>{i.cli?.unit ? <span className="chip">{i.cli.unit}</span> : "—"}</td>
+              <td><span className="badge b-sage">{compLabel(i.competencia)}</span></td>
+              <td>{i.dueDate ? fmtDate(i.dueDate) : "—"}</td>
+              <td>{diaPgto(i) ? fmtDate(diaPgto(i)) : "—"}</td>
+              <td><b>{money(i.amountCents / 100)}</b></td>
+            </tr>
           ))}
         </tbody></table>
-      ) : <div className="empty"><div className="ic">💰</div><p>Nenhum recebimento ainda.</p></div>}
+      ) : <div className="empty"><div className="ic">💰</div><p>Nenhuma mensalidade paga ainda.</p></div>}
     </div>
   </>);
 }

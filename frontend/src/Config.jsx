@@ -43,7 +43,6 @@ export default function Config() {
   const { data, run } = useStore();
   const { open } = useModal();
   const m = data.meta;
-  const [valor, setValor] = useState(m.valorPadrao);
   const [cap, setCap] = useState(m.capacidadePadrao);
 
   // Per-unit hours: { [unitName]: 7-day array }
@@ -103,7 +102,6 @@ export default function Config() {
     }
 
     const payload = {
-      valorPadrao: Number(valor) || m.valorPadrao,
       capacidadePadrao: Math.max(1, parseInt(cap, 10) || m.capacidadePadrao),
       horarioUnidades,
       pixKey: pixKey.trim(),
@@ -134,14 +132,14 @@ export default function Config() {
       <div className="cfg-cols">
       {/* PAGAMENTO / PIX */}
       <div className="panel cfg-sec">
-        <div className="cfg-h"><span className="cfg-ic">💠</span><div><h2>Pagamento (Pix)</h2><p>A chave usada pelas alunas para pagar a reserva das aulas.</p></div></div>
+        <div className="cfg-h"><span className="cfg-ic">💠</span><div><h2>Pagamento (Pix)</h2><p>A chave usada pelas alunas para pagar a mensalidade.</p></div></div>
         <div className="row2">
           <div className="field"><label>Chave Pix</label><input value={pixKey} onChange={(e) => setPixKey(e.target.value)} placeholder="ex.: 31988880000, e-mail, CPF ou chave aleatória" /></div>
           <div className="field"><label>Nome do recebedor</label><input value={pixName} onChange={(e) => setPixName(e.target.value)} placeholder="Fios que Curam" /></div>
         </div>
         {pixKey.trim()
           ? <div className="cfg-preview">🔑 Alunas verão: <b>{pixName.trim() || "—"}</b> · chave <b>{pixKey.trim()}</b></div>
-          : <div className="cfg-warn">⚠️ Sem chave Pix cadastrada, as alunas não conseguem pagar a reserva.</div>}
+          : <div className="cfg-warn">⚠️ Sem chave Pix cadastrada, as alunas não conseguem pagar a mensalidade.</div>}
 
         {/* As travas de atraso, desligadas até você confirmar que quer cobrar assim */}
         <div style={{ marginTop: "1.1rem", borderTop: "1px solid var(--line)", paddingTop: ".9rem" }}>
@@ -248,11 +246,12 @@ export default function Config() {
 
       {/* PADRÕES DE RESERVA */}
       <div className="panel cfg-sec">
-        <div className="cfg-h"><span className="cfg-ic">🧶</span><div><h2>Padrões de reserva</h2><p>Valores aplicados automaticamente ao criar horários e marcações.</p></div></div>
-        <div className="row2">
-          <div className="field"><label>Valor padrão da reserva (R$)</label><input type="number" min="0" value={valor} onChange={(e) => setValor(e.target.value)} /></div>
-          <div className="field"><label>Capacidade padrão das turmas (vagas)</label><input type="number" min="1" value={cap} onChange={(e) => setCap(e.target.value)} /></div>
-        </div>
+        <div className="cfg-h"><span className="cfg-ic">🧶</span><div><h2>Padrões de reserva</h2><p>Aplicados automaticamente ao criar horários e marcações.</p></div></div>
+        {/* O "valor padrão da reserva" saiu daqui em 30/08/2026: a aula não tem
+            preço próprio — quem se paga é a mensalidade do mês. Os únicos valores
+            por aula que sobraram (1ª mensalidade e aula extra) estão na tabela
+            de preços acima. */}
+        <div className="field"><label>Capacidade padrão das turmas (vagas)</label><input type="number" min="1" value={cap} onChange={(e) => setCap(e.target.value)} /></div>
       </div>
 
       {/* UNIDADES & PROFISSIONAIS */}
