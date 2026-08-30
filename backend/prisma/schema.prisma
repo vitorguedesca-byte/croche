@@ -33,6 +33,13 @@ model Client {
   // vez pela migration 20260822000000 — a regra é travada, não se edita na ficha.
   podeSabado   Boolean @default(false)
   podeNoite    Boolean @default(false)
+  /* Troca de plano: `weeklyFreq` já guarda o plano NOVO (é o que a ficha mostra
+     e o que vale daqui pra frente), e estes dois dizem de quando ele vale. Aula
+     em data anterior a `weeklyFreqDesde` ainda é medida pelo teto antigo — sem
+     isso, subir de 1x para 2x no dia 30 abriria uma vaga extra na semana que
+     está acabando, num mês que já foi cobrado pelo plano velho. */
+  weeklyFreqAnterior Int?    // plano de antes da troca
+  weeklyFreqDesde    String? @db.VarChar(7) // 'YYYY-MM' a partir da qual o novo vale
   monthlyValue Float?  // valor individual da mensalidade; null = usa o valor do plano
   billingDay   Int?    // dia de vencimento (1-28); null = usa o padrão
   // ----- taxa de matrícula da aula experimental -----

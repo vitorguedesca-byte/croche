@@ -2508,8 +2508,41 @@ function useClientForm(client, onDone) {
     const mudouFreq = eraMensal && querMensal && Number(plano) !== (client.weeklyFreq || 1);
     const precisaMatricular = querMensal && (!client || !eraMensal || mudouFreq);
 
-    if (precisaMatricular) {
-      const valor = Number(plano) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120);
+    const valorDoPlano = (f) => (Number(f) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120));
+
+    /* TROCA de plano de quem já é mensalista. Vale a partir do mês que vem, nas
+       duas pontas — dinheiro e aulas. O aviso diz exatamente isso em números,
+       porque é a pergunta que a Inêz faria depois de salvar: "a partir de
+       quando ela paga o valor novo?". */
+    if (mudouFreq) {
+      const de = client.weeklyFreq || 1;
+      const para = Number(plano);
+      const vDe = valorDoPlano(de);
+      const vPara = valorDoPlano(para);
+      const desde = compLabel(addComp(compAtual(), 1));
+      const individual = client.monthlyValue != null;
+
+      const linhas = [
+        `${client.name} sai do plano de ${de}x por semana e entra no de ${para}x.`,
+        "",
+        `A partir de ${desde}:`,
+        individual
+          ? `• Mensalidade: continua ${money(client.monthlyValue)} — ela tem valor individual, que manda sobre a tabela do plano`
+          : `• Mensalidade: ${money(vDe)} → ${money(vPara)} (${vPara > vDe ? "+" : "−"}${money(Math.abs(vPara - vDe))})`,
+        `• Aulas por semana: ${de} → ${para}`,
+        "",
+        `${compLabel(compAtual())} não muda: a mensalidade deste mês fica em ` +
+          `${individual ? money(client.monthlyValue) : money(vDe)} e o teto da semana atual continua ${de}.`,
+      ];
+      const ok = await confirmModal({
+        title: "Trocar o plano de mensalista",
+        message: linhas.join("\n"),
+        confirmLabel: `Trocar para ${para}x por semana`,
+        cancelLabel: "Voltar",
+      });
+      if (!ok) return;
+    } else if (precisaMatricular) {
+      const valor = valorDoPlano(plano);
       // O dia da matrícula vira o dia de vencimento dela, e a 1ª mensalidade
       // cai no mês seguinte — a não ser que você já tenha fixado um dia acima.
       const dia = billingDay === "" ? Number(todayISO().slice(8, 10)) : Number(billingDay);
@@ -2527,8 +2560,25 @@ function useClientForm(client, onDone) {
     if (precisaMatricular) {
       const id = client ? client.id : saved?.id;
       const r = id ? await run(api.enroll(id, { weeklyFreq: Number(plano), mensalistaTipo: tipoMens, billingDay: billingDay === "" ? undefined : Number(billingDay) })) : null;
-      toast(`📅 Mensalista ${tipoMens} ${plano}x/semana.` +
-        (r?.primeiroVencimento ? ` 1ª mensalidade vence ${fmtDate(r.primeiroVencimento)}.` : ""));
+      /* O backend devolve `troca` quando foi mudança de plano (e não matrícula
+         nova). Repetimos o resultado no aviso: a Inêz acabou de confirmar uma
+         tela de números e precisa ver que foi isso mesmo que gravou. */
+      const t = r?.troca;
+      if (t) {
+        toast(
+          `📅 Plano trocado: ${t.freqDe}x → ${t.freqPara}x por semana.\n` +
+          (t.temValorIndividual
+            ? `A mensalidade não muda (valor individual de ${money(t.valorIndividual)}).`
+            : `${money(t.valorDe)} → ${money(t.valorPara)} a partir de ${compLabel(t.valeAPartirDe)}.`) +
+          (t.fixouMesCorrente != null
+            ? ` ${compLabel(t.mesCorrente)} fica em ${money(t.fixouMesCorrente)}.`
+            : ""),
+          "success"
+        );
+      } else {
+        toast(`📅 Mensalista ${tipoMens} ${plano}x/semana.` +
+          (r?.primeiroVencimento ? ` 1ª mensalidade vence ${fmtDate(r.primeiroVencimento)}.` : ""));
+      }
     } else if (saved?.encerrado) {
       const e = saved.encerrado;
       toast(`Inscrição encerrada. ${e.aulas} aula(s) e ${e.mensalidades} mensalidade(s) canceladas.` +

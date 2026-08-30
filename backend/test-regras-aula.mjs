@@ -1,6 +1,6 @@
 // Teste das regras de marcação do mensalista (backend/src/regrasAula.js)
 import {
-  checarRegras, janelaEscala,
+  checarRegras, janelaEscala, freqNaData,
   segundaDaSemana, mesmaSemana, tetoSemanal, PGTO_PLANO,
   somarComp, diaDoMes,
   encargosDaMensalidade, diasEntreISO, MULTA_ATRASO_REAIS, JUROS_DIA_PERCENTUAL,
@@ -116,6 +116,26 @@ ok(c(plano1x, alvoQua, { aulasAtivas: [doPlano("2026-08-25")], ignorarTeto: true
   "ignorarTeto: reposição e aula extra passam por cima do teto");
 ok(c(planoAntigo, alvoQua, { aulasAtivas: [doPlano("2026-08-25"), doPlano("2026-08-27")] }).ok === true,
   "plano antigo não é barrado pelo teto");
+
+/* Troca de plano: vale a partir de weeklyFreqDesde. Antes disso, o teto continua
+   medindo pelo plano ANTIGO — senão subir de 1x para 2x no dia 30 abriria uma
+   vaga extra na semana que está acabando, num mês já cobrado pelo plano velho. */
+console.log("\n— troca de plano: o teto muda só na virada do mês —");
+const trocou = { plan: "mensalista", mensalistaTipo: "fixo", weeklyFreq: 2, weeklyFreqAnterior: 1, weeklyFreqDesde: "2026-09" };
+ok(freqNaData(trocou, "2026-08-31") === 1, "31/08 (mês da troca): ainda vale o plano antigo, 1x");
+ok(freqNaData(trocou, "2026-09-01") === 2, "01/09: já vale o plano novo, 2x");
+ok(freqNaData(trocou, "2026-12-10") === 2, "meses depois: o plano novo continua valendo");
+ok(freqNaData(trocou, "2026-07-15") === 1, "mês anterior à troca: plano antigo");
+// sem troca registrada, é só o weeklyFreq
+ok(freqNaData({ weeklyFreq: 2 }, "2026-08-31") === 2, "sem troca: usa o weeklyFreq direto");
+ok(freqNaData({ weeklyFreq: 1, weeklyFreqAnterior: 2 }, "2026-08-31") === 1, "anterior sem 'desde' é ignorado");
+ok(freqNaData({}, "2026-08-31") === 0, "sem plano nenhum: 0");
+
+// e o teto usa esse resolvedor: 1 aula na semana já enche o plano antigo
+ok(c(trocou, { date: "2026-08-26", time: "09:00" }, { aulasAtivas: [doPlano("2026-08-25")] }).codigo === "teto",
+  "agosto: 1 aula marcada já bate no teto antigo de 1x");
+ok(c(trocou, { date: "2026-09-02", time: "09:00" }, { aulasAtivas: [doPlano("2026-09-01")] }).ok === true,
+  "setembro: com o plano novo, a 2ª aula da semana passa");
 
 /* Sem regras de data, o teto é a única coisa que barra por data — e num sábado
    com a semana cheia, é ele que responde. */

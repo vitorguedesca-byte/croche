@@ -2302,12 +2302,101 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, billingDay, m
   };
 }
 
-// Converter pelo painel — body { weeklyFreq, slotId?, billingDay? }
+/* ---------- TROCAR O PLANO DE QUEM JÁ É MENSALISTA ----------
+
+   Isto não existia: `converterEmMensalista` recusava com "Esta aluna já é
+   mensalista." e o PATCH /api/clients nem aceitava `weeklyFreq`. O plano era
+   imutável depois de definido — o painel tentava trocar e levava 409.
+
+   A troca vale A PARTIR DO MÊS SEGUINTE, nas duas pontas:
+
+   • Dinheiro — o mês corrente é fixado no valor ANTIGO em `MonthlyPrice`. Não
+     basta contar com "a mensalidade deste mês já foi gerada, então já tem o
+     valor velho": a geração automática está desligada e a Inêz emite à mão,
+     às vezes depois do dia. Sem fixar, uma mensalidade de agosto emitida em
+     31/08 sairia no preço de setembro.
+
+   • Aulas — `weeklyFreq` já passa a ser o plano novo (é o que a ficha mostra),
+     e `weeklyFreqAnterior`/`weeklyFreqDesde` dizem de quando ele vale. O teto
+     semanal mede pela data da aula, então a semana que está acabando continua
+     medida pelo plano velho.
+
+   Devolve o antes/depois pronto para a tela dizer à Inêz o que aconteceu. */
+async function trocarPlanoMensalista(client, { weeklyFreq, mensalistaTipo, billingDay }) {
+  const freqAntiga = Number(client.weeklyFreq) || 1;
+  const freqNova = Number(weeklyFreq) === 2 ? 2 : 1;
+  const tipoAntigo = client.mensalistaTipo === "escala" ? "escala" : "fixo";
+  const tipoNovo = mensalistaTipo === undefined
+    ? tipoAntigo
+    : (mensalistaTipo === "escala" ? "escala" : "fixo");
+
+  const compAtual = competenciaAtual();
+  const desde = somarComp(compAtual, 1);
+  const mudouFreq = freqNova !== freqAntiga;
+
+  /* Valor individual manda sobre o plano, então trocar de 1x para 2x não muda o
+     que ela paga — e não há mês corrente a proteger. A tela precisa dizer isso,
+     senão a Inêz troca o plano esperando um reajuste que não vem. */
+  const temValorIndividual = client.monthlyValue != null;
+  let fixouMesCorrente = null;
+  if (mudouFreq && !temValorIndividual) {
+    const valorAntigo = valorDoPlano(freqAntiga) || 0;
+    if (valorAntigo > 0) {
+      await prisma.monthlyPrice.upsert({
+        where: { clientId_competencia: { clientId: client.id, competencia: compAtual } },
+        update: { amountCents: Math.round(valorAntigo * 100), origem: "ajuste", motivo: `Plano trocado para ${freqNova}x — este mês mantém o valor do plano anterior` },
+        create: { clientId: client.id, competencia: compAtual, amountCents: Math.round(valorAntigo * 100), origem: "ajuste", motivo: `Plano trocado para ${freqNova}x — este mês mantém o valor do plano anterior` },
+      });
+      fixouMesCorrente = valorAntigo;
+    }
+  }
+
+  const atualizado = await prisma.client.update({
+    where: { id: client.id },
+    data: {
+      weeklyFreq: freqNova,
+      mensalistaTipo: tipoNovo,
+      ...(mudouFreq ? { weeklyFreqAnterior: freqAntiga, weeklyFreqDesde: desde } : {}),
+      ...(billingDay != null && billingDay !== ""
+        ? { billingDay: Math.min(28, Math.max(1, parseInt(billingDay, 10) || 1)) }
+        : {}),
+    },
+  });
+
+  console.log(`[plano] ${client.name}: ${freqAntiga}x → ${freqNova}x (${tipoAntigo} → ${tipoNovo}), valendo de ${desde}.`);
+
+  return {
+    client: atualizado,
+    troca: {
+      mudouFreq,
+      mudouTipo: tipoNovo !== tipoAntigo,
+      freqDe: freqAntiga,
+      freqPara: freqNova,
+      tipoDe: tipoAntigo,
+      tipoPara: tipoNovo,
+      valorDe: valorDoPlano(freqAntiga) || 0,
+      valorPara: valorDoPlano(freqNova) || 0,
+      temValorIndividual,
+      valorIndividual: client.monthlyValue ?? null,
+      mesCorrente: compAtual,
+      valeAPartirDe: desde,
+      fixouMesCorrente,
+    },
+  };
+}
+
+/* Matricular OU trocar o plano, pelo painel.
+   body { weeklyFreq, slotId?, billingDay?, mensalistaTipo? } */
 app.post("/api/clients/:id/enroll", wrap(async (req, res) => {
   const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
-  try { res.json(await converterEmMensalista(client, req.body || {})); }
-  catch (e) { res.status(e.code || 500).json({ error: e.message }); }
+  try {
+    // Já é mensalista com plano definido? Então isto é troca, não matrícula.
+    const jaEMensalista = client.plan === "mensalista" && !!client.weeklyFreq;
+    res.json(jaEMensalista
+      ? await trocarPlanoMensalista(client, req.body || {})
+      : await converterEmMensalista(client, req.body || {}));
+  } catch (e) { res.status(e.code || 500).json({ error: e.message }); }
 }));
 
 /* Devolução INTEGRAL da 1ª mensalidade — a aluna fez a experimental e não quis

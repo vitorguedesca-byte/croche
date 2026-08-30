@@ -115,8 +115,28 @@ export const contaNoTeto = (b) => b && b.status !== "cancelada" && b.paymentMeth
 
 /* Quantas aulas do plano a aluna já tem na semana da data alvo, e qual é o teto.
    `aulasAtivas` são as aulas dela (canceladas podem vir junto, são filtradas). */
+/* Quantas aulas por semana o plano dela dá NAQUELA data.
+
+   Normalmente é só `weeklyFreq`. Mas quando o plano foi trocado, a troca vale a
+   partir de uma competência ('YYYY-MM' em `weeklyFreqDesde`): antes dela ainda
+   vale o plano antigo. É o que impede que subir de 1x para 2x no dia 30 abra
+   uma vaga extra na semana que está acabando — semana de um mês que já foi
+   cobrado pelo plano velho.
+
+   Compara por competência (o mês da aula), não por data cheia: é o mês que
+   define o que foi cobrado. Semana virada entre dois meses segue o mês do dia
+   escolhido, que é o dia da aula em questão. */
+export function freqNaData(client, date) {
+  const atual = Number(client?.weeklyFreq) || 0;
+  const antes = Number(client?.weeklyFreqAnterior) || 0;
+  const desde = client?.weeklyFreqDesde;
+  if (!antes || !desde) return atual;
+  const comp = String(date || "").slice(0, 7);
+  return comp && comp < desde ? antes : atual;
+}
+
 export function tetoSemanal(client, date, aulasAtivas) {
-  const limite = Number(client?.weeklyFreq) || 0;
+  const limite = freqNaData(client, date);
   const marcadas = (aulasAtivas || []).filter((b) => contaNoTeto(b) && mesmaSemana(b.date, date)).length;
   return { limite, marcadas, restantes: limite ? Math.max(0, limite - marcadas) : null };
 }
