@@ -750,6 +750,13 @@
   .pt-tab.on{background:#fff;color:var(--green-deep);box-shadow:0 3px 10px -5px rgba(0,0,0,.3)}
   .pt-tab-badge{background:var(--terracota);color:#fff;font-size:.8rem;min-width:22px;height:22px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;padding:0 .3rem}
 
+  /* Recorte das "próximas aulas" (semana / mês / todas). É o mesmo desenho das
+     abas, num tamanho menor: é um filtro dentro da tela, não a navegação dela. */
+  .pt-filtro{display:grid;grid-template-columns:repeat(3,1fr);gap:.4rem;background:var(--cream);border:1px solid var(--line);border-radius:14px;padding:4px;margin-bottom:1rem}
+  .pt-filtro button{border:none;background:none;border-radius:10px;padding:.6rem .4rem;font-size:.98rem;font-weight:800;color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:.35rem;transition:.15s}
+  .pt-filtro button.on{background:#fff;color:var(--green-deep);box-shadow:0 3px 10px -5px rgba(0,0,0,.3)}
+  .pt-filtro-n{font-size:.82rem;font-weight:700;opacity:.65}
+
   /* pagamentos do portal */
   .pt-pay{background:#fff;border:1px solid var(--line);border-left:6px solid var(--warn);border-radius:14px;padding:1.2rem;margin-bottom:1rem}
   .pt-pay-top{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:.9rem}

@@ -83,6 +83,11 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
      extra já paga. Era um booleano ("repondo") e virou modo quando a aula extra
      passou a ser comprada aqui dentro. */
   const [modo, setModo] = useState("normal");
+  /* Recorte de "Minhas próximas aulas". A mensalista tem aula marcada semana a
+     semana até onde a agenda foi montada — mostrar tudo virava uma parede de
+     cartões iguais. Começa no MÊS: é o horizonte que ela realmente planeja, e
+     sempre tem algo dentro (a semana pode estar vazia numa sexta à noite). */
+  const [periodo, setPeriodo] = useState("mes"); // semana | mes | todas
   const marcarLiberada = (id, campos) => setLiberadasAgora((m) => ({ ...m, [id]: { status: "cancelada", ...campos } }));
 
   const load = async (p) => {
@@ -190,6 +195,21 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   const bookings = data.bookings.map((b) => (liberadasAgora[b.id] ? { ...b, ...liberadasAgora[b.id] } : b));
   const ativos = bookings.filter((b) => b.status !== "cancelada");
   const prox = ativos.filter((b) => b.date >= t).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  /* Fim de cada recorte, sempre contando de HOJE para a frente:
+     semana = até o domingo desta semana (a mesma semana do teto do plano)
+     mês    = até o último dia do mês corrente */
+  const fimDaSemana = addDays(segundaISO(t), 6);
+  const fimDoMes = (() => {
+    const [y, m] = t.split("-").map(Number);
+    return `${y}-${String(m).padStart(2, "0")}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
+  })();
+  const limitePeriodo = periodo === "semana" ? fimDaSemana : periodo === "mes" ? fimDoMes : null;
+  const proxFiltradas = limitePeriodo ? prox.filter((b) => b.date <= limitePeriodo) : prox;
+  const PERIODOS = [
+    ["semana", "Semana", prox.filter((b) => b.date <= fimDaSemana).length],
+    ["mes", "Mês", prox.filter((b) => b.date <= fimDoMes).length],
+    ["todas", "Todas", prox.length],
+  ];
   const passadas = ativos.filter((b) => b.date < t).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
   // Aulas que ela liberou (cancelou ou avisou que não vai): continuam visíveis
   // para ela ter certeza de que o aviso foi registrado.
@@ -327,7 +347,18 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
         />
 
         <h2 className="pt-h2">Minhas próximas aulas</h2>
-        {prox.length ? prox.map((b) => (
+        {/* Só aparece quando há mais aula do que cabe no recorte mais curto —
+            senão o filtro seria um controle para não fazer nada. */}
+        {prox.length > PERIODOS[0][2] && (
+          <div className="pt-filtro">
+            {PERIODOS.map(([k, label, n]) => (
+              <button key={k} className={periodo === k ? "on" : ""} onClick={() => setPeriodo(k)}>
+                {label} <span className="pt-filtro-n">{n}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {proxFiltradas.length ? proxFiltradas.map((b) => (
           <div className="pt-aula" key={b.id}>
             <div className="pt-when"><b>{fmtDateLong(b.date)}</b><span>{b.time} · {b.unit}</span></div>
             <div className={`pt-status ${b.status}`}>{statusText(b)}</div>
@@ -352,7 +383,14 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
               </div>
             )}
           </div>
-        )) : <div className="pt-empty">Você não tem aulas marcadas.<br />Toque em <b>Marcar nova aula</b> para começar. 🧶</div>}
+        )) : prox.length ? (
+          /* Tem aula marcada, só não neste recorte — dizer "você não tem aulas"
+             aqui seria mentira e assustaria à toa. */
+          <div className="pt-empty">
+            Nenhuma aula {periodo === "semana" ? "no resto desta semana" : "no resto deste mês"}.<br />
+            <button className="pt-link" onClick={() => setPeriodo("todas")}>Ver todas as {prox.length} aulas marcadas</button>
+          </div>
+        ) : <div className="pt-empty">Você não tem aulas marcadas.<br />Toque em <b>Marcar nova aula</b> para começar. 🧶</div>}
 
         {liberadas.length > 0 && (<>
           <h2 className="pt-h2">Aulas que você liberou</h2>
