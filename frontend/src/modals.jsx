@@ -13,8 +13,7 @@ import {
   competenciasDoAluno, compLabel, mensalidadeDe, matriculaISO,
   compAtual, addComp, precoDaComp, mensalidadeDaComp,
   WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays,
-  ehSabadoISO, tipoMensalista, TIPO_MENSALISTA_LABEL,
-  motivoForaDaRegra, motivoForaDaRegraDow,
+  tipoMensalista, TIPO_MENSALISTA_LABEL,
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
@@ -712,23 +711,11 @@ export function BookingForm({ slotId }) {
 
   const save = async () => {
     if (!name.trim()) return toast("Informe o nome.", "error");
-    /* Se a aluna escolhida é mensalista, avisa quando a marcação cai fora do
-       plano (sábado / a partir das 18h). Este caminho é da Inêz, então é só
-       aviso — quem decide é ela. A regra dura vive no portal e no backend. */
-    const cli = selectedClient || data.clients.find((c) => c.name === name.trim());
-    const foraDatas = cli ? dates.filter((d) => motivoForaDaRegra(cli, { date: d, time })) : [];
-    if (foraDatas.length) {
-      const motivo = motivoForaDaRegra(cli, { date: foraDatas[0], time });
-      const ok = await confirmModal({
-        title: "Marcação fora do plano",
-        message: `${cli.name} é mensalista e ${motivo}.\n\n` +
-          `${foraDatas.length} data(s) desta marcação caem nessa situação. Marcar assim abre uma exceção.`,
-        confirmLabel: "Marcar mesmo assim",
-        cancelLabel: "Voltar",
-        tone: "danger",
-      });
-      if (!ok) return;
-    }
+    /* Havia aqui um aviso de "marcação fora do plano", para a data que caísse em
+       sábado ou a partir das 18h. As duas regras saíram (30/08 e 26/08/2026),
+       então não existe mais data que fure o plano. O que ainda restringe é o
+       teto da semana, e quem responde por ele é o backend — que devolve o
+       motivo pronto, porque precisa das aulas da semana inteira para decidir. */
     // value 0: a aula não tem preço próprio — quem se paga é a mensalidade do mês.
     const payload = { clientName: name.trim(), phone: phone.trim(), unit, value: 0, date, time, slotId: slot && !repetindo ? slot.id : undefined };
     if (repetindo) payload.dates = dates;
@@ -1968,11 +1955,6 @@ export function planoLabel(c, meta = {}) {
     <span className="badge b-ok">📅 {freq}</span>{" "}
     <span className="badge b-info">{tipo === "escala" ? "🙋" : "📌"} {TIPO_MENSALISTA_LABEL[tipo]}</span>{" "}
     <span className="cli-sub">{money(valor)}/mês</span>
-    {c.podeSabado && (
-      <> <span className="cli-sub" title="Direito herdado: ela já estava marcando no sábado quando a regra mudou.">
-        · pode sábado
-      </span></>
-    )}
   </>);
 }
 
@@ -2059,9 +2041,8 @@ export function EnrollForm({ client }) {
   const t = todayISO();
   const livres = data.slots
     .filter((s) => s.date >= t && slotBookings(data, s.id).length < slotCapacity(s))
-    // A 1ª aula oficial já é aula de mensalista: sábado saiu do plano e não
-    // entra para quem está começando agora. A turma das 18h entra normalmente.
-    .filter((s) => !ehSabadoISO(s.date))
+    // Sem regra de data no plano (sábado saiu em 30/08, 18h em 26/08), a 1ª aula
+    // oficial pode cair em qualquer turma livre da grade.
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const valor = freq === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120);
 
@@ -2113,7 +2094,6 @@ export function EnrollForm({ client }) {
       </div>
       <div className="field">
         <label>1ª aula oficial <span style={{ color: "var(--muted)", fontWeight: 400 }}>(opcional)</span></label>
-        <div className="help" style={{ marginBottom: ".4rem" }}>Sábado não faz parte do plano — por isso não aparece na lista.</div>
         <Select
           value={slotId}
           onChange={setSlotId}
@@ -2204,19 +2184,12 @@ function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso }) {
   const livres = data.slots
     .filter((s) => s.date >= t && slotBookings(data, s.id).length < slotCapacity(s))
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-  /* Sábado e horário a partir das 18h saíram do plano de mensalista. Aqui quem
-     marca é a Inêz, então a turma continua na lista: ela vê o aviso e decide.
-     Confirmando, a chamada vai com `forcar` e o backend deixa passar. */
+  /* Nenhuma data fura mais o plano — as regras de sábado e das 18h saíram. O que
+     ainda pode barrar é o teto da semana, e aí quem avisa é o backend. */
   const marcar = async (s) => {
-    const fora = motivoForaDaRegra(client, s);
-    if (!(await confirmModal({
-      title: titulo,
-      message: confirmar(s) + (fora ? `\n\n⚠️ Atenção: ${fora}. Marcando assim mesmo, você está abrindo uma exceção para ${client.name}.` : ""),
-      confirmLabel: fora ? "Marcar mesmo assim" : titulo,
-      tone: fora ? "danger" : undefined,
-    }))) return;
+    if (!(await confirmModal({ title: titulo, message: confirmar(s), confirmLabel: titulo }))) return;
     try {
-      await run(acao(s, !!fora)); // run já avisa o erro na tela
+      await run(acao(s, false)); // run já avisa o erro na tela
       toast(sucesso);
       open(<ClientProfile client={client} />);
     } catch { /* erro já reportado pelo run */ }
@@ -2228,14 +2201,12 @@ function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso }) {
       <div className="help">{ajuda}</div>
       <div style={{ marginTop: ".8rem" }}>
         {livres.length ? livres.slice(0, 40).map((s) => {
-          const fora = motivoForaDaRegra(client, s);
           return (
             <div className="roster-row row-click" key={s.id} onClick={() => marcar(s)}>
               <div className="rr-info">
                 <b>{fmtDate(s.date)} · {faixaHorario(s.time, data.meta?.duracaoAulaMin)}</b>
                 <div className="cli-sub">
                   {s.unit} · {slotCapacity(s) - slotBookings(data, s.id).length} vaga(s)
-                  {fora && <> · <span style={{ color: "var(--warn)" }}>⚠️ fora do plano ({fora})</span></>}
                 </div>
               </div>
               <button className="btn sec sm">Escolher</button>
@@ -2321,10 +2292,7 @@ export function BatchBookForm({ client }) {
         const proxVagas = prox ? slotCapacity(prox) - slotBookings(data, prox.id).length : null;
         const proxCap = prox ? slotCapacity(prox) : null;
         const prof = prox?.prof || g.slots[0]?.prof || "";
-        // Sábado / a partir das 18h: a turma continua na lista, mas marcada, e
-        // escolhê-la exige confirmar a exceção (quem manda na agenda é a Inêz).
-        const fora = motivoForaDaRegraDow(client, g.dow, g.time);
-        return { ...g, total: relevantes.length, ok, cheias, jaAgendadas, prox, proxVagas, proxCap, prof, fora, datas: relevantes.map((s) => s.date) };
+        return { ...g, total: relevantes.length, ok, cheias, jaAgendadas, prox, proxVagas, proxCap, prof, datas: relevantes.map((s) => s.date) };
       })
       .filter((g) => g.total > 0)
       .sort((a, b) => a.dow - b.dow || a.time.localeCompare(b.time));
@@ -2342,19 +2310,15 @@ export function BatchBookForm({ client }) {
 
   const save = async () => {
     if (!escolhidos.length) return toast("Escolha ao menos uma turma.", "error");
-    // Turmas fora do plano (sábado / a partir das 18h) precisam de confirmação
-    // explícita: sem ela, o backend pula essas datas em vez de agendar.
-    const excecoes = escolhidos.filter((g) => g.fora);
+    /* Só o teto do plano pede confirmação agora — as regras de data (sábado e a
+       partir das 18h) saíram, então não há mais "turma fora do plano". Sem
+       forçar, o backend agenda até o limite e pula o que passar. */
     let forcar = false;
-    if (excecoes.length || estouraTeto) {
-      const linhas = [
-        ...excecoes.map((g) => `${WEEKDAYS_SHORT[g.dow]} ${hhmm(g.time)} — ${g.fora}`),
-        ...(estouraTeto ? [`${escolhidos.length} turmas por semana, mas o plano dela é de ${limiteSemanal}x por semana`] : []),
-      ];
+    if (estouraTeto) {
       forcar = await confirmModal({
-        title: estouraTeto && !excecoes.length ? "Acima do plano contratado" : "Turma fora do plano",
-        message: `${linhas.join("\n")}\n\n` +
-          `Agendar ${client.name} assim abre uma exceção à regra do plano de mensalista.\n` +
+        title: "Acima do plano contratado",
+        message: `${escolhidos.length} turmas por semana, mas o plano de ${client.name} é de ${limiteSemanal}x por semana.\n\n` +
+          "Agendar assim abre uma exceção ao plano.\n" +
           "Voltando, o agendamento respeita o plano e pula o que passar do limite.",
         confirmLabel: "Agendar mesmo assim",
         cancelLabel: "Voltar e desmarcar",
@@ -2371,19 +2335,18 @@ export function BatchBookForm({ client }) {
         porHorario.get(g.time).push(...g.datas);
       });
       let agendadas = 0;
-      const p = { semTurma: 0, cheia: 0, jaAgendado: 0, foraDaRegra: 0, teto: 0 };
+      const p = { semTurma: 0, cheia: 0, jaAgendado: 0, teto: 0 };
       for (const [time, datas] of porHorario) {
         const r = await run(api.batchBook(client.id, { unit, time, dates: [...new Set(datas)], forcar }));
         agendadas += r?.agendadas ?? 0;
         const rp = r?.pulos || {};
         p.semTurma += rp.semTurma || 0; p.cheia += rp.cheia || 0; p.jaAgendado += rp.jaAgendado || 0;
-        p.foraDaRegra += rp.foraDaRegra || 0; p.teto += rp.teto || 0;
+        p.teto += rp.teto || 0;
       }
       close();
       toast(
         `✅ ${agendadas} aula(s) agendada(s).\n` +
         `Puladas: ${p.semTurma} sem turma · ${p.cheia} lotada(s) · ${p.jaAgendado} já agendada(s)` +
-        (p.foraDaRegra ? ` · ${p.foraDaRegra} fora do plano` : "") +
         (p.teto ? ` · ${p.teto} acima do plano semanal` : "") + "."
       );
     } finally { setBusy(false); }
@@ -2447,7 +2410,6 @@ export function BatchBookForm({ client }) {
                     <span className="bb-hora">{hhmm(g.time)}</span>
                     {on && <span className="bb-check">✓</span>}
                   </div>
-                  {g.fora && <div className="bb-prof" style={{ color: "var(--warn)" }} title={g.fora}>⚠️ fora do plano</div>}
                   
                   <div className="bb-vagas">
                     {g.proxVagas != null && (
@@ -2636,11 +2598,8 @@ function ClientFormFields({ f }) {
               <label style={{ display: "block", marginBottom: ".3rem" }}>Tipo de mensalista</label>
               <Select value={f.tipoMens} onChange={f.setTipoMens} options={TIPO_MENSALISTA_OPCOES} />
               <div className="help" style={{ marginTop: ".4rem" }}>
-                Nos dois tipos: sem sábado. Na <b>escala</b>, a aluna marca a próxima aula
-                no dia da aula dela.
-                {client?.podeSabado && (
-                  <> Esta aluna tem direito herdado a sábado.</>
-                )}
+                Na <b>escala</b>, a aluna marca a próxima aula no dia da aula dela.
+                Nos dois tipos vale o teto do plano: {client?.weeklyFreq || 1}x por semana.
               </div>
             </div>
           )}

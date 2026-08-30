@@ -1,6 +1,6 @@
 // Teste das regras de marcação do mensalista (backend/src/regrasAula.js)
 import {
-  checarRegras, horarioPermitido, janelaEscala, ehSabado,
+  checarRegras, janelaEscala,
   segundaDaSemana, mesmaSemana, tetoSemanal, PGTO_PLANO,
   somarComp, diaDoMes,
   encargosDaMensalidade, diasEntreISO, MULTA_ATRASO_REAIS, JUROS_DIA_PERCENTUAL,
@@ -10,18 +10,14 @@ let falhas = 0;
 const ok = (cond, nome) => { console.log(`${cond ? "  ok" : "FALHA"}  ${nome}`); if (!cond) falhas++; };
 
 // 2026: 22/08 = sábado · 21/08 = sexta · 24/08 = segunda
-ok(ehSabado("2026-08-22") === true, "22/08/2026 é sábado");
-ok(ehSabado("2026-08-21") === false, "21/08/2026 não é sábado");
-const fixo = { plan: "mensalista", mensalistaTipo: "fixo", podeSabado: false };
-const fixoHerdado = { plan: "mensalista", mensalistaTipo: "fixo", podeSabado: true };
-const escala = { plan: "mensalista", mensalistaTipo: "escala", podeSabado: false };
+const fixo = { plan: "mensalista", mensalistaTipo: "fixo" };
+const escala = { plan: "mensalista", mensalistaTipo: "escala" };
 const avulsa = { plan: "avulso" };
 const HOJE = "2026-08-24"; // segunda
 
 const c = (cli, alvo, ctx = {}) => checarRegras(cli, alvo, { hoje: HOJE, aulasAtivas: [], ...ctx });
 
 console.log("\n— fixo —");
-ok(c(fixo, { date: "2026-08-22", time: "10:00" }).codigo === "sabado", "fixo: sábado barrado");
 ok(c(fixo, { date: "2026-08-24", time: "17:30" }).ok === true, "fixo: 17:30 passa");
 ok(c(fixo, { date: "2026-08-24", time: "09:00" }).ok === true, "fixo: seg 09:00 passa");
 
@@ -36,8 +32,13 @@ ok(c(fixo, { date: "2026-08-24", time: "19:30" }).ok === true, "fixo: 19:30 pass
 ok(c(fixo, { date: "2026-08-24", time: "18:00 as 20:00" }).ok === true, "fixo: faixa '18:00 as 20:00' passa");
 ok(c(fixo, { date: "2026-08-24", time: "9:00" }).ok === true, "fixo: '9:00' sem zero à esquerda passa");
 
-console.log("\n— fixo com direito herdado de sábado —");
-ok(c(fixoHerdado, { date: "2026-08-22", time: "10:00" }).ok === true, "herdado: sábado passa");
+/* A regra "sábado não faz parte do plano" foi REMOVIDA em 30/08/2026 — a escola
+   tem 180 turmas de sábado na grade e 17 alunas fazendo 1.066 aulas nelas.
+   Estes casos existem para que ela não volte por acidente. 22/08/2026 é sábado. */
+console.log("\n— sábado faz parte do plano (regra removida) —");
+ok(c(fixo, { date: "2026-08-22", time: "10:00" }).ok === true, "fixo: sábado passa");
+ok(c(escala, { date: "2026-08-22", time: "09:00" }, { ignorarJanela: true }).ok === true, "escala: sábado passa");
+ok(c(fixo, { date: "2026-08-22", time: "19:00" }).ok === true, "fixo: sábado à noite passa");
 
 console.log("\n— avulsa (fora do plano de mensalista) —");
 ok(c(avulsa, { date: "2026-08-22", time: "19:00" }).ok === true, "avulsa: sábado à noite passa");
@@ -59,23 +60,17 @@ ok(c(escala, alvoOk, {
   aulasAtivas: [{ date: HOJE, time: "14:00", status: "confirmada" }, { date: "2026-08-28", time: "09:00", status: "confirmada" }],
 }).ok === true, "escala: com aula hoje pode marcar mais de uma (sem teto no dia)");
 
-console.log("\n— escala: a regra de sábado vale junto —");
-ok(c(escala, { date: "2026-08-22", time: "09:00" }, { aulasAtivas: [{ date: HOJE, time: "14:00", status: "confirmada" }] }).codigo === "sabado",
-  "escala: sábado barrado mesmo com a janela aberta");
+console.log("\n— escala: nenhuma data barra mais, só a janela —");
+ok(c(escala, { date: "2026-08-22", time: "09:00" }, { aulasAtivas: [{ date: HOJE, time: "14:00", status: "confirmada" }] }).ok === true,
+  "escala: sábado passa com a janela aberta");
 ok(c(escala, { date: "2026-08-26", time: "18:30" }, { aulasAtivas: [{ date: HOJE, time: "14:00", status: "confirmada" }] }).ok === true,
   "escala: 18:30 passa com a janela aberta");
 
 console.log("\n— ignorarJanela (aula extra / 1ª aula oficial / lote) —");
 ok(c(escala, alvoOk, { aulasAtivas: [{ date: "2026-08-27", time: "14:00", status: "confirmada" }], ignorarJanela: true }).ok === true,
   "ignorarJanela: a janela da escala não se aplica");
-ok(c(escala, { date: "2026-08-22", time: "09:00" }, { ignorarJanela: true }).codigo === "sabado",
-  "ignorarJanela: sábado continua barrado");
-
-console.log("\n— horarioPermitido (filtro do portal e do lote) —");
-ok(horarioPermitido(fixo, { date: "2026-08-22", time: "09:00" }) === false, "filtro: sábado fora");
-ok(horarioPermitido(fixo, { date: "2026-08-24", time: "18:00" }) === true, "filtro: 18:00 entra");
-ok(horarioPermitido(fixoHerdado, { date: "2026-08-22", time: "18:00" }) === true, "filtro: herdado mantém o sábado");
-ok(horarioPermitido(avulsa, { date: "2026-08-22", time: "20:00" }) === true, "filtro: avulsa não é filtrada");
+ok(c(escala, { date: "2026-08-22", time: "09:00" }, { ignorarJanela: true }).ok === true,
+  "ignorarJanela: sem a janela, o sábado passa");
 
 console.log("\n— janelaEscala: mensagem —");
 const j = janelaEscala([{ date: "2026-08-27", time: "14:00", status: "confirmada" }], HOJE);
@@ -90,7 +85,7 @@ ok(segundaDaSemana("2026-08-31") === "2026-08-31", "segunda 31/08 já é a seman
 ok(mesmaSemana("2026-08-25", "2026-08-28") === true, "terça e sexta da mesma semana");
 ok(mesmaSemana("2026-08-30", "2026-08-31") === false, "domingo e a segunda seguinte são semanas diferentes");
 
-const plano1x = { plan: "mensalista", mensalistaTipo: "fixo", weeklyFreq: 1, podeSabado: false };
+const plano1x = { plan: "mensalista", mensalistaTipo: "fixo", weeklyFreq: 1 };
 const plano2x = { ...plano1x, weeklyFreq: 2 };
 const planoAntigo = { ...plano1x, weeklyFreq: null };
 const doPlano = (date) => ({ date, time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO });
@@ -122,9 +117,11 @@ ok(c(plano1x, alvoQua, { aulasAtivas: [doPlano("2026-08-25")], ignorarTeto: true
 ok(c(planoAntigo, alvoQua, { aulasAtivas: [doPlano("2026-08-25"), doPlano("2026-08-27")] }).ok === true,
   "plano antigo não é barrado pelo teto");
 
-console.log("\n— ordem das regras: sábado vem antes do teto —");
-ok(c(plano1x, { date: "2026-08-22", time: "09:00" }, { aulasAtivas: [doPlano("2026-08-19")] }).codigo === "sabado",
-  "sábado é o motivo, mesmo com a semana cheia");
+/* Sem regras de data, o teto é a única coisa que barra por data — e num sábado
+   com a semana cheia, é ele que responde. */
+console.log("\n— o teto é o que sobrou barrando —");
+ok(c(plano1x, { date: "2026-08-22", time: "09:00" }, { aulasAtivas: [doPlano("2026-08-19")] }).codigo === "teto",
+  "sábado com a semana cheia: o motivo é o teto, não a data");
 
 /* ===================== ciclo de cobrança da mensalidade ===================== */
 console.log("\n— vencimento: o dia da matrícula, a partir do mês seguinte —");

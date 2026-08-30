@@ -4,26 +4,31 @@
    • FIXO   — tem dia e hora fixos; quem monta a agenda dela é a Inêz (em lote).
    • ESCALA — ela mesma marca a aula pelo portal, durante a semana.
 
-   As duas regras, valendo tanto para marcar aula normal quanto para marcar
-   reposição (remarcação):
+   Sobraram DUAS regras, valendo tanto para marcar aula normal quanto para
+   marcar reposição (remarcação):
 
-   1. Sábado não faz parte do plano.
+   1. O teto do plano: 1x ou 2x aulas por semana, conforme o contratado.
    2. Só na escala: a aluna marca a próxima aula NO DIA da aula dela — ou seja,
       a janela de marcação só abre nos dias em que ela tem aula. Quantas aulas
       ela marca nesse dia é com ela; o que a regra prende é o dia.
 
-   A regra 1 não vale para quem JÁ estava em sábado quando ela entrou: esse
-   direito herdado está gravado em `podeSabado`, preenchido pela migration
-   20260822000000. Ninguém novo ganha esse campo.
+   DUAS REGRAS DE DATA/HORA FORAM REMOVIDAS, e pelo mesmo motivo — as duas
+   diziam que parte da grade da escola não fazia parte do plano:
 
-   HOUVE UMA TERCEIRA REGRA, removida em 26/08/2026: "horário a partir das 18:00
-   não faz parte do plano". Ela nunca correspondeu à escola — a grade tem 213
-   turmas de 18:00 as 20:00, 190 delas no futuro, em duas unidades, até ago/2027.
-   Pior: o direito herdado foi deduzido da tabela Booking, que tinha 37 aulas no
-   total, então das 141 mensalistas ativas exatamente UMA recebeu `podeNoite` —
-   e ela nem era da turma da noite. Na prática a replicação em lote pulava toda
-   aula das 18h em silêncio. A coluna `podeNoite` continua no banco (não custa
-   nada e é histórico), mas não governa mais nada.
+   • "horário a partir das 18:00", removida em 26/08/2026: a grade tinha 213
+     turmas de 18:00 as 20:00, e das 141 mensalistas ativas exatamente UMA
+     recebeu `podeNoite`.
+   • "sábado", removida em 30/08/2026: a grade tem 180 turmas de sábado e 17
+     alunas fazendo 1.066 aulas aos sábados — e ZERO delas com `podeSabado`.
+
+   A causa é a mesma nas duas, e vale como aviso para a próxima: o direito
+   herdado foi deduzido da tabela `Booking`, que tinha 37 linhas no dia do
+   backfill. **Deduzir direito adquirido de uma tabela quase vazia devolve a
+   resposta errada com cara de certa** — e o efeito prático era a replicação em
+   lote pular essas datas em silêncio.
+
+   As colunas `podeSabado` e `podeNoite` continuam no banco (são históricas e
+   não custam nada), mas não governam mais nada.
 
    Alunas avulsas, aula experimental e quem está em `firstClass` não passam por
    aqui — a regra é do plano de mensalista.
@@ -50,14 +55,6 @@ export const PGTO_PLANO = "Mensalista";
 export function hhmm(t) {
   const m = String(t || "").match(/(\d{1,2}):(\d{2})/);
   return m ? `${String(m[1]).padStart(2, "0")}:${m[2]}` : "";
-}
-
-// 'YYYY-MM-DD' → true se cai no sábado. Usa UTC para não depender do fuso do
-// servidor (que roda em UTC em produção e em America/Sao_Paulo no dev).
-export function ehSabado(date) {
-  const m = String(date || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return false;
-  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay() === 6;
 }
 
 // "fixo" | "escala" | null (não é mensalista)
@@ -126,7 +123,7 @@ export function tetoSemanal(client, date, aulasAtivas) {
 
 /* Checagem única usada por todos os caminhos de marcação.
 
-   client       — o registro do Client (precisa de plan, mensalistaTipo, podeSabado, weeklyFreq)
+   client       — o registro do Client (precisa de plan, mensalistaTipo, weeklyFreq)
    alvo         — { date, time } do horário escolhido (só `date` é olhado hoje;
                   `time` segue no contrato porque quem chama já tem os dois e
                   uma regra de horário pode voltar)
@@ -136,19 +133,12 @@ export function tetoSemanal(client, date, aulasAtivas) {
    ctx.ignorarTeto — true quando a aula não é do plano (reposição, extra)
 
    Devolve { ok:true } ou { ok:false, codigo, motivo }.
-   `codigo` é 'sabado' | 'escala' | 'teto'. */
+   `codigo` é 'escala' | 'teto'. */
 export function checarRegras(client, alvo, ctx = {}) {
   const tipo = tipoMensalista(client);
   if (!tipo) return { ok: true, codigo: "", motivo: "" }; // avulsa/experimental seguem como antes
 
   const { date } = alvo || {};
-
-  if (ehSabado(date) && !client.podeSabado)
-    return {
-      ok: false,
-      codigo: "sabado",
-      motivo: "Sábado não faz parte do plano de mensalista. Escolha um dia de segunda a sexta. 💚",
-    };
 
   if (!ctx.ignorarTeto) {
     const { limite, marcadas } = tetoSemanal(client, date, ctx.aulasAtivas);
@@ -237,12 +227,10 @@ export function encargosDaMensalidade(inv, data) {
   return { dias, multaCents, jurosCents, totalCents: original + multaCents + jurosCents, atrasada: true };
 }
 
-/* Versão "só horário": ignora a janela da escala e olha apenas se a data/hora
-   cabe no plano da aluna. É o que filtra a lista de horários do portal — a
-   janela vira um aviso separado, para a aluna entender por que não dá hoje. */
-export function horarioPermitido(client, { date }) {
-  const tipo = tipoMensalista(client);
-  if (!tipo) return true;
-  if (ehSabado(date) && !client.podeSabado) return false;
-  return true;
-}
+/* Havia aqui um `horarioPermitido(client, { date })`, que respondia se a data
+   cabia no plano da aluna e filtrava a lista de horários do portal e do lote.
+   Ele existia só para as regras de sábado e das 18h; sem as duas, respondia
+   `true` para todo mundo — e um filtro que nunca filtra é pior do que nenhum,
+   porque parece que alguém está conferindo. Saiu junto com a regra em
+   30/08/2026. O que sobrou de regra por data é o teto semanal, que já vive em
+   `checarRegras` porque precisa das aulas da semana para decidir. */

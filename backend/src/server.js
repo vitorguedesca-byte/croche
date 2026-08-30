@@ -22,7 +22,6 @@ import {
   diaDoMes,
   encargosDaMensalidade,
   hhmm,
-  horarioPermitido,
   janelaEscala,
   mesmaSemana,
   segundaDaSemana,
@@ -370,8 +369,8 @@ async function concederCredito(client, booking) {
 
 // Marca uma aula de reposição consumindo o crédito mais antigo ainda válido.
 // Lança { code, message } para o wrap devolver o status certo.
-// A reposição segue as MESMAS regras da marcação normal (sábado, 18h e a janela
-// da escala) — foi assim que a Inêz pediu: remarcar não é uma porta de fuga.
+// A reposição segue as MESMAS regras da marcação normal (teto da semana e a
+// janela da escala) — foi assim que a Inêz pediu: remarcar não é porta de fuga.
 async function marcarReposicao(client, slotId, { forcar = false } = {}) {
   const eleg = await elegivelReposicao(client);
   if (!eleg.ok) throw Object.assign(new Error(eleg.motivo), { code: 403 });
@@ -454,8 +453,8 @@ async function marcarAulaExtra(client, slotId, { forcar = false, passe = false }
   const slot = await prisma.slot.findUnique({ where: { id: Number(slotId) } });
   if (!slot) throw Object.assign(new Error("Horário não encontrado."), { code: 404 });
   if (slot.date < t) throw Object.assign(new Error("Escolha uma aula futura."), { code: 400 });
-  // Sábado e horário noturno também não valem para a aula extra. A janela da
-  // escala e o teto semanal não se aplicam: a extra é justamente fora do plano.
+  // A janela da escala e o teto semanal não se aplicam: a aula extra é
+  // justamente uma aula fora do plano, comprada à parte.
   await exigirRegras(client, slot, { forcar, ignorarJanela: true, ignorarTeto: true });
   const dup = await prisma.booking.findFirst({
     where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } },
@@ -702,8 +701,8 @@ app.post(
    • reposição — é aula paga com crédito; repetir consumiria créditos da aluna;
    • matrícula (aula experimental) — é uma só na vida da aluna;
    • aluna com cadastro cancelado — saiu do curso.
-   Regras do mensalista (sábado / a partir das 18:00 / teto da semana) continuam
-   valendo: quem não pode entra na lista de "pulados", com o motivo.
+   Regras do mensalista (teto da semana / janela da escala) continuam valendo:
+   quem não pode entra na lista de "pulados", com o motivo.
 
    As cópias nascem sempre NÃO PAGAS: aula do plano entra `confirmada` (como no
    agendamento em lote do mensalista, já coberta pela mensalidade) e as demais
@@ -1938,9 +1937,10 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
     .filter((s) => (occ[s.id] || 0) < (s.capacity || 1))
     // Restringe à unidade da aluna, se cadastrada — Inêz pode alterar pelo painel admin
     .filter((s) => !client.unit || s.unit === client.unit)
-    // Sábado e horários a partir das 18h simplesmente não aparecem para quem não
-    // tem direito a eles: mostrar e barrar depois só frustraria a aluna.
-    .filter((s) => horarioPermitido(client, s))
+    /* Toda turma livre da unidade dela aparece. Havia aqui um filtro por data
+       (sábado / a partir das 18h); as duas regras saíram, e o que sobrou — o
+       teto semanal — não some com a turma: ela aparece e o botão é que fica
+       preso, com o motivo escrito. */
     .map((s) => ({ ...s, prof: s.prof || profFor(s.unit), occupancy: occ[s.id] || 0, free: (s.capacity || 1) - (occ[s.id] || 0) }));
   const makeup = await resumoReposicao(client);
   // A janela da escala é um aviso à parte (os horários continuam visíveis, o
@@ -1963,7 +1963,6 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
     invoices: invoices.map(comEncargos),
     regras: {
       tipo,                                  // "fixo" | "escala" | null
-      podeSabado: !!client.podeSabado,
       janela,                                // { aberta, proxima, motivo }
       teto,                                  // { limite, marcadas, restantes } da semana de hoje
     },
@@ -2107,7 +2106,7 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
   const dup = await prisma.booking.findFirst({ where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } } });
   if (dup) return res.status(400).json({ error: "Você já tem essa aula marcada." });
   if ((await occupancy(slot.id)) >= (slot.capacity || 1)) return res.status(400).json({ error: "Turma lotada." });
-  // Regras do plano (sábado, 18h, janela da escala). No portal não há exceção.
+  // Regras do plano (teto da semana, janela da escala). No portal não há exceção.
   try { await exigirRegras(client, slot); }
   catch (e) { return res.status(e.code || 409).json({ error: e.message, codigo: e.codigo }); }
   const mensalista = client.plan === "mensalista";
@@ -2430,10 +2429,8 @@ app.post("/api/clients/:id/batch-book", wrap(async (req, res) => {
   // Marcação replicada: as aulas criadas na mesma leva ganham um seriesId em
   // comum, para a exclusão poder oferecer "excluir também as demais".
   const seriesId = new Set(dates).size > 1 ? crypto.randomUUID() : null;
-  const agendadas = [], pulos = { semTurma: 0, cheia: 0, jaAgendado: 0, foraDaRegra: 0, teto: 0 };
+  const agendadas = [], pulos = { semTurma: 0, cheia: 0, jaAgendado: 0, teto: 0 };
   for (const date of alvos) {
-    // Sábado / a partir das 18h: pula a data em vez de derrubar o lote inteiro.
-    if (!forcar && !horarioPermitido(client, { date, time })) { pulos.foraDaRegra++; continue; }
     const semana = segundaDaSemana(date);
     if (limiteSemana && (naSemana.get(semana) || 0) >= limiteSemana) { pulos.teto++; continue; }
     const slot = await prisma.slot.findFirst({ where: { date, time, unit } });
@@ -2745,9 +2742,9 @@ app.patch(
     if (firstClass !== undefined) data.firstClass = !!firstClass;
     if (plan !== undefined) data.plan = plan === "mensalista" ? "mensalista" : "avulso";
     // fixo = dia e hora fixos (agenda montada pela Inêz) | escala = ela marca durante a semana.
-    // podeSabado NÃO entra aqui de propósito: é direito herdado, gravado uma
-    // única vez pela migration. Ninguém novo ganha. (podeNoite ainda existe na
-    // tabela, mas não governa mais nada — a regra das 18h saiu em 26/08/2026.)
+    // podeSabado e podeNoite não entram aqui: continuam na tabela como histórico,
+    // mas não governam nada desde que as regras de sábado (30/08) e das 18h
+    // (26/08) foram removidas.
     if (mensalistaTipo !== undefined) data.mensalistaTipo = mensalistaTipo === "escala" ? "escala" : "fixo";
     // "cancelado" = rompeu com o curso; perde o direito a reposição
     if (status !== undefined) data.status = status === "cancelado" ? "cancelado" : "ativo";

@@ -6,7 +6,7 @@ import { toast as toastErro, confirmModal } from "./toast.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
-import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, ehSabadoISO } from "./helpers.js";
+import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel } from "./helpers.js";
 
 const CPF_KEY = "fqc_portal_cpf";
 // WhatsApp da escola: (31) 98496-6403 — sem o "55", que o waLink já acrescenta
@@ -639,11 +639,10 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
   const byDay = {};
   (data.available || [])
     .filter((s) => s.date >= t)
-    // Ela ainda é avulsa aqui, então a lista vem sem filtro do backend — mas a
-    // 1ª aula oficial JÁ é aula de mensalista: sábado não pode aparecer, senão
-    // ela escolhe e leva um erro na confirmação. Horário da noite pode: a turma
-    // das 18h faz parte do plano desde 26/08/2026.
-    .filter((s) => !ehSabadoISO(s.date))
+    /* Toda turma futura entra. Havia aqui um filtro que escondia o sábado, para
+       a aluna não escolher uma data que levaria erro na confirmação — as duas
+       regras de data (sábado e 18h) saíram do plano em 30/08 e 26/08/2026, e a
+       1ª aula oficial pode cair em qualquer turma da grade. */
     .forEach((s) => { (byDay[s.date] = byDay[s.date] || []).push(s); });
   const days = Object.keys(byDay).sort();
 
