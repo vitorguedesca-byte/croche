@@ -592,7 +592,7 @@ const wrap = (fn) => (req, res) =>
    experimental, e é esse pagamento que a matricula. Não há mais um preço de
    entrada separado nem coluna `taxaMatricula` nas Configurações. */
 const PRECOS_PADRAO = { valorPlano1x: 120, valorPlano2x: 200, valorAvulsa: 40, duracaoAulaMin: 120 };
-let SETTINGS = { valorPadrao: VALOR_PADRAO, capacidadePadrao: CAPACITY_PADRAO, units: UNITS, profs: PROFS, horarioFunc: "", pixKey: "", pixName: "", mensalidadeValor: 0, vencimentoDia: 10, travaAtraso: false, pixExpira: false, cobrarEncargos: false, geracaoAuto: false, ...PRECOS_PADRAO };
+let SETTINGS = { valorPadrao: VALOR_PADRAO, capacidadePadrao: CAPACITY_PADRAO, units: UNITS, profs: PROFS, horarioFunc: "", pixKey: "", pixName: "", mensalidadeValor: 0, vencimentoDia: 10, travaAtraso: false, pixExpira: false, cobrarEncargos: false, geracaoAuto: false, waAvisosAuto: false, ...PRECOS_PADRAO };
 async function loadSettings() {
   let s = await prisma.settings.findUnique({ where: { id: 1 } });
   if (!s) s = await prisma.settings.create({ data: { id: 1 } });
@@ -616,6 +616,7 @@ async function loadSettings() {
     pixExpira: s.pixExpira ?? false,
     cobrarEncargos: s.cobrarEncargos ?? false,
     geracaoAuto: s.geracaoAuto ?? false,
+    waAvisosAuto: s.waAvisosAuto ?? false,
   };
   return SETTINGS;
 }
@@ -2090,6 +2091,10 @@ async function avisoComPix(client, inv, texto, fallback) {
 
 let ultimoDiaAvisos = null;
 async function rodadaAvisosMensalidade() {
+  /* Chave desligada: a escola não inicia conversa. Sai ANTES de marcar o dia
+     (igual à rodada de mensalidades), para ligar a chave no meio do dia valer
+     já na hora seguinte, sem esperar o dia virar. */
+  if (!SETTINGS.waAvisosAuto) return;
   if (!waConfigured()) return;
   /* Sai ANTES de marcar o dia: fora da janela a rodada não fez nada, e marcar
      aqui faria o aviso do dia inteiro se perder porque a hora deu 3 da manhã. */
@@ -2146,6 +2151,7 @@ async function rodadaAvisosMensalidade() {
    a janela de silêncio: é mensagem que a escola inicia. */
 let ultimoDiaLembretes = null;
 async function rodadaLembretesDeAula() {
+  if (!SETTINGS.waAvisosAuto) return; // ver rodadaAvisosMensalidade
   if (!waConfigured() || !podeMandarAgora()) return;
   const hoje = todayISO();
   if (ultimoDiaLembretes === hoje) return;
@@ -3033,6 +3039,7 @@ const INATIVIDADE_MIN = 30;
 const PASSOS_RETOMAVEIS = Object.keys(PENDENCIA_POR_PASSO);
 
 async function rodadaConversasParadas() {
+  if (!SETTINGS.waAvisosAuto) return; // ver rodadaAvisosMensalidade
   if (!waConfigured() || !podeMandarAgora()) return;
   const agora = Date.now();
   const paradas = await prisma.waConversation.findMany({
@@ -3650,7 +3657,7 @@ app.put(
     }
     if (b.duracaoAulaMin !== undefined) data.duracaoAulaMin = Math.min(600, Math.max(15, parseInt(b.duracaoAulaMin, 10) || SETTINGS.duracaoAulaMin));
     // travas de cobrança (desligadas até a Inêz confirmar)
-    for (const k of ["travaAtraso", "pixExpira", "cobrarEncargos", "geracaoAuto"]) if (b[k] !== undefined) data[k] = !!b[k];
+    for (const k of ["travaAtraso", "pixExpira", "cobrarEncargos", "geracaoAuto", "waAvisosAuto"]) if (b[k] !== undefined) data[k] = !!b[k];
     await prisma.settings.upsert({ where: { id: 1 }, update: data, create: { id: 1, ...data } });
     await loadSettings();
     res.json(SETTINGS);

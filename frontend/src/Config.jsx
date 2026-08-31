@@ -87,6 +87,7 @@ export default function Config() {
   const [pixExpira, setPixExpira] = useState(!!m.pixExpira);
   const [cobrarEncargos, setCobrarEncargos] = useState(!!m.cobrarEncargos);
   const [geracaoAuto, setGeracaoAuto] = useState(!!m.geracaoAuto);
+  const [waAvisosAuto, setWaAvisosAuto] = useState(!!m.waAvisosAuto);
   const [saved, setSaved] = useState(false);
 
   const save = async () => {
@@ -116,6 +117,7 @@ export default function Config() {
       pixExpira,
       cobrarEncargos,
       geracaoAuto,
+      waAvisosAuto,
       units: unitsList,
       profs: profsList,
     };
@@ -226,6 +228,31 @@ export default function Config() {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Mensagens que a ESCOLA inicia. Nasceu desligada porque o primeiro
+            disparo alcançaria alunas que nunca receberam mensagem automática
+            daqui — e número que recebe mensagem não pedida bloqueia. */}
+        <div style={{ marginTop: "1.1rem", borderTop: "1px solid var(--line)", paddingTop: ".9rem" }}>
+          <label style={{ display: "block", marginBottom: ".6rem" }}>Mensagens automáticas no WhatsApp</label>
+          <Chave
+            on={waAvisosAuto}
+            onToggle={() => setWaAvisosAuto(!waAvisosAuto)}
+            titulo="A escola manda mensagem sozinha"
+            ligado="Saem o lembrete da véspera da aula, o aviso de mensalidade a vencer, a cobrança do atraso e a retomada de conversa parada."
+            desligado="Nenhuma mensagem sai por iniciativa da escola. O bot continua respondendo normalmente quem falar com ele."
+          />
+          <div className="cfg-preview" style={{ marginTop: ".8rem" }}>
+            💬 {waAvisosAuto ? "Enviando hoje:" : "Se você ligar a chave acima:"}{" "}
+            <b>lembrete da véspera</b> (uma vez por aula, com botão de avisar que não vai),
+            {" "}<b>mensalidade a vencer</b> (2 dias antes), <b>cobrança</b> (1 dia depois do vencimento)
+            {" "}e <b>retomada</b> de conversa parada (uma vez, 30 min depois).
+            <div className="help" style={{ marginTop: ".35rem" }}>
+              Nada sai fora do horário de 8h às 20h, e cada mensagem sai uma vez só por aula ou mensalidade.
+              Ligar vale já na hora seguinte. A reserva segurada pelo bot não passa por esta chave: ela precisa
+              expirar sozinha, senão a vaga fica presa.
+            </div>
+          </div>
         </div>
 
         {/* Mudar os campos acima muda a TABELA — vale para quem entrar depois e

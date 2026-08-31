@@ -290,6 +290,10 @@ model Settings {
   pixExpira        Boolean @default(false)
   // true = mensalidade vencida passa a cobrar multa e juros (valores fixos em regrasAula.js)
   cobrarEncargos   Boolean @default(false)
+  // true = o servidor manda sozinho as mensagens que a ESCOLA inicia no WhatsApp:
+  // lembrete e cobrança de mensalidade, lembrete da véspera da aula, e a retomada
+  // de conversa parada. Desligada, o bot só responde quem falar com ele.
+  waAvisosAuto     Boolean @default(false)
   // true = o servidor gera sozinho as mensalidades do mês (rodada de hora em hora).
   // Desligada, só nascem mensalidades pelo botão "gerar" do painel — é o que
   // permite combinar o valor de cada mês antes de a cobrança existir.
