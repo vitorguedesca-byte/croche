@@ -12,7 +12,7 @@
 // o texto está soando promocional demais — reveja antes de aceitar.
 import { listWaTemplates, createWaTemplate, waTemplatesConfigured } from "../src/wa.js";
 
-const PORTAL_URL = process.env.WA_PORTAL_URL || "https://fiosquecuram.com.br/#portal";
+const PORTAL_URL = process.env.WA_PORTAL_URL || "https://fiosquecuram.com.br/portal";
 const FOOTER = "Fios que Curam · Ipatinga e Timóteo";
 
 export const TEMPLATES = [
@@ -57,7 +57,7 @@ export const TEMPLATES = [
           "Oi, {{1}}! Passando para lembrar da sua aula de crochê:\n\n" +
           "📍 Unidade: {{2}}\n" +
           "🗓️ Quando: {{3}}\n\n" +
-          "Se não puder vir, avise por aqui o quanto antes — assim a vaga fica livre para outra aluna e você não perde a aula. 🧶",
+          "Se não puder vir, avise por aqui com pelo menos 6 horas de antecedência: a vaga fica livre para outra aluna e você ganha o crédito de reposição. 🧶",
         example: { body_text: [["Maria", "Timóteo", "amanhã, 15/08 às 14:00"]] },
       },
       { type: "FOOTER", text: FOOTER },
@@ -71,8 +71,12 @@ export const TEMPLATES = [
     ],
   },
 
+  /* Os dois avisos de mensalidade são templates SEPARADOS de propósito. O de
+     antes do vencimento é um lembrete gentil; o de depois é uma cobrança. Um
+     texto só, tentando servir para as duas horas, sairia frio na primeira e
+     mole na segunda — e é justamente o tom que a Inêz pediu para acertar. */
   {
-    name: "cobranca_mensalidade",
+    name: "mensalidade_a_vencer",
     category: "UTILITY",
     language: "pt_BR",
     // {{1}} primeiro nome · {{2}} mês por extenso · {{3}} valor · {{4}} vencimento
@@ -81,11 +85,64 @@ export const TEMPLATES = [
       {
         type: "BODY",
         text:
-          "Oi, {{1}}! Sua mensalidade de {{2}} já está disponível:\n\n" +
+          "Oi, {{1}}! Passando só para lembrar, sem pressa: sua mensalidade de {{2}} vence em breve.\n\n" +
           "💰 Valor: R$ {{3}}\n" +
           "📅 Vencimento: {{4}}\n\n" +
-          "O pagamento é por Pix, direto no portal da aluna. Qualquer dúvida, é só responder por aqui. 💚",
+          "Pagando até o vencimento você não paga multa nem juros. O Pix está no portal da aluna — qualquer dúvida, é só responder por aqui. 💚",
         example: { body_text: [["Maria", "agosto de 2026", "120,00", "10/08/2026"]] },
+      },
+      { type: "FOOTER", text: FOOTER },
+      {
+        type: "BUTTONS",
+        buttons: [{ type: "URL", text: "Abrir portal", url: PORTAL_URL }],
+      },
+    ],
+  },
+
+  {
+    name: "mensalidade_em_atraso",
+    category: "UTILITY",
+    language: "pt_BR",
+    // {{1}} primeiro nome · {{2}} mês por extenso · {{3}} dias de atraso · {{4}} total com encargos
+    exemplo: ["Maria", "agosto de 2026", "3", "125,36"],
+    components: [
+      {
+        type: "BODY",
+        text:
+          "Oi, {{1}}! Sua mensalidade de {{2}} está em aberto há {{3}} dia(s).\n\n" +
+          "💰 Total com multa e juros: R$ {{4}}\n\n" +
+          "O Pix atualizado está no portal da aluna. Se já tiver pago, me avisa por aqui que eu confiro. 💚",
+        example: { body_text: [["Maria", "agosto de 2026", "3", "125,36"]] },
+      },
+      { type: "FOOTER", text: FOOTER },
+      {
+        type: "BUTTONS",
+        buttons: [{ type: "URL", text: "Abrir portal", url: PORTAL_URL }],
+      },
+    ],
+  },
+
+  /* Confirmação da matrícula. As REGRAS completas não cabem aqui: o corpo de um
+     template para em 1024 caracteres e o texto da Inêz passa de 1600. Dentro da
+     janela de 24h (o caso normal — ela acabou de conversar e pagar) o sistema
+     manda o texto inteiro como mensagem livre, sem esse limite. Este template é
+     o fallback de quando o Pix demora mais de um dia para cair: confirma a vaga
+     e manda ler as regras no portal. */
+  {
+    name: "matricula_confirmada",
+    category: "UTILITY",
+    language: "pt_BR",
+    // {{1}} primeiro nome · {{2}} unidade · {{3}} dia e hora
+    exemplo: ["Maria", "Timóteo", "sexta, 05/09 às 14:00"],
+    components: [
+      {
+        type: "BODY",
+        text:
+          "Obrigada, {{1}}! Recebemos o seu pagamento e sua vaga está garantida:\n\n" +
+          "📍 Unidade: {{2}}\n" +
+          "🗓️ Quando: {{3}}\n\n" +
+          "Antes da primeira aula, leia as regras de reposição e cancelamento no portal da aluna — é rapidinho e evita mal-entendido depois. 💚",
+        example: { body_text: [["Maria", "Timóteo", "sexta, 05/09 às 14:00"]] },
       },
       { type: "FOOTER", text: FOOTER },
       {

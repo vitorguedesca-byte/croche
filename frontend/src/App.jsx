@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { api, getToken, setToken } from "./api.js";
+import { api, getToken, setToken, isInstrutora, getNome } from "./api.js";
 import AdminLogin from "./AdminLogin.jsx";
 import { useStore } from "./store.jsx";
 import { useModal } from "./ui.jsx";
@@ -18,6 +18,18 @@ import { Notifications } from "./Notifications.jsx";
 // marca o aparelho como tablet da sala (quiosque), persistindo entre recargas
 const KIOSK_KEY = "fqc_kiosk";
 
+/* Endereços das telas públicas. O caminho é o endereço oficial — é ele que vai
+   no WhatsApp e na landing, e é por isso que a aluna nunca precisa ver "/admin".
+   Os hashes ficam como atalho antigo: link já enviado continua abrindo. */
+const ROTAS_PUBLICAS = { "/portal": "portal", "/agendar": "cliente" };
+function rotaPublica() {
+  // "/portal/" e "/portal" são a mesma tela
+  const p = window.location.pathname.replace(/\/+$/, "") || "/";
+  if (ROTAS_PUBLICAS[p]) return ROTAS_PUBLICAS[p];
+  const h = window.location.hash;
+  return h === "#agendar" ? "cliente" : h === "#portal" ? "portal" : null;
+}
+
 const NAV = [
   { sep: "Operação" },
   { view: "dashboard", ic: "📊", label: "Painel" },
@@ -32,6 +44,12 @@ const NAV = [
   { view: "depoimentos", ic: "⭐", label: "Depoimentos" },
   { sep: "Sistema" },
   { view: "config", ic: "⚙️", label: "Configurações" },
+];
+/* Menu da INSTRUTORA: só a Agenda. Não é o mesmo menu com itens escondidos —
+   é um menu curto de propósito, para não sugerir portas que não abrem. */
+const NAV_INSTRUTORA = [
+  { sep: "Operação" },
+  { view: "agenda", ic: "📅", label: "Agenda" },
 ];
 const TITLES = {
   dashboard:    ["Painel",        "Visão geral da operação"],
@@ -48,7 +66,8 @@ const TITLES = {
 export default function App() {
   const { data, error } = useStore();
   const { open } = useModal();
-  const [view, setView] = useState("dashboard");
+  const instrutora = isInstrutora();
+  const [view, setView] = useState(instrutora ? "agenda" : "dashboard");
   const [viewParams, setViewParams] = useState({});
   // Modo tablet (quiosque da sala): fica gravado para sobreviver a recarga do
   // aparelho. Entra com #tablet e sai com #sairtablet.
@@ -58,16 +77,18 @@ export default function App() {
     if (h === "#tablet") { try { localStorage.setItem(KIOSK_KEY, "1"); } catch {} return true; }
     try { return localStorage.getItem(KIOSK_KEY) === "1"; } catch { return false; }
   });
-  const [mode, setMode] = useState(() => {
-    const h = window.location.hash;
-    return h === "#agendar" ? "cliente" : h === "#portal" ? "portal" : "admin";
-  });
-  const fromSite = useState(() => window.location.hash === "#agendar" || window.location.hash === "#portal")[0];
+  /* Rota das telas públicas. O endereço bonito é o caminho — /portal e
+     /agendar — que é o que a aluna recebe por WhatsApp; ninguém precisa ver
+     "/admin" para entrar no portal. Os hashes antigos (/admin/#portal) seguem
+     valendo para não quebrar link já enviado. */
+  const [mode, setMode] = useState(() => rotaPublica() || "admin");
+  const fromSite = useState(() => !!rotaPublica())[0];
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (["#agendar", "#portal", "#tablet", "#sairtablet"].includes(window.location.hash)) {
-      window.history.replaceState(null, "", window.location.pathname);
+      // Tira só o hash: o caminho (/portal, /agendar) é o endereço da tela e fica.
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
     }
   }, []);
 
@@ -84,13 +105,20 @@ export default function App() {
   if (error) return <div className="empty" style={{ padding: "4rem" }}><div className="ic">🔌</div><p>Não consegui falar com o servidor.<br />Confira se o backend está rodando em <b>http://localhost:4000</b>.</p><p className="cli-sub">{error}</p></div>;
   if (!data) return <div className="empty" style={{ padding: "4rem" }}><div className="ic">🧶</div><p>Carregando…</p></div>;
 
-  const go = (v, params = {}) => { setView(v); setViewParams(params); setSidebarOpen(false); };
-  const actions = {
+  const go = (v, params = {}) => {
+    // A instrutora só tem a Agenda: qualquer atalho de outra tela cai nela.
+    if (instrutora && v !== "agenda") v = "agenda";
+    setView(v); setViewParams(params); setSidebarOpen(false);
+  };
+  const actions = instrutora ? {} : {
     agenda: <button className="btn" onClick={() => open(<SlotForm />)}>＋ Novo horário</button>,
     marcacoes: <button className="btn" onClick={() => open(<BookingForm />)}>＋ Nova marcação</button>,
     clientes: <button className="btn" onClick={() => open(<ClientForm />)}>＋ Novo aluno</button>,
   };
-  const Body = { dashboard: Dashboard, agenda: Agenda, marcacoes: Marcacoes, clientes: Clientes, mensalistas: Mensalistas, aniversariantes: Aniversariantes, recebimentos: Recebimentos, depoimentos: Depoimentos, config: Config }[view];
+  const Body = instrutora ? Agenda : { dashboard: Dashboard, agenda: Agenda, marcacoes: Marcacoes, clientes: Clientes, mensalistas: Mensalistas, aniversariantes: Aniversariantes, recebimentos: Recebimentos, depoimentos: Depoimentos, config: Config }[view];
+  const [tituloAtual, subtituloAtual] = instrutora
+    ? ["Agenda", `Consulta de horários${getNome() ? " · " + getNome() : ""}`]
+    : TITLES[view];
 
   return (
     <div className="app">
@@ -98,16 +126,16 @@ export default function App() {
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="brand">
           <img src="/logo-1.PNG" alt="Fios que Curam" />
-          <div><b>Fios que Curam</b><span>Gestão · Fios que Curam</span></div>
+          <div><b>Fios que Curam</b><span>{instrutora ? "Instrutoras · consulta" : "Gestão · Fios que Curam"}</span></div>
         </div>
-        {NAV.map((n, i) => n.sep
+        {(instrutora ? NAV_INSTRUTORA : NAV).map((n, i) => n.sep
           ? <div key={i} className="nav-sep">{n.sep}</div>
           : <button key={i} className={`nav-item ${view === n.view ? "active" : ""}`} onClick={() => go(n.view)}><span className="ic">{n.ic}</span> {n.label}</button>)}
         <div className="spacer" />
         <div className="side-foot">
-          Backend MySQL + Prisma · React
-          <button onClick={() => setMode("cliente")}>👁 Ver como aluno</button>
-          <button onClick={() => exportBookingsCsv(data)}>⬇ Exportar marcações (CSV)</button>
+          {instrutora ? "Acesso de consulta · somente leitura" : "Backend MySQL + Prisma · React"}
+          {!instrutora && <button onClick={() => setMode("cliente")}>👁 Ver como aluno</button>}
+          {!instrutora && <button onClick={() => exportBookingsCsv(data)}>⬇ Exportar marcações (CSV)</button>}
           <button onClick={async () => { try { await api.admin.logout(); } catch {} setToken(null); window.location.reload(); }}>🚪 Sair</button>
         </div>
       </aside>
@@ -116,12 +144,12 @@ export default function App() {
         <div className="topbar">
           <div style={{ display: "flex", alignItems: "center", gap: ".8rem" }}>
             <button className="menu-btn" onClick={() => setSidebarOpen((o) => !o)}>☰</button>
-            <div><h1>{TITLES[view][0]}</h1><div className="sub">{TITLES[view][1]}</div></div>
+            <div><h1>{tituloAtual}</h1><div className="sub">{subtituloAtual}</div></div>
           </div>
-          <div className="topbar-right">{actions[view]}<Notifications go={go} /></div>
+          <div className="topbar-right">{actions[view]}{!instrutora && <Notifications go={go} />}</div>
         </div>
         <div className="content">
-          <Body go={go} params={viewParams} />
+          <Body go={go} params={viewParams} somenteLeitura={instrutora} />
         </div>
       </div>
     </div>

@@ -424,7 +424,7 @@
   .fsel-compact .fsel-chev{width:14px;height:14px}
 
   .fsel-pop{
-    position:fixed;z-index:300;
+    position:fixed;z-index:300;max-width:96vw;
     background:var(--offwhite);border:1px solid rgba(94,74,56,.14);border-radius:14px;
     box-shadow:0 22px 50px -20px rgba(58,50,40,.42),0 2px 8px -2px rgba(58,50,40,.14);
     padding:.35rem;overflow:hidden;
@@ -569,16 +569,6 @@
     .row2{grid-template-columns:1fr}
     .unit-pick{grid-template-columns:1fr}
     .menu-btn{display:inline-flex!important;align-items:center;justify-content:center;min-width:42px;min-height:42px;cursor:pointer}
-  }
-
-  @media(max-width:640px){
-    .overlay{align-items:flex-end;padding:0}
-    .modal{width:100%!important;max-width:100%!important;max-height:88vh;border-bottom-left-radius:0;border-bottom-right-radius:0;border-top-left-radius:20px;border-top-right-radius:20px;animation:sheetUp .28s cubic-bezier(0.16, 1, 0.3, 1)}
-    .topbar{padding:.8rem 1rem;flex-wrap:wrap;gap:.6rem}
-    .topbar-right{width:100%;justify-content:space-between}
-    .stats{grid-template-columns:1fr}
-    .btn, input, select{min-height:44px}
-    .toast-host{left:12px;right:12px;max-width:none;bottom:12px}
   }
 
   @keyframes fadeBk{from{opacity:0}to{opacity:1}}
@@ -971,3 +961,213 @@
   .ls-al.kinded{border-left:3px solid var(--kc);padding-left:.5rem;border-radius:0 6px 6px 0}
   .lg-sep{width:1px;align-self:stretch;background:var(--line);margin:0 .2rem}
   .day-sub{font-size:.85rem;color:var(--muted);font-weight:600}
+
+  /* ===== Agenda · visão DIA =====
+     Um dia inteiro na vertical: hora à esquerda, turma à direita. É a tela das
+     instrutoras (e de qualquer um que só queira saber "o que tem hoje"). */
+  .dv-tira{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:.4rem;margin-bottom:.9rem}
+  .dv-tira-d{display:flex;flex-direction:column;align-items:center;gap:.1rem;padding:.5rem .2rem;border:1px solid var(--line);border-radius:12px;background:#fff;cursor:pointer;transition:.15s}
+  .dv-tira-d:hover{background:var(--cream)}
+  .dv-tira-d.on{background:var(--green-deep);border-color:var(--green-deep);color:#fff}
+  .dv-tira-d.hoje:not(.on){border-color:var(--green-mid);box-shadow:inset 0 0 0 1px var(--green-mid)}
+  .dv-dow{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;font-weight:700;opacity:.75}
+  .dv-num{font-family:'Fraunces',serif;font-size:1.15rem;font-weight:600;line-height:1.1}
+  .dv-pts{font-size:.6rem;letter-spacing:.08em;color:var(--terracota);line-height:1}
+  .dv-tira-d.on .dv-pts{color:var(--green-light)}
+  .dv-resumo{font-size:.82rem;color:var(--muted);font-weight:600;margin-bottom:.7rem}
+  .dv-lista{display:flex;flex-direction:column;gap:.7rem}
+  .dv-slot{display:grid;grid-template-columns:74px minmax(0,1fr);gap:.75rem;border:1px solid var(--line);border-left:4px solid var(--uc,var(--muted));border-radius:12px;background:#fff;padding:.75rem .9rem}
+  .dv-hora{display:flex;flex-direction:column;align-items:flex-start;padding-top:.1rem}
+  .dv-hora b{font-family:'Fraunces',serif;font-size:1.2rem;color:var(--uc,var(--green-deep));font-weight:600;line-height:1.1}
+  .dv-hora span{font-size:.7rem;color:var(--muted);white-space:nowrap}
+  .dv-corpo{min-width:0}
+  .dv-slot-h{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.35rem}
+  .dv-unit{font-size:.82rem;font-weight:700}
+  .dv-ocup{font-size:.78rem;font-weight:700;padding:.1rem .45rem;border-radius:999px;background:var(--cream);color:var(--brown)}
+  .dv-ocup.cheio{background:rgba(194,84,63,.14);color:var(--danger)}
+  .dv-ocup.livre{background:transparent;color:var(--muted);border:1px dashed var(--line)}
+  .dv-slot-h .btn{margin-left:auto}
+  .dv-alunas{display:flex;flex-direction:column}
+  .dv-al{display:flex;align-items:center;gap:.5rem;padding:.34rem .1rem;border-top:1px dashed var(--line);cursor:pointer;border-left:3px solid var(--kc,transparent);padding-left:.5rem}
+  .dv-al:hover{background:rgba(243,234,219,.5)}
+  .dv-al.ro{cursor:default}
+  .dv-al.ro:hover{background:transparent}
+  .dv-al .nm{font-weight:700;font-size:.9rem}
+  .dv-al.canc .nm{text-decoration:line-through;opacity:.6}
+  .dv-al .sp{margin-left:auto;display:flex;gap:.35rem;align-items:center;flex-wrap:wrap}
+  .dv-vazio{font-size:.82rem;color:var(--muted);padding:.3rem 0}
+  @media(max-width:640px){
+    .dv-slot{grid-template-columns:minmax(0,1fr);gap:.35rem}
+    .dv-hora{flex-direction:row;align-items:baseline;gap:.4rem}
+    .dv-tira{gap:.25rem}
+  }
+
+  /* ===== Turma em modo consulta (instrutoras) ===== */
+  .tv-lista{display:flex;flex-direction:column}
+  .tv-al{display:flex;align-items:center;gap:.5rem;padding:.45rem .1rem;border-bottom:1px dashed var(--line);border-left:3px solid var(--kc,transparent);padding-left:.5rem}
+  .tv-al:last-child{border-bottom:none}
+  .tv-nm{font-weight:700;font-size:.92rem;display:flex;align-items:center;gap:.3rem}
+  .tv-al.canc .tv-nm{text-decoration:line-through;opacity:.6}
+  .tv-marca{font-size:.85rem}
+  .tv-sp{margin-left:auto;display:flex;gap:.35rem;align-items:center;flex-wrap:wrap}
+  .tv-espera{margin-top:.7rem;font-size:.82rem;font-weight:700;color:var(--terracota)}
+  .tv-nota{margin-top:1rem;font-size:.76rem;color:var(--muted);border-top:1px dashed var(--line);padding-top:.7rem}
+  .ls-al.ro{cursor:default}
+  .ls-al.ro:hover{background:transparent}
+
+  /* ==================================================================
+     CELULAR — estas regras ficam no FIM do arquivo de propósito.
+     Media query não muda especificidade: uma regra de mesmo peso escrita
+     mais abaixo vence. Se estes blocos subissem, `.fch-tot`, `.prof-kpis`
+     e `.modal-lg` (declarados adiante) desfariam o que se ajusta aqui.
+     ================================================================== */
+  /* ===== Tabelas do painel viram cartões no celular =====
+     A tabela continua tabela no HTML (e no computador). Abaixo de 768px cada
+     linha vira um cartão e cada célula ganha, acima do valor, o rótulo que
+     estava no cabeçalho — o `data-l` de cada <td> em views.jsx. Célula sem
+     `data-l` (o nome da aluna, a coluna de botões) não mostra rótulo. */
+  @media(max-width:768px){
+    .content table,.content tbody,.content tr,.content td{display:block;width:100%}
+    .content thead{display:none}
+    .content tbody tr{
+      background:#fff;border:1px solid var(--line);border-radius:14px;
+      padding:.85rem .95rem;margin-bottom:.7rem;
+      box-shadow:0 8px 22px -18px rgba(58,50,40,.55)
+    }
+    .content tr:hover td{background:transparent}
+    .content td{border-bottom:none;padding:.42rem 0;font-size:.92rem;text-align:left;vertical-align:baseline}
+    .content td+td{border-top:1px dashed var(--line)}
+    .content td[data-l]::before{
+      content:attr(data-l);display:block;margin-bottom:.15rem;
+      font-size:.68rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)
+    }
+    /* célula-título: o nome da aluna abre o cartão, sem rótulo em cima */
+    .content td.c-main{padding-top:0;padding-bottom:.55rem}
+    .content td.c-main .cli-name{font-size:1rem}
+    /* linha de separação de grupo (Financeiro) não é um cartão */
+    .content tbody tr.grp{background:none;border:none;box-shadow:none;padding:.7rem 0 0;margin:0}
+    .content tbody tr.grp td{padding:0}
+    /* a coluna de ações vira uma barra de botões que quebra em linhas */
+    .content td.td-actions{display:flex;flex-wrap:wrap;gap:.4rem;white-space:normal;padding-top:.7rem}
+    .content td.td-actions .btn,.content td.td-actions a.btn{flex:1 1 auto;justify-content:center;min-height:40px;margin-left:0!important}
+  }
+
+  @media(max-width:640px){
+    .overlay{align-items:flex-end;padding:0}
+    .modal{width:100%!important;max-width:100%!important;max-height:88vh;border-bottom-left-radius:0;border-bottom-right-radius:0;border-top-left-radius:20px;border-top-right-radius:20px;animation:sheetUp .28s cubic-bezier(0.16, 1, 0.3, 1)}
+    .modal-h{padding:1rem 1.1rem}
+    .modal-h h3{font-size:1.08rem}
+    .modal-b{padding:1.1rem}
+    .modal-sub{padding:0 1.1rem .7rem}
+    .modal-f{padding:.85rem 1.1rem}
+    .modal-f .btn{flex:1 1 auto;justify-content:center}
+    /* o modal grande deixa de ter altura fixa: no celular ele rola inteiro */
+    .modal.modal-lg{max-height:88vh;overflow:auto}
+    .modal.modal-lg .modal-b{height:auto;max-height:none;flex:1 1 auto}
+    .topbar{padding:.8rem 1rem;flex-wrap:wrap;gap:.6rem}
+    .topbar h1{font-size:1.15rem}
+    .topbar .sub{font-size:.78rem}
+    .topbar-right{width:100%;justify-content:space-between}
+    .topbar-right .btn{flex:1;justify-content:center}
+    .content{padding:1rem .9rem}
+    .panel{padding:1rem .9rem;border-radius:14px}
+    .stats{grid-template-columns:1fr}
+    .fch-tot{grid-template-columns:1fr 1fr}
+    .btn, input, select, textarea{min-height:44px}
+    .btn.sm{min-height:38px}
+    /* filtros: a busca ocupa a linha e cada seletor divide a linha seguinte */
+    .filters{gap:.45rem}
+    .filters .grow{flex:1 1 100%}
+    /* cada seletor ocupa a linha: a lista aberta copia a largura do gatilho,
+       então um gatilho estreito daria uma lista estreita e ilegível */
+    .filters .fsel{flex:1 1 100%;min-width:0;width:auto}
+    .filters .count{flex:1 1 100%}
+    .seg,.seg-tabs{width:100%;overflow-x:auto;scrollbar-width:none}
+    .seg::-webkit-scrollbar,.seg-tabs::-webkit-scrollbar{display:none}
+    .seg button{white-space:nowrap}
+    /* agenda: barra de ferramentas e navegação em uma linha própria */
+    .ag-toolbar{gap:.55rem}
+    .ag-views{width:100%;overflow-x:auto;scrollbar-width:none}
+    .ag-views::-webkit-scrollbar{display:none}
+    .ag-views button{flex:1;justify-content:center;white-space:nowrap}
+    .ag-nav{width:100%;justify-content:space-between}
+    .ag-period{flex:1;min-width:0}
+    .ag-filters{gap:.55rem;padding-bottom:.85rem}
+    .month-dow{font-size:.6rem}
+    .dv-tira{grid-template-columns:repeat(7,minmax(0,1fr));gap:.2rem}
+    .dv-tira-d{padding:.4rem .1rem}
+    .dv-num{font-size:1rem}
+    .toast-host{left:12px;right:12px;max-width:none;bottom:12px}
+    /* perfil da aluna: as caixas de números em uma coluna dupla estreita */
+    .prof-kpis{grid-template-columns:1fr 1fr}
+    .prof-scroll,.prof-scroll.tall{max-height:none}
+    /* horário de funcionamento e checkboxes deixam de forçar uma linha só */
+    .check-row{white-space:normal}
+    .repeat-weeks-row{width:100%}
+  }
+
+  /* telefones estreitos (iPhone SE / Android de 360px) */
+  @media(max-width:365px){
+    .topbar h1{font-size:1.05rem}
+    .content{padding:.85rem .7rem}
+    .panel{padding:.85rem .75rem}
+    .prof-kpis{grid-template-columns:1fr}
+    .fch-tot{grid-template-columns:1fr}
+    .content td.td-actions .btn,.content td.td-actions a.btn{flex:1 1 100%}
+  }
+
+  /* ===== Portal do aluno e marcação da 1ª aula no celular =====
+     São as telas que quase ninguém abre no computador. Aqui o desenho encolhe
+     de verdade: cabeçalho empilhado, PIN que cabe em 320px de largura e o
+     calendário com células menores para as sete colunas não espremerem. */
+  @media(max-width:520px){
+    .pt-bg{padding:1rem .8rem 3rem}
+    .pt-connect{margin-top:4vh}
+    .pt-connect h1{font-size:1.75rem}
+    .pt-sub{font-size:1.02rem;margin-bottom:1.2rem}
+    .pt-logo{height:60px}
+    /* cabeçalho: saudação em cima, links embaixo alinhados à esquerda */
+    .pt-head{flex-direction:column;gap:.5rem;margin-bottom:1.2rem}
+    .pt-hello{font-size:1.45rem}
+    .pt-head-links{flex-direction:row;flex-wrap:wrap;align-items:center;gap:.2rem 1rem;align-self:flex-start}
+    .pt-h2{font-size:1.3rem;margin:1.4rem 0 .75rem}
+    /* o PIN de 4 casas cabe em telas de 320px */
+    .pt-pin{gap:.45rem}
+    .pt-pin-box{width:100%;max-width:60px;min-width:0;height:60px;font-size:1.5rem}
+    /* filtro de 3 abas: rótulo menor para não quebrar a palavra */
+    .pt-filtro button{font-size:.88rem;padding:.55rem .2rem;flex-direction:column;gap:.1rem}
+    .pt-tabs{gap:.35rem}
+    /* aula: as ações viram uma coluna de botões grandes */
+    .pt-aula,.pt-pay,.pt-repo{padding:1rem}
+    .pt-aula .pt-when b{font-size:1.1rem}
+    .pt-aula-actions{gap:.55rem}
+    .pt-btn-out,.pt-btn-danger{flex:1 1 100%;min-width:0;padding:.85rem}
+    .pt-pay-top,.pt-repo-top{flex-wrap:wrap;gap:.5rem}
+    .pt-pay-val,.pt-mens-val{font-size:1.4rem}
+    .pt-pix{padding:.85rem}
+    .pt-pix-row{flex-wrap:wrap;gap:.2rem .8rem;font-size:.96rem}
+    .pt-pix-row b{text-align:left;width:100%}
+    /* calendário e horários da 1ª aula */
+    .pt-cal-grid{gap:3px}
+    .pt-cal-cell{border-radius:9px;font-size:.9rem}
+    .pt-cal-dow{font-size:.6rem}
+    .pt-cal-head b{font-size:1.12rem}
+    .pt-times-grid{gap:.45rem}
+    .pt-time{flex:1 1 calc(50% - .225rem);min-width:0;font-size:1rem;padding:.6rem .4rem}
+    .pt-slot{padding:.9rem 1rem;gap:.6rem}
+    .pt-slot b{font-size:1.15rem}
+    .pt-fc-head h1{font-size:1.6rem}
+    .pt-steps{gap:.35rem}
+    .pt-step{font-size:.8rem;padding:.3rem .6rem}
+    .mini-legend{gap:.5rem .9rem;font-size:.85rem}
+    .mini-nav{width:36px;height:36px}
+    .mini-head b{font-size:.98rem}
+  }
+
+  /* telefones estreitos (360px e abaixo) */
+  @media(max-width:360px){
+    .pt-card{padding:1.1rem}
+    .pt-pin-box{max-width:54px;height:56px;font-size:1.35rem}
+    .pt-big{font-size:1.15rem}
+    .pt-time{flex:1 1 100%}
+  }

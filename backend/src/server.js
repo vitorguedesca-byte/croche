@@ -24,14 +24,31 @@ import {
   hhmm,
   janelaEscala,
   mesmaSemana,
+  REPO_MAX_MES,
+  REPO_HORAS_MIN,
+  REPO_MANHA_ATE,
   segundaDaSemana,
   somarComp,
   tetoSemanal,
   tipoMensalista,
 } from "./regrasAula.js";
 import { padronizarNome } from "./nomes.js";
+import {
+  PENDENCIA_POR_PASSO,
+  WA_ATENDENTE,
+  WA_PORTAL_URL,
+  textoConversaParada,
+  textoLembreteAula,
+  textoAtendenteHumano,
+  textoCobrancaReserva,
+  textoHoldExpirado,
+  textoLembreteHold,
+  textoMatriculaConfirmada,
+  textoMensalidadeAVencer,
+  textoMensalidadeEmAtraso,
+} from "./textosEscola.js";
 import { sicrediConfigured, sicrediMissing, createCharge, getCharge, isPaidStatus, extractPix } from "./sicredi.js";
-import { waConfigured, waVerify, sendWaText, sendWaButtons, sendWaList, parseIncoming, normalizePhone } from "./wa.js";
+import { waConfigured, waVerify, sendWaText, sendWaTextOrTemplate, sendWaButtons, sendWaList, parseIncoming, normalizePhone } from "./wa.js";
 
 // pasta de fotos de depoimentos (servida estaticamente pelo Vite via frontend/public)
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -61,7 +78,7 @@ app.use((_req, res, next) => { res.setHeader("Content-Type", "application/json; 
 /* ===================== AUTENTICAÇÃO DO PAINEL ADMIN =====================
    Protege as rotas do painel. Só quem tem conta (usuário+senha) acessa.
    Rotas públicas (site, portal do aluno, webhook) ficam liberadas. */
-const adminTokens = new Set(); // tokens de sessão válidos (em memória)
+const adminTokens = new Map(); // token -> { username, role } (sessões em memória)
 const genToken = () => crypto.randomBytes(24).toString("hex");
 // Enquanto não houver NENHUM admin cadastrado, o painel fica aberto (primeiro uso),
 // para não travar o sistema antes de você criar o acesso. Depois de criar, passa a exigir login.
@@ -85,13 +102,32 @@ const PUBLIC_API = [
   [null, /^\/api\/sicredi\/webhook(\/pix)?$/],
 ];
 const isPublicApi = (req) => PUBLIC_API.some(([m, re]) => (!m || m === req.method) && re.test(req.path));
+
+/* O que a INSTRUTORA pode chamar. É uma lista fechada e só de leitura: a agenda
+   dela é para consultar, não para operar. Qualquer outra rota — inclusive
+   qualquer POST/PATCH/DELETE — cai no 403 abaixo, mesmo que alguém monte a
+   chamada na mão fora da tela. A permissão mora aqui, não no botão. */
+const INSTRUTORA_API = [
+  ["GET", /^\/api\/state$/],
+  ["GET", /^\/api\/settings$/],
+  ["GET", /^\/api\/slots\/available$/],
+  ["GET", /^\/api\/testimonials$/],
+  ["POST", /^\/api\/admin\/logout$/],
+];
+const isInstrutoraApi = (req) => INSTRUTORA_API.some(([m, re]) => m === req.method && re.test(req.path));
+
 app.use((req, res, next) => {
   if (!req.path.startsWith("/api/")) return next(); // arquivos estáticos etc.
   if (!hasAdmin) return next(); // primeiro uso: sem admin cadastrado, tudo liberado
   if (isPublicApi(req)) return next();
   const tok = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
-  if (tok && adminTokens.has(tok)) return next();
-  return res.status(401).json({ error: "Acesso restrito ao painel. Faça login." });
+  const sess = tok ? adminTokens.get(tok) : null;
+  if (!sess) return res.status(401).json({ error: "Acesso restrito ao painel. Faça login." });
+  req.admin = sess;
+  if (sess.role === "instrutora" && !isInstrutoraApi(req)) {
+    return res.status(403).json({ error: "Seu acesso é apenas de consulta à Agenda." });
+  }
+  return next();
 });
 
 // "hoje" pelo relógio de Brasília (o servidor pode rodar em UTC): com
@@ -215,9 +251,7 @@ async function exigirRegras(client, alvo, { forcar = false, ignorarJanela = fals
       remarcar uma aula que já deixou de acontecer, não adiantar a próxima.
    8. Não se repõe a reposição: liberar a aula de reposição encerra o crédito.
       (A Inêz desfazendo pelo painel — excluir a aula — ainda devolve.) */
-const REPO_MAX_MES = 2;
-const REPO_HORAS_MIN = 6;
-const REPO_MANHA_ATE = "10:00"; // aula antes disso usa o prazo da meia-noite
+// REPO_MAX_MES, REPO_HORAS_MIN e REPO_MANHA_ATE vêm de regrasAula.js (ver import).
 
 // O prazo é do relógio da aluna, não do UTC do servidor. 'sv-SE' formata ISO.
 const agoraBR = () =>
@@ -588,6 +622,26 @@ async function loadSettings() {
 
 // Preços derivados do plano do aluno
 const valorDoPlano = (freq) => (Number(freq) === 2 ? SETTINGS.valorPlano2x : SETTINGS.valorPlano1x);
+// "R$ 120,00" — as mensagens do WhatsApp são texto puro, sem componente de tela.
+const moedaBR = (v) => Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+// "120,00" — nos templates o "R$" já está escrito no texto aprovado.
+const reaisBR = (v) => Number(v || 0).toFixed(2).replace(".", ",");
+const primeiroNome = (n) => String(n || "").trim().split(/\s+/)[0] || "";
+
+/* CPF: dígitos verificadores, não só o tamanho. O Sicredi recusa a cobrança com
+   CPF inválido, e recusar aqui é muito melhor do que a aluna descobrir depois de
+   digitar tudo e ficar sem Pix. */
+function cpfValido(cpf) {
+  const d = onlyDigits(cpf);
+  if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+  const dv = (ate) => {
+    let soma = 0;
+    for (let i = 0; i < ate; i++) soma += Number(d[i]) * (ate + 1 - i);
+    const r = (soma * 10) % 11;
+    return r === 10 ? 0 : r;
+  };
+  return dv(9) === Number(d[9]) && dv(10) === Number(d[10]);
+}
 
 /* Marca gravada no `paymentMethod` da reserva da aula experimental. Ela diz que
    aquele dinheiro é a 1ª MENSALIDADE da aluna — o que a matricula — e não o
@@ -1151,6 +1205,37 @@ async function registrarMatriculaPaga(booking) {
   }
 }
 
+/* Agradecimento + confirmação + REGRAS, quando a 1ª mensalidade cai.
+
+   É a única vez que a aluna recebe as regras inteiras, e é de propósito: ela
+   acabou de pagar, está lendo, e ainda não marcou nada de errado. Manda em duas
+   mensagens (confirmação e regras) porque uma parede de texto no WhatsApp não
+   é lida — a segunda chega já com o contexto da primeira.
+
+   Só fala com quem veio pelo WhatsApp: sem telefone, ou sem reserva segurada,
+   não há conversa aberta e o envio sai em silêncio. */
+async function avisarMatriculaConfirmada(booking) {
+  if (!waConfigured() || !booking?.phone) return;
+  if (!ehPagamentoDeMatricula(booking.paymentMethod)) return;
+  try {
+    await prisma.booking.update({
+      where: { id: booking.id },
+      data: { holdUntil: null, holdNudged: false },
+    });
+    await prisma.waConversation.updateMany({
+      where: { bookingId: booking.id },
+      data: { step: "done", bookingId: null, slotId: null, pendingName: null },
+    });
+    await waSend(booking.phone, textoMatriculaConfirmada({
+      nome: booking.clientName,
+      unidade: booking.unit,
+      quando: fmtSlotBR({ date: booking.date, time: booking.time }),
+    }));
+  } catch (e) {
+    console.warn(`[wa] confirmação da matrícula de ${booking.clientName} não saiu: ${e.message}`);
+  }
+}
+
 app.post(
   "/api/bookings/:id/pay",
   wrap(async (req, res) => {
@@ -1170,6 +1255,9 @@ app.post(
     // Pagou a 1ª mensalidade com plano escolhido? Sai daqui já matriculada — a
     // tela da aluna nova usa `matricula` para mostrar o plano e o próximo vencimento.
     const matricula = await registrarMatriculaPaga(booking);
+    // Baixa dada pelo painel também confirma para a aluna: do lado dela é o
+    // mesmo evento, e ela precisa das regras antes da primeira aula.
+    await avisarMatriculaConfirmada(booking);
     res.json({ ...booking, matricula });
   })
 );
@@ -1208,42 +1296,52 @@ async function clientCpfByName(name) {
   return (c?.cpf || "").replace(/\D/g, "");
 }
 
-// Gera (ou reaproveita) a cobrança Pix de uma reserva
+/* Gera (ou reaproveita) a cobrança Pix de UMA reserva.
+
+   Vive fora da rota porque o bot do WhatsApp precisa do mesmo Pix sem passar por
+   HTTP: a conversa cria a reserva e manda o código na mesma mensagem. Lança
+   erros com `code` para a rota devolver o status certo. */
+async function emitirPixDaReserva(booking, { cpf: cpfInformado, name, dueDate } = {}) {
+  if (!sicrediConfigured()) {
+    throw Object.assign(new Error(`Sicredi não configurado no servidor — falta: ${sicrediMissing().join(", ")}.`), { code: 400 });
+  }
+  if (booking.txid && booking.pixCode) return { txid: booking.txid, pixCode: booking.pixCode, reused: true };
+  const cpf = (cpfInformado || "").replace(/\D/g, "") || (await clientCpfByName(booking.clientName));
+  if (!cpf) throw Object.assign(new Error("CPF do pagador é obrigatório. Cadastre o CPF da aluna antes de gerar a cobrança."), { code: 400 });
+  /* Sem valor próprio não há o que cobrar: a aula está dentro da mensalidade
+     do mês (o Pix dela se gera em /api/invoices, na aba Mensalistas). */
+  const amountCents = Math.round((Number(booking.value) || 0) * 100);
+  if (amountCents <= 0) {
+    throw Object.assign(new Error("Esta aula não tem cobrança própria — o valor está dentro da mensalidade do mês. Gere o Pix da mensalidade na aba Mensalistas."), { code: 400 });
+  }
+  const txid = txidBooking(booking.id);
+  const cob = await createCharge({
+    txid,
+    name: name || booking.clientName,
+    cpf,
+    amountCents,
+    dueDate: dueDate || addDays(todayISO(), 2),
+    description: `Reserva de aula — ${booking.unit} · ${booking.date} ${booking.time}`,
+  });
+  const pixCode = extractPix(cob);
+  await prisma.booking.update({
+    where: { id: booking.id },
+    data: { txid, pixCode: pixCode || booking.pixCode },
+  });
+  return { txid, pixCode };
+}
+
 app.post(
   "/api/bookings/:id/invoice",
   wrap(async (req, res) => {
-    if (!sicrediConfigured()) {
-      return res.status(400).json({ error: `Sicredi não configurado no servidor — falta: ${sicrediMissing().join(", ")}.` });
-    }
     const id = Number(req.params.id);
     const booking = await prisma.booking.findUnique({ where: { id } });
     if (!booking) return res.status(404).json({ error: "Marcação não encontrada" });
-    if (booking.txid && booking.pixCode) {
-      return res.json({ txid: booking.txid, pixCode: booking.pixCode, reused: true });
+    try {
+      res.json(await emitirPixDaReserva(booking, req.body || {}));
+    } catch (e) {
+      res.status(e.code || 500).json({ error: e.message });
     }
-    const cpf = (req.body.cpf || "").replace(/\D/g, "") || (await clientCpfByName(booking.clientName));
-    if (!cpf) return res.status(400).json({ error: "CPF do pagador é obrigatório. Cadastre o CPF da aluna antes de gerar a cobrança." });
-    /* Sem valor próprio não há o que cobrar: a aula está dentro da mensalidade
-       do mês (o Pix dela se gera em /api/invoices, na aba Mensalistas). */
-    const amountCents = Math.round((Number(booking.value) || 0) * 100);
-    if (amountCents <= 0) {
-      return res.status(400).json({ error: "Esta aula não tem cobrança própria — o valor está dentro da mensalidade do mês. Gere o Pix da mensalidade na aba Mensalistas." });
-    }
-    const txid = txidBooking(id);
-    const cob = await createCharge({
-      txid,
-      name: req.body.name || booking.clientName,
-      cpf,
-      amountCents,
-      dueDate: req.body.dueDate || addDays(todayISO(), 2),
-      description: `Reserva de aula — ${booking.unit} · ${booking.date} ${booking.time}`,
-    });
-    const pixCode = extractPix(cob);
-    await prisma.booking.update({
-      where: { id },
-      data: { txid, pixCode: pixCode || booking.pixCode },
-    });
-    res.json({ txid, pixCode });
   })
 );
 
@@ -1261,15 +1359,39 @@ async function confirmarPagamentoPorTxid(txid) {
     booking = await prisma.booking.findUnique({ where: { id: ref.id } });
   }
   if (booking && !booking.paid) {
+    /* Ela pagou depois de o prazo da vaga estourar. O dinheiro entrou, então a
+       reserva não pode simplesmente continuar cancelada — mas a vaga pode ter
+       sido ocupada por outra aluna nesse meio-tempo. Se ainda há lugar, a aula
+       volta; se não há, o pagamento fica registrado e a Inêz remarca com ela.
+       Nunca estourar a capacidade da turma: é isso que protege quem chegou antes. */
+    if (booking.status === "cancelada") {
+      const slot = await prisma.slot.findUnique({ where: { id: booking.slotId } });
+      const occ = await occupancy(booking.slotId);
+      if (!slot || occ >= slot.capacity) {
+        await prisma.booking.update({
+          where: { id: booking.id },
+          data: { paid: true, paymentDate: todayISO(), holdUntil: null },
+        });
+        console.warn(`[sicredi] reserva ${booking.id} paga fora do prazo e a turma já lotou — remarcar com ${booking.clientName}.`);
+        if (booking.phone) {
+          await waSend(booking.phone, `${(booking.clientName || "").split(" ")[0]}, recebemos o seu pagamento! 💚\n\nSó que o horário que você tinha escolhido lotou enquanto o Pix não caía. Seu valor está guardado — me chama neste número que a gente escolhe outro dia juntas:\n📞 ${WA_ATENDENTE}`);
+        }
+        return true;
+      }
+    }
     await prisma.booking.update({
       where: { id: booking.id },
       data: {
         paid: true, status: "confirmada", paymentDate: todayISO(),
+        holdUntil: null,
         paymentMethod: ehPagamentoDeMatricula(booking.paymentMethod) ? booking.paymentMethod : "Pix",
       },
     });
     await registrarMatriculaPaga({ ...booking, paymentDate: todayISO() });
     console.log(`[sicredi] pagamento confirmado — reserva ${booking.id}`);
+    // O agradecimento + regras é o fecho do fluxo do WhatsApp. Fora dele (site,
+    // painel) não há conversa aberta, e avisarMatriculaConfirmada sai em silêncio.
+    await avisarMatriculaConfirmada(booking);
     return true;
   }
 
@@ -1902,6 +2024,174 @@ const dispararRodada = () => rodadaMensalidades().catch((e) => {
 });
 setInterval(dispararRodada, 60 * 60 * 1000); // a cada hora
 setTimeout(dispararRodada, 15_000); // e uma vez no boot, já com o banco de pé
+
+/* ---------- AVISOS DE MENSALIDADE PELO WHATSAPP ----------
+
+   Dois envios, e só dois, por mensalidade:
+
+   1. LEMBRETE, AVISO_ANTES dias ANTES do vencimento. É lembrete, não cobrança:
+      o tom é de quem avisa para a pessoa não pagar multa à toa. Foi assim que a
+      Inêz pediu — "não como se fosse uma cobrança".
+   2. COBRANÇA, AVISO_ATRASO dia DEPOIS do vencimento, já com multa e juros na
+      conta e o Pix reemitido pelo valor novo.
+
+   As datas de envio ficam gravadas na própria mensalidade (avisoAVencerAt /
+   avisoAtrasoAt): é o que impede a rodada de repetir o recado a cada hora, e
+   deixa visível no banco quando a escola falou com a aluna.
+
+   Mensalidade marcada como "sem Pix" (baixa manual no mês anterior) fica FORA
+   dos dois: quem acerta por fora não recebe cobrança automática. */
+const AVISO_ANTES = 2;  // dias antes do vencimento
+const AVISO_ATRASO = 1; // dias depois do vencimento
+
+/* ---------- HORÁRIO DAS MENSAGENS QUE O SISTEMA INICIA ----------
+
+   Cobrança às 3 da manhã irrita, e irritação no WhatsApp vira bloqueio — um
+   número bloqueado não agenda mais ninguém. Então tudo que o sistema manda DO
+   NADA (mensalidade, lembrete de aula, conversa parada) espera a janela.
+
+   O que NÃO passa por aqui, de propósito: as mensagens da vaga segurada. A
+   aluna está no meio da conversa dela e o prazo corre em tempo real; segurar o
+   aviso até amanhã faria a vaga sumir sem ela entender por quê.
+
+   A hora é a de São Paulo, não a do servidor (que roda em UTC em produção). */
+const SILENCIO_DE = 8;  // manhã: só a partir das 8h
+const SILENCIO_ATE = 20; // noite: nada depois das 20h
+const horaBR = () => Number(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo", hour: "2-digit", hour12: false }));
+const podeMandarAgora = () => { const h = horaBR(); return h >= SILENCIO_DE && h < SILENCIO_ATE; };
+
+/* `fallback` é o template aprovado equivalente ao texto. Aviso de mensalidade é
+   mensagem que a ESCOLA inicia, quase sempre com a janela de 24h fechada — sem
+   template a Meta simplesmente não entrega. O Pix vai depois, em mensagem
+   separada, e essa só sai se a janela estiver aberta; fora dela, o botão do
+   template leva a aluna ao portal, onde o QR está. */
+async function avisoComPix(client, inv, texto, fallback) {
+  try {
+    await sendWaTextOrTemplate(client.phone, texto, fallback);
+  } catch (e) {
+    console.warn(`[mensalidade wa] ${client.name}: ${e.message}`);
+    return;
+  }
+  /* O QR só vai junto se existir E estiver cobrando o valor certo. Um Pix
+     emitido antes da multa cobraria menos do que a conta escrita acima dele —
+     mandar isso é pior do que não mandar código nenhum. */
+  try {
+    const atual = await pixPagavelDaMensalidade(inv);
+    if (atual?.pixCode) {
+      await waSend(client.phone, "Segue o Pix copia-e-cola 👇");
+      await waSend(client.phone, atual.pixCode);
+      return;
+    }
+  } catch (e) {
+    console.warn(`[mensalidade wa] Pix de ${client.name} (${inv.competencia}) não saiu: ${e.message}`);
+  }
+  await waSend(client.phone, "Me avisa por aqui que eu te mando o Pix atualizado. 💚");
+}
+
+let ultimoDiaAvisos = null;
+async function rodadaAvisosMensalidade() {
+  if (!waConfigured()) return;
+  /* Sai ANTES de marcar o dia: fora da janela a rodada não fez nada, e marcar
+     aqui faria o aviso do dia inteiro se perder porque a hora deu 3 da manhã. */
+  if (!podeMandarAgora()) return;
+  const hoje = todayISO();
+  if (ultimoDiaAvisos === hoje) return;
+  ultimoDiaAvisos = hoje;
+
+  const abertas = await prisma.invoice.findMany({
+    where: { status: "pendente", semPix: false },
+  });
+  for (const inv of abertas) {
+    const client = await prisma.client.findUnique({ where: { id: inv.clientId } });
+    if (!client?.phone || client.status === "cancelado") continue;
+    const comEnc = comEncargos(inv);
+    const mes = compPorExtenso(inv.competencia);
+    try {
+      if (!inv.avisoAVencerAt && hoje === addDays(inv.dueDate, -AVISO_ANTES)) {
+        await avisoComPix(client, inv, textoMensalidadeAVencer({
+          nome: client.name, mes,
+          valor: moedaBR(inv.amountCents / 100),
+          vencimento: fmtDiaBR(inv.dueDate),
+        }), {
+          name: "mensalidade_a_vencer",
+          body: [primeiroNome(client.name), mes, reaisBR(inv.amountCents / 100), fmtDiaBR(inv.dueDate)],
+        });
+        await prisma.invoice.update({ where: { id: inv.id }, data: { avisoAVencerAt: hoje } });
+        continue;
+      }
+      const dias = comEnc.encargos?.dias || 0;
+      if (!inv.avisoAtrasoAt && dias >= AVISO_ATRASO) {
+        const total = comEnc.encargos?.total ?? inv.amountCents / 100;
+        await avisoComPix(client, inv, textoMensalidadeEmAtraso({
+          nome: client.name, mes, dias, valor: moedaBR(total),
+        }), {
+          name: "mensalidade_em_atraso",
+          body: [primeiroNome(client.name), mes, String(dias), reaisBR(total)],
+        });
+        await prisma.invoice.update({ where: { id: inv.id }, data: { avisoAtrasoAt: hoje } });
+      }
+    } catch (e) {
+      console.warn(`[mensalidade wa] ${client.name} (${inv.competencia}): ${e.message}`);
+    }
+  }
+}
+/* ---------- LEMBRETE DA AULA, NA VÉSPERA ----------
+
+   Uma mensagem por aula, um dia antes, com dois botões: confirmar presença ou
+   avisar que não vai. O segundo botão é o ponto: ele libera a vaga pelo MESMO
+   caminho do portal (`liberarAula`), então as regras de reposição valem iguais —
+   crédito só com a antecedência mínima, e nada de repor reposição.
+
+   Só aula ativa, de aluna com telefone, e só uma vez (`lembreteAulaAt`). Respeita
+   a janela de silêncio: é mensagem que a escola inicia. */
+let ultimoDiaLembretes = null;
+async function rodadaLembretesDeAula() {
+  if (!waConfigured() || !podeMandarAgora()) return;
+  const hoje = todayISO();
+  if (ultimoDiaLembretes === hoje) return;
+  ultimoDiaLembretes = hoje;
+
+  const amanha = addDays(hoje, 1);
+  const aulas = await prisma.booking.findMany({
+    where: {
+      date: amanha,
+      status: { in: ["aguardando", "confirmada"] },
+      lembreteAulaAt: null,
+      phone: { not: "" },
+    },
+  });
+  for (const b of aulas) {
+    if (!b.phone) continue;
+    try {
+      await prisma.booking.update({ where: { id: b.id }, data: { lembreteAulaAt: hoje } });
+      await waSend(b.phone, textoLembreteAula({
+        nome: b.clientName,
+        unidade: b.unit,
+        quando: fmtSlotBR({ date: b.date, time: b.time }),
+      }));
+      await waButtons(b.phone, "Confirma que você vem?", [
+        { id: `presenca:${b.id}`, title: "Sim, estarei lá" },
+        { id: `faltarei:${b.id}`, title: "Não vou poder ir" },
+      ]);
+    } catch (e) {
+      console.warn(`[lembrete aula] ${b.clientName}: ${e.message}`);
+    }
+  }
+  if (aulas.length) console.log(`[lembrete aula] ${aulas.length} lembrete(s) de ${amanha} enviados.`);
+}
+const dispararLembretes = () => rodadaLembretesDeAula().catch((e) => {
+  ultimoDiaLembretes = null; // falhou: a próxima hora tenta de novo
+  console.warn("[lembrete aula]", e.message);
+});
+setInterval(dispararLembretes, 60 * 60 * 1000);
+setTimeout(dispararLembretes, 75_000);
+
+const dispararAvisos = () => rodadaAvisosMensalidade().catch((e) => {
+  ultimoDiaAvisos = null; // falhou: a próxima hora tenta de novo
+  console.warn("[mensalidade wa]", e.message);
+});
+setInterval(dispararAvisos, 60 * 60 * 1000);
+setTimeout(dispararAvisos, 45_000);
 
 /* ---------- PORTAL DO ALUNO ---------- */
 // Localiza o aluno pela "chave" usada no portal: CPF, telefone (dígitos) ou id.
@@ -2619,21 +2909,160 @@ async function waAvailableSlots(unit) {
     .map((s) => ({ ...s, vagas: s.capacity - (occ[s.id] || 0) }))
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
 }
-function bookingConfirmText(name, slot) {
-  return `Prontinho, ${name.split(" ")[0]}! 💚\n\nSua aula está *reservada*:\n📍 ${slot.unit}\n🗓️ ${fmtSlotBR(slot)}\n\nStatus: *aguardando confirmação*. Em breve falamos com você para acertar os detalhes. Até logo! 🧶`;
-}
-async function createWaBooking(nomeBruto, phone, slot) {
+/* Reserva provisória do WhatsApp: a vaga fica SEGURADA por HOLD_MIN minutos
+   enquanto a aluna paga a 1ª mensalidade. Combinado com a Inêz em 30/08/2026 —
+   antes disso a conversa reservava sem pagar nada, e conversa abandonada tirava
+   a vaga de quem ia pagar.
+
+   A meia hora do fim (HOLD_AVISO_MIN), o bot pergunta se ficou dúvida e oferece
+   o atendimento humano: é a última chance de destravar antes de a vaga sair. */
+const HOLD_MIN = 60;
+const HOLD_AVISO_MIN = 30;
+
+/* Cria a reserva da experimental já como pagamento de matrícula: o valor é a 1ª
+   MENSALIDADE do plano escolhido (é ela que matricula a aluna — ver
+   registrarMatriculaPaga), e o plano fica guardado no cadastro como INTENÇÃO,
+   exatamente como faz a tela da matrícula no site. */
+async function createWaBooking(nomeBruto, phone, slot, { weeklyFreq, cpf }) {
   const name = padronizarNome(nomeBruto);
-  await prisma.booking.create({
+  const freq = Number(weeklyFreq) === 2 ? 2 : 1;
+  const booking = await prisma.booking.create({
     data: {
       clientName: name, phone: phone || "", unit: slot.unit,
       date: slot.date, time: slot.time, prof: slot.prof, slotId: slot.id,
-      status: "aguardando", value: 0,
+      status: "aguardando",
+      value: valorDoPlano(freq),
+      paymentMethod: MARCA_MATRICULA,
+      holdUntil: new Date(Date.now() + HOLD_MIN * 60_000),
     },
   });
   // sem etiqueta: "Lead" saiu do sistema (ver VALID_TAGS lá em cima)
-  await ensureClient(name, phone, slot.unit, [], null);
+  const client = await ensureClient(name, phone, slot.unit, [], cpf, null, true);
+  await prisma.client.update({
+    where: { id: client.id },
+    data: {
+      matriculaStatus: "pendente",
+      trialDate: slot.date,
+      weeklyFreq: freq,
+      mensalistaTipo: "fixo",
+      ...(cpf && !client.cpf ? { cpf: onlyDigits(cpf) } : {}),
+    },
+  });
+  return { booking, client };
 }
+
+/* Libera a vaga de uma reserva cujo prazo estourou. Não é cancelamento de aula:
+   é a reserva que nunca chegou a existir de verdade, porque não foi paga. */
+async function expirarReservaWa(booking) {
+  await prisma.booking.update({
+    where: { id: booking.id },
+    data: { status: "cancelada", holdUntil: null, absenceReason: "Reserva não paga no prazo — vaga liberada" },
+  });
+  await prisma.waConversation.updateMany({
+    where: { bookingId: booking.id },
+    data: { step: "start", bookingId: null, slotId: null, pendingName: null, weeklyFreq: null },
+  });
+  if (booking.phone) {
+    await waSend(booking.phone, textoHoldExpirado({
+      nome: booking.clientName,
+      quando: fmtSlotBR({ date: booking.date, time: booking.time }),
+    }));
+  }
+  console.log(`[wa hold] reserva ${booking.id} (${booking.clientName}) expirou — vaga liberada.`);
+}
+
+/* Rodada das reservas seguradas. Roda de 5 em 5 minutos: cutuca quem está a
+   meia hora do fim e libera quem passou do prazo. Só olha reserva com holdUntil,
+   então nada do painel ou do site entra aqui. */
+async function rodadaReservasSeguradas() {
+  const agora = new Date();
+  const pendentes = await prisma.booking.findMany({
+    where: { holdUntil: { not: null }, paid: false, status: "aguardando" },
+  });
+  for (const b of pendentes) {
+    const fim = new Date(b.holdUntil);
+    /* ANTES de soltar a vaga, pergunta ao banco se o Pix caiu.
+
+       O webhook do Sicredi é o caminho normal, mas ele é um caminho só: se
+       estiver fora do ar por vinte minutos — ou se a notificação simplesmente se
+       perder — a reserva expiraria com o dinheiro dentro. A aluna teria pago e
+       perdido a vaga, que é o pior que este sistema pode fazer com alguém.
+
+       `confirmarPagamentoPorTxid` consulta o Sicredi com mTLS e, se estiver
+       pago, faz a baixa inteira: confirma a reserva, matricula e dispara o
+       agradecimento com as regras. Custa uma chamada por reserva prestes a
+       expirar — raras, e o cenário que evita é caro demais para economizar. */
+    if (agora >= fim) {
+      if (b.txid && (await confirmarPagamentoPorTxid(b.txid).catch(() => false))) {
+        console.log(`[wa hold] reserva ${b.id} estava paga — confirmada na consulta ao Sicredi, não expirou.`);
+        continue;
+      }
+      await expirarReservaWa(b);
+      continue;
+    }
+    const faltam = Math.round((fim - agora) / 60_000);
+    if (!b.holdNudged && faltam <= HOLD_AVISO_MIN) {
+      // Mesma consulta antes de cutucar: perguntar "ficou alguma dúvida?" para
+      // quem já pagou é a mensagem errada na pior hora.
+      if (b.txid && (await confirmarPagamentoPorTxid(b.txid).catch(() => false))) continue;
+      await prisma.booking.update({ where: { id: b.id }, data: { holdNudged: true } });
+      if (b.phone) {
+        await waSend(b.phone, textoLembreteHold({ nome: b.clientName, minutos: Math.max(1, faltam) }));
+        await waButtons(b.phone, "Posso te ajudar com alguma coisa?", [
+          { id: "duvida:pix", title: "💠 Reenviar o Pix" },
+          { id: "humano", title: "Falar com atendente" },
+        ]);
+      }
+    }
+  }
+}
+/* Conversa parada no meio: a aluna começou a marcar e sumiu. Depois de
+   INATIVIDADE_MIN minutos em silêncio, o bot retoma dizendo o que falta.
+
+   Três cuidados que fazem a diferença entre lembrete e chateação:
+
+   • UMA vez por abandono (`retomadaAt`), limpo assim que ela responde. Insistir
+     com quem não respondeu é o caminho curto para o bloqueio — e um número
+     bloqueado não agenda mais ninguém.
+   • Só conversas paradas há menos de 24h: passada a janela do WhatsApp, texto
+     livre não é entregue, e o assunto já esfriou de qualquer jeito.
+   • O passo `cobranca` fica FORA: ele já tem o lembrete da vaga segurada, que
+     cai mais ou menos na mesma hora. Dois recados seguidos sobre a mesma coisa
+     soam como cobrança. */
+const INATIVIDADE_MIN = 30;
+const PASSOS_RETOMAVEIS = Object.keys(PENDENCIA_POR_PASSO);
+
+async function rodadaConversasParadas() {
+  if (!waConfigured() || !podeMandarAgora()) return;
+  const agora = Date.now();
+  const paradas = await prisma.waConversation.findMany({
+    where: {
+      step: { in: PASSOS_RETOMAVEIS },
+      retomadaAt: null,
+      updatedAt: {
+        lt: new Date(agora - INATIVIDADE_MIN * 60_000),
+        gt: new Date(agora - 24 * 60 * 60_000),
+      },
+    },
+  });
+  for (const c of paradas) {
+    const nome = c.pendingName || (await prisma.client.findFirst({ where: { phone: c.phone } }))?.name || "";
+    await prisma.waConversation.update({ where: { phone: c.phone }, data: { retomadaAt: new Date() } });
+    await waSend(c.phone, textoConversaParada({ nome, pendencia: PENDENCIA_POR_PASSO[c.step] }));
+    await waButtons(c.phone, "Quer continuar?", [
+      // títulos de botão param em 20 caracteres — a wa.js corta em silêncio
+      { id: "retomar", title: "Continuar" },
+      { id: "new", title: "Recomeçar" },
+      { id: "humano", title: "Falar com atendente" },
+    ]);
+    console.log(`[wa] conversa de ${c.phone} retomada no passo "${c.step}".`);
+  }
+}
+
+setInterval(() => rodadaReservasSeguradas().catch((e) => console.warn("[wa hold]", e.message)), 5 * 60 * 1000);
+setTimeout(() => rodadaReservasSeguradas().catch(() => {}), 30_000);
+setInterval(() => rodadaConversasParadas().catch((e) => console.warn("[wa parada]", e.message)), 5 * 60 * 1000);
+setTimeout(() => rodadaConversasParadas().catch(() => {}), 60_000);
 
 async function handleWaMessage(msg) {
   const phone = normalizePhone(msg.from);
@@ -2643,11 +3072,21 @@ async function handleWaMessage(msg) {
   let conv = await prisma.waConversation.findUnique({ where: { phone } });
   if (!conv) conv = await prisma.waConversation.create({ data: { phone } });
 
+  /* Ela respondeu: o abandono acabou. Limpar aqui é o que devolve o direito a um
+     novo lembrete se ela sumir de novo mais adiante — e só escreve quando há o
+     que limpar, para não gravar por gravar a cada mensagem. */
+  if (conv.retomadaAt) {
+    conv = await prisma.waConversation.update({ where: { phone }, data: { retomadaAt: null } });
+  }
+
   const setConv = (data) => prisma.waConversation.update({ where: { phone }, data });
 
   /* ----- telas ----- */
   const telaUnidade = async (prefix = "") => {
-    await setConv({ step: "unit", unit: null, slotId: null, offered: "[]", pendingName: null });
+    // Recomeçar limpa tudo o que a conversa carregava — inclusive o plano, o CPF
+    // e a reserva anterior. A reserva em si continua segurada até o prazo dela;
+    // quem a solta é a rodada, não o fato de a aluna ter recomeçado o menu.
+    await setConv({ step: "unit", unit: null, slotId: null, offered: "[]", pendingName: null, weeklyFreq: null, bookingId: null });
     const nome = msg.name ? " " + msg.name.split(" ")[0] : "";
     return sendUnitMenu(msg.from, `${prefix}Olá${nome}! 💚 Sou o assistente da *Fios que Curam*. Vamos agendar sua aula? Escolha a unidade:`);
   };
@@ -2693,14 +3132,125 @@ async function handleWaMessage(msg) {
     ]);
   };
 
-  const reservar = async (name, slot) => {
+  /* Escolher o plano é o que define o VALOR da 1ª mensalidade — e é ela que
+     matricula a aluna. Vem antes do CPF porque é a pergunta agradável (o que
+     você quer?) e o CPF é a burocrática; nesta ordem, quem desiste desiste
+     antes de digitar documento. */
+  const telaPlano = async (name, prefix = "") => {
+    await setConv({ step: "plano", pendingName: name });
+    return waButtons(
+      msg.from,
+      `${prefix}Show, ${name.split(" ")[0]}! 💚 Quantas aulas por semana você quer fazer?\n\n` +
+      `1️⃣ *1x por semana* — ${moedaBR(valorDoPlano(1))} por mês\n` +
+      `2️⃣ *2x por semana* — ${moedaBR(valorDoPlano(2))} por mês\n\n` +
+      `A primeira aula já entra nesse valor: você paga a 1ª mensalidade e, se decidir não continuar depois dela, devolvemos tudo.`,
+      [
+        { id: "plano:1", title: "1x por semana" },
+        { id: "plano:2", title: "2x por semana" },
+      ]
+    );
+  };
+
+  // O Sicredi exige CPF do pagador para emitir a cobrança Pix — sem ele não há
+  // como cobrar, então a pergunta é obrigatória e explica o porquê.
+  const telaCpf = async (prefix = "") => {
+    await setConv({ step: "cpf" });
+    return waSend(msg.from, `${prefix}Por favor, me manda o seu *CPF* (só os números) 💚\n\nÉ o banco que pede, para emitir o Pix no seu nome.`);
+  };
+
+  /* Fecha a reserva: cria a aula segurada, emite o Pix e manda o código. A vaga
+     fica de pé por HOLD_MIN minutos — quem confirma a reserva é o pagamento. */
+  const cobrar = async (name, slot, freq, cpf) => {
     const occ = await prisma.booking.count({ where: { slotId: slot.id, status: { not: "cancelada" } } });
     if (occ >= slot.capacity) return telaUnidade("Esse horário lotou enquanto conversávamos. 😔 Vamos de novo: ");
-    await createWaBooking(name, phone, slot);
-    await setConv({ step: "done", slotId: null, pendingName: null });
-    await waSend(msg.from, bookingConfirmText(name, slot));
-    return waButtons(msg.from, "Posso ajudar em mais alguma coisa?", [{ id: "new", title: "🔄 Nova reserva" }]);
+    const { booking } = await createWaBooking(name, phone, slot, { weeklyFreq: freq, cpf });
+    let pixCode = "";
+    try {
+      ({ pixCode } = await emitirPixDaReserva(booking, { cpf, name }));
+    } catch (e) {
+      /* Sem Pix a vaga não pode ficar segurada em silêncio: a aluna não teria
+         como pagar e ainda ocuparia o lugar de quem tem. Solta e chama humano. */
+      console.warn(`[wa] Pix da reserva ${booking.id} falhou: ${e.message}`);
+      await prisma.booking.update({
+        where: { id: booking.id },
+        data: { status: "cancelada", holdUntil: null, absenceReason: "Falha ao emitir o Pix da reserva" },
+      });
+      await setConv({ step: "done", slotId: null, bookingId: null, pendingName: null });
+      return waSend(msg.from, `Ops, não consegui gerar o Pix agora. 😞 Me chama neste número que a gente resolve na hora:\n📞 ${WA_ATENDENTE}`);
+    }
+    await setConv({ step: "cobranca", bookingId: booking.id, cpf, weeklyFreq: freq, pendingName: null });
+    await waSend(msg.from, textoCobrancaReserva({
+      nome: name,
+      unidade: slot.unit,
+      quando: fmtSlotBR(slot),
+      valor: moedaBR(valorDoPlano(freq)),
+      minutos: HOLD_MIN,
+    }));
+    // O código vai SOZINHO numa mensagem: assim ela copia com um toque, sem
+    // arrastar junto o texto acima.
+    if (pixCode) await waSend(msg.from, pixCode);
+    return waButtons(msg.from, "Assim que o pagamento cair eu te confirmo por aqui. 💚", [
+      { id: "duvida:pix", title: "💠 Reenviar o Pix" },
+      { id: "humano", title: "Falar com atendente" },
+    ]);
   };
+
+  /* ----- atendimento humano: vale em QUALQUER passo, e vem antes de tudo -----
+     A Inêz pediu para insistir no automático — o texto tenta uma vez e entrega o
+     número. Não trava a conversa: o bot segue respondendo se ela continuar. */
+  if (rid === "humano" || /\b(atendente|humano|pessoa real|falar com alguém|falar com alguem)\b/.test(low))
+    return waSend(msg.from, textoAtendenteHumano());
+
+  /* ----- respostas ao lembrete da véspera -----
+     "Não vou poder ir" libera a vaga pelo MESMO caminho do portal: as regras de
+     reposição valem iguais, e o crédito sai (ou não) pelo mesmo cálculo. O bot
+     não decide nada — ele só entrega o motivo que `liberarAula` devolveu, que é
+     o texto que explica por que houve ou não crédito. */
+  if (rid.startsWith("faltarei:")) {
+    const b = await prisma.booking.findUnique({ where: { id: parseInt(rid.slice(9), 10) } });
+    // Só a dona da aula pode liberá-la: o id vem de um botão, e botão de
+    // mensagem antiga pode ser tocado por qualquer um que tenha o histórico.
+    if (!b || normalizePhone(b.phone || "") !== phone) {
+      return waSend(msg.from, "Não encontrei essa aula no seu nome. Me chama que eu te ajudo. 💚");
+    }
+    if (b.status === "cancelada") return waSend(msg.from, "Essa aula já está liberada. 💚");
+    const client = await prisma.client.findFirst({ where: { name: b.clientName } });
+    if (!client) return waSend(msg.from, `Não achei seu cadastro. Me chama neste número:\n📞 ${WA_ATENDENTE}`);
+    const r = await liberarAula(client, b, { absenceReason: "Avisou pelo WhatsApp que não poderá ir" });
+    return waSend(msg.from,
+      r.credito
+        ? `Pronto, avisei a escola e liberei a sua vaga. 💚\n\nVocê ganhou *1 crédito de reposição* — marque pelo portal:\n${WA_PORTAL_URL}`
+        : `Pronto, avisei a escola e liberei a sua vaga. 💚${r.motivo ? "\n\n" + r.motivo : ""}`);
+  }
+  if (rid.startsWith("presenca:")) {
+    return waSend(msg.from, "Combinado, te espero lá! 🧶💚");
+  }
+
+  /* "Continuar de onde parei": repete a tela do passo em que ela estava. Não
+     avança nada — só mostra de novo a pergunta que ficou sem resposta. */
+  if (rid === "retomar") {
+    if (conv.step === "unit") return sendUnitMenu(msg.from, "Vamos lá! Escolha a unidade 👇");
+    if (conv.step === "slot") return telaHorarios(conv.unit || SETTINGS.units[0], "Retomando! ");
+    if (conv.step === "confirm" && conv.slotId) {
+      const s = await prisma.slot.findUnique({ where: { id: conv.slotId } });
+      if (s) return telaConfirmarHorario(s);
+    }
+    if (conv.step === "name") return telaNome("Retomando! ");
+    if (conv.step === "nameok" && conv.pendingName) return telaConfirmarNome(conv.pendingName);
+    if (conv.step === "plano") return telaPlano(conv.pendingName || "", "Retomando! ");
+    if (conv.step === "cpf") return telaCpf("Retomando! ");
+    return telaUnidade();
+  }
+
+  // Reenviar o Pix da reserva que está segurada agora.
+  if (rid === "duvida:pix") {
+    const b = conv.bookingId ? await prisma.booking.findUnique({ where: { id: conv.bookingId } }) : null;
+    if (b && b.pixCode && !b.paid && b.status === "aguardando") {
+      await waSend(msg.from, "Segue o Pix da sua reserva 👇");
+      return waSend(msg.from, b.pixCode);
+    }
+    return waSend(msg.from, "Não encontrei uma reserva aguardando pagamento por aqui. Quer marcar uma aula? É só dizer *menu*. 💚");
+  }
 
   /* ----- navegação por botão: vale em qualquer passo ----- */
   if (rid === "new" || ["menu", "oi", "olá", "ola", "agendar", "começar", "comecar", "início", "inicio"].includes(low))
@@ -2741,7 +3291,19 @@ async function handleWaMessage(msg) {
       const slot = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
       if (!slot) return telaUnidade("Esse horário expirou. ");
       const client = await prisma.client.findFirst({ where: { phone } });
-      if (client && client.name) return reservar(client.name, slot);
+      /* Este fluxo cobra a 1ª MENSALIDADE — é o que matricula quem está
+         chegando. Quem já passou pela experimental não pode entrar aqui: a aula
+         dela já está paga dentro da mensalidade do mês, e cobrar de novo seria
+         vender duas vezes a mesma coisa. Ela marca pelo portal, onde as regras
+         do plano (teto da semana, janela da escala) são aplicadas. */
+      if (client && jaTeveExperimental(client)) {
+        await setConv({ step: "done", slotId: null });
+        return waSend(msg.from,
+          `${client.name.split(" ")[0]}, você já é nossa aluna! 💚 Suas aulas você marca pelo *portal da aluna* — lá o sistema já conhece o seu plano e o seu saldo de reposição:\n\n` +
+          `${WA_PORTAL_URL}\n\n` +
+          `Se tiver qualquer dificuldade, me chama neste número:\n📞 ${WA_ATENDENTE}`);
+      }
+      if (client && client.name) return telaPlano(client.name);
       return telaNome();
     }
     return waButtons(msg.from, `Toque em *Confirmar* para reservar, ou escolha outro horário 👇`, [
@@ -2764,13 +3326,47 @@ async function handleWaMessage(msg) {
       const slot = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
       if (!slot) return telaUnidade("Esse horário expirou. ");
       if (!conv.pendingName) return telaNome();
-      return reservar(conv.pendingName, slot);
+      return telaPlano(conv.pendingName);
     }
     if (rid === "edit:name") return telaNome("Sem problema! ");
     // digitou um nome novo em vez de tocar no botão
     const name = body.replace(/\s+/g, " ").trim();
     if (name.length >= 3 && /\p{L}/u.test(name)) return telaConfirmarNome(name);
     return telaConfirmarNome(conv.pendingName || "");
+  }
+
+  if (conv.step === "plano") {
+    // aceita o botão ("plano:1") ou o número digitado
+    const freq = rid === "plano:2" || body.trim() === "2" ? 2
+      : rid === "plano:1" || body.trim() === "1" ? 1
+      : null;
+    if (!freq) return telaPlano(conv.pendingName || "", "Não entendi 🤔. ");
+    await setConv({ weeklyFreq: freq });
+    return telaCpf();
+  }
+
+  if (conv.step === "cpf") {
+    const cpf = onlyDigits(body);
+    if (!cpfValido(cpf)) return telaCpf("Esse CPF não parece válido 🤔. Confere pra mim? ");
+    const slot = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
+    if (!slot) return telaUnidade("Esse horário expirou. ");
+    const name = conv.pendingName || (await prisma.client.findFirst({ where: { phone } }))?.name;
+    if (!name) return telaNome();
+    return cobrar(name, slot, conv.weeklyFreq || 1, cpf);
+  }
+
+  /* Aguardando o Pix. A conversa não avança sozinha: quem move daqui é o
+     webhook do Sicredi (avisarMatriculaConfirmada) ou o prazo estourando. */
+  if (conv.step === "cobranca") {
+    const b = conv.bookingId ? await prisma.booking.findUnique({ where: { id: conv.bookingId } }) : null;
+    if (b && b.paid) {
+      await setConv({ step: "done", bookingId: null, slotId: null });
+      return waButtons(msg.from, "Seu pagamento já está confirmado e sua vaga garantida! 💚", [{ id: "new", title: "🔄 Marcar outra aula" }]);
+    }
+    return waButtons(msg.from, "Ainda não vi o pagamento cair por aqui. Assim que cair, eu te aviso na hora. 💚", [
+      { id: "duvida:pix", title: "💠 Reenviar o Pix" },
+      { id: "humano", title: "Falar com atendente" },
+    ]);
   }
 
   return telaUnidade();
@@ -3078,10 +3674,10 @@ app.post("/api/admin/setup", wrap(async (req, res) => {
   const password = String(req.body.password || "");
   if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
   if (password.length < 4) return res.status(400).json({ error: "Senha deve ter ao menos 4 caracteres." });
-  await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10) } });
+  await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10), role: "admin" } });
   hasAdmin = true;
-  const token = genToken(); adminTokens.add(token);
-  res.json({ ok: true, token, username });
+  const token = genToken(); adminTokens.set(token, { username, role: "admin" });
+  res.json({ ok: true, token, username, role: "admin" });
 }));
 
 // Cadastro de novo acesso pela própria tela de login (equipe da Inêz)
@@ -3093,10 +3689,10 @@ app.post("/api/admin/register", wrap(async (req, res) => {
   if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
   if (password.length < 4) return res.status(400).json({ error: "Senha deve ter ao menos 4 caracteres." });
   if (await prisma.adminUser.findFirst({ where: { username } })) return res.status(409).json({ error: "Usuário já existe. Use o login." });
-  await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10) } });
+  await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10), role: "admin" } });
   hasAdmin = true;
-  const token = genToken(); adminTokens.add(token);
-  res.json({ ok: true, token, username });
+  const token = genToken(); adminTokens.set(token, { username, role: "admin" });
+  res.json({ ok: true, token, username, role: "admin" });
 }));
 
 // Login
@@ -3105,8 +3701,9 @@ app.post("/api/admin/login", wrap(async (req, res) => {
   const password = String(req.body.password || "");
   const user = await prisma.adminUser.findFirst({ where: { username } });
   if (!user || !(await bcrypt.compare(password, user.pass))) return res.status(401).json({ error: "Usuário ou senha inválidos." });
-  const token = genToken(); adminTokens.add(token);
-  res.json({ ok: true, token, username });
+  const role = user.role === "instrutora" ? "instrutora" : "admin";
+  const token = genToken(); adminTokens.set(token, { username, role });
+  res.json({ ok: true, token, username, role, nome: user.nome || null });
 }));
 
 // Logout (invalida o token da sessão)
@@ -3123,13 +3720,15 @@ app.post("/api/admin/users", wrap(async (req, res) => {
   if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
   if (password.length < 4) return res.status(400).json({ error: "Senha deve ter ao menos 4 caracteres." });
   if (await prisma.adminUser.findFirst({ where: { username } })) return res.status(409).json({ error: "Usuário já existe." });
-  await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10) } });
-  res.json({ ok: true, username });
+  const role = req.body.role === "instrutora" ? "instrutora" : "admin";
+  const nome = String(req.body.nome || "").trim() || null;
+  await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10), role, nome } });
+  res.json({ ok: true, username, role });
 }));
 
 // Listar usuários do painel (protegido)
 app.get("/api/admin/users", wrap(async (_req, res) => {
-  const list = await prisma.adminUser.findMany({ select: { id: true, username: true, createdAt: true }, orderBy: { createdAt: "asc" } });
+  const list = await prisma.adminUser.findMany({ select: { id: true, username: true, role: true, nome: true, createdAt: true }, orderBy: { createdAt: "asc" } });
   res.json(list);
 }));
 

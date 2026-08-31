@@ -146,6 +146,11 @@ model Invoice {
   // não oferece QR e a rodada automática não emite. O botão "Gerar Pix" do
   // painel limpa a marca — é a saída para quando a aluna pedir o código.
   semPix        Boolean  @default(false)
+  /* Quando cada aviso automático de WhatsApp saiu ('YYYY-MM-DD'). São duas datas
+     e não um booleano porque o que interessa é *quando* falamos com a aluna —
+     e porque assim o reenvio acidental fica visível no banco. */
+  avisoAVencerAt String? @db.VarChar(10) // lembrete amigável, 2 dias antes
+  avisoAtrasoAt  String? @db.VarChar(10) // cobrança, 1 dia depois do vencimento
   createdAt     DateTime @default(now())
 
   @@index([clientId])
@@ -191,12 +196,23 @@ model Booking {
   txid          String?  @db.VarChar(40) // id da cobrança Pix no Sicredi (padrão BACEN)
   pixCode       String?  @db.Text // Pix copia-e-cola (EMV) devolvido pelo Sicredi
   boletoUrl     String?  @db.VarChar(500) // legado da Cora; Pix puro não gera boleto
+  /* Reserva feita pelo WhatsApp e ainda não paga: a vaga fica SEGURADA até aqui
+     (1 hora). Passou do prazo sem o Pix cair, a rodada libera a vaga — senão uma
+     conversa abandonada tira a vaga de quem ia pagar. null = sem prazo. */
+  holdUntil     DateTime?
+  // Se o lembrete de meia hora antes do fim do prazo já foi enviado.
+  holdNudged    Boolean  @default(false)
+  /* Dia em que saiu o lembrete da véspera ('YYYY-MM-DD'). Guardar a data, e não
+     um booleano, deixa claro no banco quando a escola falou com a aluna — e é o
+     que impede o lembrete de sair duas vezes para a mesma aula. */
+  lembreteAulaAt String? @db.VarChar(10)
   createdAt     DateTime @default(now())
 
   @@index([slotId])
   @@index([date])
   @@index([seriesId])
   @@index([txid])
+  @@index([holdUntil])
 }
 
 model Waitlist {
@@ -223,11 +239,23 @@ model Testimonial {
 
 model WaConversation {
   phone     String   @id @db.VarChar(20) // wa_id normalizado
-  step      String   @default("start") @db.VarChar(20) // start|unit|slot|confirm|name|nameok|done
+  // start|unit|slot|confirm|name|nameok|plano|cpf|cobranca|done
+  step      String   @default("start") @db.VarChar(20)
   unit      String?  @db.VarChar(60)
   slotId    Int? // horário escolhido (aguardando confirmação/nome)
   offered   String   @default("[]") @db.VarChar(500) // JSON dos slotIds oferecidos
   pendingName String? @db.VarChar(120) // nome digitado, aguardando confirmação
+  // Plano escolhido na conversa (1 ou 2 aulas por semana) — é o que define o
+  // valor da 1ª mensalidade, que é o pagamento que matricula a aluna.
+  weeklyFreq Int?
+  // CPF do pagador: o Sicredi exige para emitir a cobrança Pix.
+  cpf       String?  @db.VarChar(14)
+  // Reserva provisória criada por esta conversa, aguardando o Pix.
+  bookingId Int?
+  /* Quando o bot cutucou uma conversa parada no meio. Fica preenchido até a
+     aluna responder — é o que impede o lembrete de virar insistência: um por
+     abandono, não um a cada meia hora. */
+  retomadaAt DateTime?
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())
 }
@@ -236,6 +264,10 @@ model AdminUser {
   id        Int      @id @default(autoincrement())
   username  String   @unique @db.VarChar(60)
   pass      String   @db.VarChar(255) // hash bcrypt da senha
+  // "admin"      = acesso total ao painel (Inêz e equipe administrativa)
+  // "instrutora" = só a Agenda, e só para olhar: não cria, não edita, não apaga
+  role      String   @default("admin") @db.VarChar(20)
+  nome      String?  @db.VarChar(120) // nome de exibição (ex.: "Francielle Vitorino")
   createdAt DateTime @default(now())
 }
 

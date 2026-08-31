@@ -2,12 +2,36 @@
 
 // ----- token de sessão do painel admin -----
 let TOKEN = null;
-try { TOKEN = localStorage.getItem("fqc_admin_token"); } catch {}
-export function setToken(t) {
+// Perfil de quem entrou: "admin" (tudo) ou "instrutora" (só a Agenda, e só ver).
+// É uma conveniência da tela — quem manda de verdade é o backend, que recusa
+// qualquer rota fora da lista da instrutora mesmo sem passar por botão nenhum.
+let ROLE = "admin";
+let NOME = "";
+try {
+  TOKEN = localStorage.getItem("fqc_admin_token");
+  ROLE = localStorage.getItem("fqc_admin_role") || "admin";
+  NOME = localStorage.getItem("fqc_admin_nome") || "";
+} catch {}
+export function setToken(t, role, nome) {
   TOKEN = t || null;
-  try { t ? localStorage.setItem("fqc_admin_token", t) : localStorage.removeItem("fqc_admin_token"); } catch {}
+  ROLE = t ? (role || "admin") : "admin";
+  NOME = t ? (nome || "") : "";
+  try {
+    if (t) {
+      localStorage.setItem("fqc_admin_token", t);
+      localStorage.setItem("fqc_admin_role", ROLE);
+      localStorage.setItem("fqc_admin_nome", NOME);
+    } else {
+      localStorage.removeItem("fqc_admin_token");
+      localStorage.removeItem("fqc_admin_role");
+      localStorage.removeItem("fqc_admin_nome");
+    }
+  } catch {}
 }
 export function getToken() { return TOKEN; }
+export function getRole() { return TOKEN ? ROLE : "admin"; }
+export function getNome() { return NOME; }
+export function isInstrutora() { return getRole() === "instrutora"; }
 
 async function req(method, url, body) {
   const headers = { "Content-Type": "application/json" };

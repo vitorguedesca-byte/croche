@@ -295,6 +295,52 @@
     .float{left:0}
     .strip .wrap{justify-content:flex-start;gap:1rem 2rem}
   }
+
+  /* ===== Celular (≤520px) =====
+     Abaixo desta largura o desenho de duas colunas já caiu; o que falta é
+     aliviar os respiros grandes, deixar os botões ocuparem a linha inteira e
+     impedir que título e números empurrem a página para os lados. */
+  @media(max-width:520px){
+    .wrap{width:min(1200px,92vw)}
+    .nav .logo img{height:48px}
+    .hero h1{font-size:clamp(2.1rem,9vw,2.7rem);margin:1.1rem 0;overflow-wrap:break-word}
+    .hero .lead{font-size:1rem;margin-bottom:1.8rem;max-width:none}
+    .hero-cta{gap:.9rem}
+    .hero-cta .btn{width:100%;justify-content:center}
+    /* os três números viram duas colunas em vez de espremer em uma linha */
+    .hero-stats{flex-wrap:wrap;gap:1.2rem 1.6rem;margin-top:2rem;padding-top:1.4rem}
+    .hero-stats .stat{flex:1 1 calc(50% - .8rem);min-width:0}
+    .frame{max-width:none}
+    .float{position:static;margin-top:1rem;max-width:none}
+    .strip .wrap{flex-direction:column;align-items:flex-start;gap:.6rem}
+    .sec-head h2{font-size:clamp(1.75rem,7.5vw,2.2rem)}
+    .sec-head .sub{font-size:.98rem}
+    .card-aula{padding:1.5rem 1.3rem}
+    .card-aula .btn{width:100%;justify-content:center}
+    .pilar{padding:1.6rem 1.2rem}
+    .depo{padding:1.5rem 1.3rem}
+    .depo p{font-size:1.08rem}
+    /* as duas fotos empilham; deitadas, para não virar uma parede de imagem */
+    .metodo-media{flex-direction:column;max-width:none}
+    .metodo-media .mm-main,.metodo-media .mm-sec{aspect-ratio:4/3}
+    .metodo-body .lead{font-size:1.06rem}
+    .metodo-body p,.metodo-highlight{font-size:1rem}
+    .metodo-call{font-size:1.2rem;margin:1.8rem 0 1.5rem}
+    .metodo-foot{gap:.8rem}
+    .metodo-foot .btn{width:100%;justify-content:center}
+    .btn-lg{padding:1rem 1.4rem;font-size:1rem}
+    .units{flex-direction:column}
+    .unit{min-width:0;width:100%}
+    .contato-card{padding:1.6rem 1.3rem}
+    .faq-list summary{padding:1.1rem .1rem;gap:.8rem}
+    .foot{flex-direction:column;align-items:flex-start;gap:1rem}
+    .foot-links{flex-wrap:wrap;gap:.9rem 1.2rem}
+    .wa-float{bottom:16px;right:16px;width:52px;height:52px}
+    .wa-float svg{width:27px;height:27px}
+    .access-overlay{padding:.9rem;align-items:flex-end}
+    .access-modal{padding:1.8rem 1.3rem 1.4rem;border-radius:20px 20px 0 0}
+    .access-modal h3{font-size:1.4rem}
+  }
   /* Modal de acesso (já é aluna?) */
   .access-overlay{position:fixed;inset:0;background:rgba(28,38,32,.55);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:200;padding:1.2rem}
   .access-overlay.open{display:flex}
@@ -319,11 +365,11 @@
         <a href="#sobre">A Inêz</a>
         <a href="#aulas">O Método</a>
         <a href="#contato">Unidades</a>
-        <a class="mob-only" href="/admin/#agendar">Agendar aula →</a>
-        <a class="mob-only" href="/admin/#portal">👤 Acesso Aluno →</a>
+        <a class="mob-only" href="/agendar">Agendar aula →</a>
+        <a class="mob-only" href="/portal">👤 Acesso Aluno →</a>
       </nav>
-      <a class="btn nav-cta" href="/admin/#agendar">Agendar aula</a>
-      <a class="btn btn-ghost nav-conectar" href="/admin/#portal">👤 Acesso Aluno</a>
+      <a class="btn nav-cta" href="/agendar">Agendar aula</a>
+      <a class="btn btn-ghost nav-conectar" href="/portal">👤 Acesso Aluno</a>
       <button class="menu-toggle" onclick="document.getElementById('navLinks').classList.toggle('open')" aria-label="Menu">☰</button>
     </div>
   </div>
@@ -337,7 +383,7 @@
       <h1>Muito além do crochê: <em>desacelere, aprenda</em> e transforme fios em cuidado.</h1>
       <p class="lead">Aulas em Ipatinga e Timóteo, onde a técnica vira renda, o tempo vira presença e cada ponto é um respiro para a mente.</p>
       <div class="hero-cta">
-        <a class="btn btn-terra" href="/admin/#agendar">Quero minha aula experimental</a>
+        <a class="btn btn-terra" href="/agendar">Quero minha aula experimental</a>
         <a class="link-arrow" href="#aulas">Como funciona <span>→</span></a>
       </div>
       <div class="hero-stats">
@@ -602,7 +648,7 @@
     <div class="reveal">
       <span class="label"><span class="idx" style="color:rgba(244,236,223,.7)">06</span> &nbsp;Localização e contato</span>
       <h2>Venha tecer com a gente</h2>
-      <p class="t">Atendemos presencialmente na região de Ipatinga e Timóteo. <a href="/admin/#agendar" style="color:#fff;font-weight:700;text-decoration:underline;text-underline-offset:3px;">Clique aqui para marcar sua aula experimental.</a></p>
+      <p class="t">Atendemos presencialmente na região de Ipatinga e Timóteo. <a href="/agendar" style="color:#fff;font-weight:700;text-decoration:underline;text-underline-offset:3px;">Clique aqui para marcar sua aula experimental.</a></p>
       <div class="units">
         <a class="unit" href="https://www.google.com/maps/search/?api=1&query=Rua%20Berilo%2C%20100%2C%20Igua%C3%A7u%2C%20Ipatinga%20-%20MG%2C%2035162-031" target="_blank" rel="noopener"><b>Ipatinga</b><span>Rua Berilo, 100 — Iguaçu, 35162-031</span><span class="mapa">📍 Ver no mapa →</span></a>
         <a class="unit" href="https://www.google.com/maps/search/?api=1&query=Pra%C3%A7a%20Primeiro%20de%20Maio%2C%20290%2C%20loja%2014%2C%20Centro%2C%20Tim%C3%B3teo%20-%20MG%2C%2035180-018" target="_blank" rel="noopener"><b>Timóteo</b><span>Praça Primeiro de Maio, 290, loja 14 — Centro, 35180-018</span><span class="mapa">📍 Ver no mapa →</span></a>
@@ -650,8 +696,8 @@
     <img src="logo-1.PNG" alt="Fios que Curam" />
     <h3>Vamos começar! 💚</h3>
     <p>Você já é aluna da Fios que Curam?</p>
-    <a class="access-opt primary" href="/admin/#agendar">Ainda não — é minha primeira vez<small>Escolher unidade, horário e marcar a 1ª aula</small></a>
-    <a class="access-opt ghost" href="/admin/#portal">Sim, já sou aluno(a)<small>Entrar no portal do aluno(a)</small></a>
+    <a class="access-opt primary" href="/agendar">Ainda não — é minha primeira vez<small>Escolher unidade, horário e marcar a 1ª aula</small></a>
+    <a class="access-opt ghost" href="/portal">Sim, já sou aluno(a)<small>Entrar no portal do aluno(a)</small></a>
   </div>
 </div>
 

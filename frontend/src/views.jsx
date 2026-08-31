@@ -5,12 +5,12 @@ import { useModal, StatusBadge, Select } from "./ui.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import {
-  SlotCard, DayModal, ManageBooking, ClientProfile, SlotDetail, AlterarMensalidade,
+  SlotCard, DayModal, ManageBooking, ClientProfile, SlotDetail, TurmaView, AlterarMensalidade,
   baixarMensalidade,
 } from "./modals.jsx";
 import {
   UNITS, STATUS, unitColor,
-  todayISO, addDays, weekStart, fmtDate, fmtDateLong, weekdayShort, money, waLink, capitalize, faixaHorario, hhmm,
+  todayISO, addDays, weekStart, fmtDate, fmtDateLong, weekdayShort, money, waLink, capitalize, faixaHorario, fimDaAula, hhmm,
   bookingsActive, slotBookings, slotBookingsAll, slotCapacity, slotOccupancy, slotWaitlist, clientAttendance,
   bookingKind, BOOKING_KINDS, compAtual, addComp, compLabel, competenciasDoAluno, mensalidadeDe, matriculaISO,
   mensalidadeDaComp, precoDaComp, situacaoMensalidade, clientOfBooking, ehPagamentoDeMatricula,
@@ -163,7 +163,7 @@ export function Dashboard({ go }) {
         <table><thead><tr><th>Hora</th><th>Aluno</th><th>Unidade</th><th>Status</th></tr></thead><tbody>
           {hoje.map((b) => (
             <tr key={b.id} onClick={() => open(<ManageBooking booking={b} />)} className="row-click">
-              <td><b>{b.time}</b></td><td>{b.clientName}</td><td><span className="chip">{b.unit}</span></td><td><StatusBadge status={b.status} /></td>
+              <td data-l="Hora"><b>{b.time}</b></td><td data-l="Aluno">{b.clientName}</td><td data-l="Unidade"><span className="chip">{b.unit}</span></td><td data-l="Status"><StatusBadge status={b.status} /></td>
             </tr>
           ))}
         </tbody></table>
@@ -176,7 +176,7 @@ export function Dashboard({ go }) {
         <table><thead><tr><th>Dia</th><th>Hora</th><th>Aluno</th><th>Unidade</th><th>Status</th></tr></thead><tbody>
           {prox.map((b) => (
             <tr key={b.id} onClick={() => open(<ManageBooking booking={b} />)} className="row-click">
-              <td>{fmtDateLong(b.date)}</td><td><b>{b.time}</b></td><td>{b.clientName}</td><td><span className="chip">{b.unit}</span></td><td><StatusBadge status={b.status} /></td>
+              <td data-l="Dia">{fmtDateLong(b.date)}</td><td data-l="Hora"><b>{b.time}</b></td><td data-l="Aluno">{b.clientName}</td><td data-l="Unidade"><span className="chip">{b.unit}</span></td><td data-l="Status"><StatusBadge status={b.status} /></td>
             </tr>
           ))}
         </tbody></table>
@@ -186,7 +186,7 @@ export function Dashboard({ go }) {
 }
 
 /* ============================= AGENDA ============================= */
-export function Agenda() {
+export function Agenda({ somenteLeitura = false }) {
   const { data } = useStore();
   const { open } = useModal();
   const [view, setView] = useState("month");
@@ -196,16 +196,18 @@ export function Agenda() {
   const agSlots = (date) => data.slots.filter((s) => s.date === date && (unit === "Todas" || s.unit === unit)).sort((a, b) => a.time.localeCompare(b.time));
   const nav = (dir) => {
     if (view === "month") { const d = new Date(ref + "T00:00"); d.setDate(1); d.setMonth(d.getMonth() + dir); setRef(d.toISOString().slice(0, 10)); }
+    else if (view === "day") setRef(addDays(ref, dir)); // o dia anda de 1 em 1
     else setRef(addDays(ref, 7 * dir)); // semana e lista andam de 7 em 7 dias
   };
   const periodLabel = () => {
     const d = new Date(ref + "T00:00");
     if (view === "month") return capitalize(d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" }));
     if (view === "week") { const s = weekStart(ref); return fmtDate(s) + " – " + fmtDate(addDays(s, 6)); }
+    if (view === "day") return capitalize(fmtDateLong(ref)) + (ref === todayISO() ? " · hoje" : "");
     return ref === todayISO() ? "Hoje e próximos dias" : "A partir de " + fmtDate(ref);
   };
 
-  const views = [["month", "🗓 Mês"], ["week", "📆 Semana"], ["list", "📋 Lista"]];
+  const views = [["month", "🗓 Mês"], ["week", "📆 Semana"], ["day", "📍 Dia"], ["list", "📋 Lista"]];
   const metaUnits = data.meta.units;
   const units = ["Todas", ...metaUnits];
 
@@ -238,14 +240,15 @@ export function Agenda() {
           {Object.keys(STATUS).map((k) => <span key={k} className="lg"><span className="lgdot" style={{ background: STATUS[k].dot }} />{STATUS[k].label}</span>)}
         </div>
       </div>
-      {view === "month" && <MonthView ref0={ref} agSlots={agSlots} open={open} data={data} unit={unit} />}
-      {view === "week" && <WeekView ref0={ref} agSlots={agSlots} unit={unit} />}
-      {view === "list" && <ListView data={data} unit={unit} open={open} ref0={ref} />}
+      {view === "month" && <MonthView ref0={ref} agSlots={agSlots} open={open} data={data} unit={unit} somenteLeitura={somenteLeitura} />}
+      {view === "week" && <WeekView ref0={ref} agSlots={agSlots} unit={unit} somenteLeitura={somenteLeitura} />}
+      {view === "day" && <DayView ref0={ref} agSlots={agSlots} data={data} unit={unit} somenteLeitura={somenteLeitura} irPara={setRef} />}
+      {view === "list" && <ListView data={data} unit={unit} open={open} ref0={ref} somenteLeitura={somenteLeitura} />}
     </div>
   );
 }
 
-function MonthView({ ref0, agSlots, open, data, unit }) {
+function MonthView({ ref0, agSlots, open, data, unit, somenteLeitura = false }) {
   const refd = new Date(ref0 + "T00:00");
   const y = refd.getFullYear(), m = refd.getMonth(), t = todayISO();
   const firstISO = new Date(y, m, 1).toISOString().slice(0, 10);
@@ -266,7 +269,7 @@ function MonthView({ ref0, agSlots, open, data, unit }) {
     const dots = slots.slice(0, 8).map((s) => <span key={s.id} className="m-dot" style={{ background: slotOccupancy(data, s.id) ? unitColor(s.unit) : "var(--line)", width: 7, height: 7, borderRadius: "50%" }} />);
     const more = slots.length > 3 ? <div className="m-more">+{slots.length - 3} mais</div> : null;
     cells.push(
-      <div key={i} className={`m-cell ${out ? "out" : ""} ${date === t ? "today" : ""}`} onClick={() => open(<DayModal date={date} unit={unit} />)}>
+      <div key={i} className={`m-cell ${out ? "out" : ""} ${date === t ? "today" : ""}`} onClick={() => open(<DayModal date={date} unit={unit} somenteLeitura={somenteLeitura} />)}>
         <span className="dn">{dd.getDate()}</span>{evs}{more}<div className="m-dots">{dots}</div>
       </div>
     );
@@ -274,7 +277,7 @@ function MonthView({ ref0, agSlots, open, data, unit }) {
   return <div className="month-grid">{dows.map((d) => <div key={d} className="month-dow">{d}</div>)}{cells}</div>;
 }
 
-function WeekView({ ref0, agSlots, unit }) {
+function WeekView({ ref0, agSlots, unit, somenteLeitura = false }) {
   const start = weekStart(ref0), t = todayISO();
   const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
   return (
@@ -285,7 +288,7 @@ function WeekView({ ref0, agSlots, unit }) {
           <div key={date} className="day-col">
             <div className={`day-h ${date === t ? "today" : ""}`}><b>{fmtDate(date)}</b><span>{weekdayShort(date)}</span></div>
             {/* todosAlunos: na semana o cartão mostra a turma inteira, não os 5 primeiros */}
-            {slots.length ? slots.map((s) => <SlotCard key={s.id} slot={s} showUnit={unit === "Todas"} todosAlunos />) : <div className="day-empty">—</div>}
+            {slots.length ? slots.map((s) => <SlotCard key={s.id} slot={s} showUnit={unit === "Todas"} todosAlunos somenteLeitura={somenteLeitura} />) : <div className="day-empty">—</div>}
           </div>
         );
       })}
@@ -293,7 +296,99 @@ function WeekView({ ref0, agSlots, unit }) {
   );
 }
 
-function ListView({ data, unit, open, ref0 }) {
+/* Visão DIA: um único dia inteiro, hora a hora, com a turma aberta em cada
+   horário. É a tela de quem vai dar aula — não precisa procurar o dia na grade
+   do mês nem espremer sete colunas para ler os nomes. A tira da semana em cima
+   serve para pular de um dia para o outro sem sair da visão. */
+function DayView({ ref0, agSlots, data, unit, somenteLeitura = false, irPara }) {
+  const { open } = useModal();
+  const t = todayISO();
+  const semana = weekStart(ref0);
+  const dias = Array.from({ length: 7 }, (_, i) => addDays(semana, i));
+  const slots = agSlots(ref0);
+  const totalAlunas = slots.reduce((n, s) => n + slotOccupancy(data, s.id), 0);
+  const totalVagas = slots.reduce((n, s) => n + slotCapacity(s), 0);
+
+  return (
+    <>
+      <div className="dv-tira">
+        {dias.map((d) => {
+          const qtd = data.slots.filter((s) => s.date === d && (unit === "Todas" || s.unit === unit)).length;
+          return (
+            <button key={d} className={`dv-tira-d ${d === ref0 ? "on" : ""} ${d === t ? "hoje" : ""}`}
+              onClick={() => irPara(d)}>
+              <span className="dv-dow">{weekdayShort(d)}</span>
+              <span className="dv-num">{new Date(d + "T00:00").getDate()}</span>
+              <span className="dv-pts">{qtd ? "•".repeat(Math.min(qtd, 4)) : "\u00a0"}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {slots.length ? (
+        <>
+          <div className="dv-resumo">
+            {slots.length} {slots.length === 1 ? "horário" : "horários"} ·{" "}
+            <b>{totalAlunas}</b> de {totalVagas} {totalVagas === 1 ? "vaga" : "vagas"} ocupadas
+          </div>
+          <div className="dv-lista">
+            {slots.map((s) => {
+              const uc = unitColor(s.unit);
+              const todas = slotBookingsAll(data, s.id);
+              const ativas = todas.filter((b) => b.status !== "cancelada");
+              const cap = slotCapacity(s);
+              const cheio = ativas.length >= cap;
+              return (
+                <div className="dv-slot" key={s.id} style={{ "--uc": uc }}>
+                  <div className="dv-hora">
+                    <b>{hhmm(s.time)}</b>
+                    <span>até {fimDaAula(s.time, data.meta.duracaoAulaMin)}</span>
+                  </div>
+                  <div className="dv-corpo">
+                    <div className="dv-slot-h">
+                      <span className="dv-unit" style={{ color: uc }}>📍 {s.unit}</span>
+                      <span className={`dv-ocup ${cheio ? "cheio" : ativas.length ? "" : "livre"}`}>
+                        {ativas.length}/{cap}
+                      </span>
+                      <button className="btn ghost sm"
+                        onClick={() => open(somenteLeitura ? <TurmaView slotId={s.id} /> : <SlotDetail slotId={s.id} />)}>
+                        {somenteLeitura ? "Ver turma" : "Gerir turma"}
+                      </button>
+                    </div>
+                    {todas.length ? (
+                      <div className="dv-alunas">
+                        {todas.map((b) => {
+                          const k = bookingKind(b);
+                          return (
+                            <div key={b.id} className={`dv-al ${b.status === "cancelada" ? "canc" : ""} ${somenteLeitura ? "ro" : ""}`}
+                              style={k ? { "--kc": k.color } : undefined}
+                              onClick={somenteLeitura ? undefined : () => open(<ManageBooking booking={b} />)}>
+                              <span className="nm">{b.clientName}</span>
+                              <span className="sp">
+                                {k && <span className={`badge ${k.cls}`}>{k.ic} {k.label}</span>}
+                                {b.attendance === "presente" && <span className="badge b-ok">✓ presente</span>}
+                                {b.attendance === "falta" && <span className="badge b-danger">✕ faltou</span>}
+                                <StatusBadge status={b.status} />
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : <div className="dv-vazio">Horário livre — nenhuma aluna marcada.</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <div className="empty"><div className="ic">📍</div><p>Nenhum horário{unit === "Todas" ? "" : ` de ${unit}`} neste dia.</p></div>
+      )}
+    </>
+  );
+}
+
+function ListView({ data, unit, open, ref0, somenteLeitura = false }) {
   const base = ref0 || todayISO();
   const DIAS = 21; // mostra ~3 semanas a partir da data de referência
   const dias = Array.from({ length: DIAS }, (_, i) => addDays(base, i));
@@ -329,14 +424,16 @@ function ListView({ data, unit, open, ref0 }) {
                   unidade. O campo continua no cadastro do horário, para uso
                   interno — só não acompanha mais cada aula na tela. */}
               <span className="ls-cap">{ativas.length}/{cap}</span>
-              <button className="btn ghost sm" onClick={() => open(<SlotDetail slotId={s.id} />)}>Gerir turma</button>
+              <button className="btn ghost sm" onClick={() => open(somenteLeitura ? <TurmaView slotId={s.id} /> : <SlotDetail slotId={s.id} />)}>
+                {somenteLeitura ? "Ver turma" : "Gerir turma"}
+              </button>
             </div>
             {todas.length ? todas.map((b) => {
               const k = bookingKind(b);
               return (
-                <div className={`ls-al ${b.status === "cancelada" ? "canc" : ""} ${k ? "kinded" : ""}`} key={b.id}
+                <div className={`ls-al ${b.status === "cancelada" ? "canc" : ""} ${k ? "kinded" : ""} ${somenteLeitura ? "ro" : ""}`} key={b.id}
                   style={k ? { "--kc": k.color } : undefined}
-                  onClick={() => open(<ManageBooking booking={b} />)}>
+                  onClick={somenteLeitura ? undefined : () => open(<ManageBooking booking={b} />)}>
                   <span className="nm">{b.clientName}</span>
                   <span className="sp">
                     {k && <span className={`badge ${k.cls}`}>{k.ic} {k.label}</span>}
@@ -445,14 +542,14 @@ export function Marcacoes() {
             const sit = situacaoMensalidade(data, cli, comp);
             return (
               <tr key={b.id} style={tab === "novos" ? { background: "rgba(127,194,65,.08)" } : {}}>
-                <td>
+                <td className="c-main">
                   <span className="cli-name">{b.clientName}</span>
                   {isNovo(b) && <span className="badge b-terra ml">🆕 Novata</span>}
                   <div className="cli-sub">{b.phone}</div>
                 </td>
-                <td><span className="chip">{b.unit}</span></td>
-                <td>{fmtDate(b.date)} · <b>{b.time}</b></td>
-                <td>
+                <td data-l="Unidade"><span className="chip">{b.unit}</span></td>
+                <td data-l="Dia / Hora">{fmtDate(b.date)} · <b>{b.time}</b></td>
+                <td data-l="Mensalidade">
                   <span className={`badge ${sit.cls}`} title={sit.inv ? `Vencimento ${fmtDate(sit.inv.dueDate)}` : ""}>{sit.label}</span>
                   {sit.estado === "atraso" && (
                     <div className="cli-sub">{sit.inv.encargos.dias} dia(s) · com multa e juros</div>
@@ -572,7 +669,7 @@ export function Clientes({ params }) {
             const at = clientAttendance(data, c.name);
             return (
               <tr key={c.id} style={tab === "novato" ? { background: "rgba(194,113,79,.06)" } : {}}>
-                <td>
+                <td className="c-main">
                   <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} />)}>
                     <span className="cli-av">{initials(c.name)}</span>
                     <div>
@@ -584,12 +681,12 @@ export function Clientes({ params }) {
                     </div>
                   </div>
                 </td>
-                <td><span className="chip">{c.unit}</span></td>
-                <td title={`${compLabel(comp)}: ${mes.feitas} aula(s) feita(s)${mes.faltas ? ` · ${mes.faltas} falta(s)` : ""}${mes.futuras ? ` · ${mes.futuras} ainda por vir` : ""}`}>
+                <td data-l="Unidade"><span className="chip">{c.unit}</span></td>
+                <td data-l="Aulas no mês" title={`${compLabel(comp)}: ${mes.feitas} aula(s) feita(s)${mes.faltas ? ` · ${mes.faltas} falta(s)` : ""}${mes.futuras ? ` · ${mes.futuras} ainda por vir` : ""}`}>
                   <b style={{ color: mes.feitas ? "var(--terracota)" : "var(--muted)" }}>{mes.feitas}</b>
                   {mes.futuras ? <span className="cli-sub"> +{mes.futuras} agendada(s)</span> : null}
                 </td>
-                <td><span className="badge b-ok" title="Presenças">✓ {at.pres}</span>{at.falt ? <> <span className="badge b-danger" title="Faltas">✕ {at.falt}</span></> : null}</td>
+                <td data-l="Presença"><span className="badge b-ok" title="Presenças">✓ {at.pres}</span>{at.falt ? <> <span className="badge b-danger" title="Faltas">✕ {at.falt}</span></> : null}</td>
                 <td className="td-actions">
                   <button className="btn wa sm" title="WhatsApp" onClick={() => openWa(c.phone, waMsg(c))}><WaIcon /></button>
                   {c.hasPin && <button className="btn sec sm" onClick={() => resetPin(c)}>🔒 Resetar PIN</button>}
@@ -744,13 +841,13 @@ export function Mensalistas() {
             const inv = invOf(c);
             return (
               <tr key={c.id}>
-                <td>
+                <td className="c-main">
                   <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} />)}>
                     <span className="cli-av">{initials(c.name)}</span>
                     <div><span className="cli-name">{c.name}</span><div className="cli-sub">{c.unit}{c.cpf ? "" : " · ⚠ sem CPF"}</div></div>
                   </div>
                 </td>
-                <td>
+                <td data-l="Mensalidade">
                   {money(inv ? inv.amountCents / 100 : valorDe(c))}
                   {(() => {
                     const combinado = precoDaComp(data.precos, c.id, comp);
@@ -769,8 +866,8 @@ export function Mensalistas() {
                     </div>
                   )}
                 </td>
-                <td>{inv ? fmtDate(inv.dueDate) : "dia " + vencDe(c)}</td>
-                <td>
+                <td data-l="Vencimento">{inv ? fmtDate(inv.dueDate) : "dia " + vencDe(c)}</td>
+                <td data-l="Status do mês">
                   {!inv ? <span className="badge b-muted">não gerado</span>
                     : inv.status === "pago" ? <span className="badge b-ok" title={inv.baixaManual ? "Baixa dada no painel — recebido por fora do Pix" : "Confirmado pelo Sicredi"}>
                         ✓ pago{inv.paidAt ? " em " + fmtDate(String(inv.paidAt).slice(0, 10)) : ""}{inv.baixaManual ? " · baixa manual" : ""}
@@ -913,19 +1010,19 @@ function PixDoMes() {
         <table><thead><tr><th>Aluno</th><th>Vencimento</th><th>Valor</th><th>Situação</th><th>Pix</th></tr></thead><tbody>
           {GRUPOS.filter((g) => g.lista.length).map((g) => (
             <Fragment key={g.k}>
-              <tr><td colSpan={5} style={{ paddingTop: ".9rem" }}>
+              <tr className="grp"><td colSpan={5} style={{ paddingTop: ".9rem" }}>
                 <b className="cli-sub" style={{ textTransform: "uppercase", letterSpacing: ".04em" }}>{g.tit} · {g.lista.length}</b>
               </td></tr>
               {g.lista.map((i) => (
                 <tr key={i.id}>
-                  <td>
+                  <td className="c-main">
                     {i.cli
                       ? <span className="cli-name row-click" onClick={() => open(<ClientProfile client={i.cli} />)}>{i.cli.name}</span>
                       : <span className="cli-name">aluno #{i.clientId}</span>}
                     {i.cli?.unit ? <div className="cli-sub">{i.cli.unit}</div> : null}
                   </td>
-                  <td>{fmtDate(i.dueDate)}{i.status === "pago" && i.paidAt ? <div className="cli-sub">pago em {fmtDate(String(i.paidAt).slice(0, 10))}</div> : null}</td>
-                  <td>
+                  <td data-l="Vencimento">{fmtDate(i.dueDate)}{i.status === "pago" && i.paidAt ? <div className="cli-sub">pago em {fmtDate(String(i.paidAt).slice(0, 10))}</div> : null}</td>
+                  <td data-l="Valor">
                     <b>{money(valorHoje(i))}</b>
                     {i.encargos?.atrasada && (
                       <div className="cli-sub" title={`Multa ${money(i.encargos.multa)} + juros ${money(i.encargos.juros)}`}>
@@ -933,11 +1030,11 @@ function PixDoMes() {
                       </div>
                     )}
                   </td>
-                  <td>
+                  <td data-l="Situação">
                     <span className={`badge ${g.cls}`}>{g.tit}</span>
                     {i.encargos?.atrasada && <div className="cli-sub">há {i.encargos.dias} dia(s)</div>}
                   </td>
-                  <td>
+                  <td data-l="Pix">
                     {i.status === "pago" ? <span className="cli-sub">—</span>
                       : i.pixCode
                         ? <button className="btn sec sm" title="Copiar o Pix copia-e-cola"
@@ -1055,12 +1152,12 @@ export function Recebimentos() {
         <table><thead><tr><th>Aluno</th><th>Unidade</th><th>Competência</th><th>Vencimento</th><th>Data pgto.</th><th>Valor</th></tr></thead><tbody>
           {pagos.map((i) => (
             <tr key={i.id}>
-              <td className="cli-name">{i.cli?.name || `aluno #${i.clientId}`}</td>
-              <td>{i.cli?.unit ? <span className="chip">{i.cli.unit}</span> : "—"}</td>
-              <td><span className="badge b-sage">{compLabel(i.competencia)}</span></td>
-              <td>{i.dueDate ? fmtDate(i.dueDate) : "—"}</td>
-              <td>{diaPgto(i) ? fmtDate(diaPgto(i)) : "—"}</td>
-              <td><b>{money(i.amountCents / 100)}</b></td>
+              <td className="cli-name c-main">{i.cli?.name || `aluno #${i.clientId}`}</td>
+              <td data-l="Unidade">{i.cli?.unit ? <span className="chip">{i.cli.unit}</span> : "—"}</td>
+              <td data-l="Competência"><span className="badge b-sage">{compLabel(i.competencia)}</span></td>
+              <td data-l="Vencimento">{i.dueDate ? fmtDate(i.dueDate) : "—"}</td>
+              <td data-l="Data pgto.">{diaPgto(i) ? fmtDate(diaPgto(i)) : "—"}</td>
+              <td data-l="Valor"><b>{money(i.amountCents / 100)}</b></td>
             </tr>
           ))}
         </tbody></table>
@@ -1253,7 +1350,7 @@ function AniversarioRow({ x, open, parabens }) {
   const ehHoje = x.dias === 0;
   return (
     <tr style={ehHoje ? { background: "rgba(206,122,83,.12)" } : x.passou ? { opacity: .62 } : undefined}>
-      <td>
+      <td className="c-main">
         <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} />)}>
           <span className="cli-av">{initials(c.name)}</span>
           <div>
@@ -1265,10 +1362,10 @@ function AniversarioRow({ x, open, parabens }) {
           </div>
         </div>
       </td>
-      <td><b style={ehHoje ? { color: "var(--terracota)" } : undefined}>🎂 {diaMesLabel(c.birthday)}</b></td>
-      <td>{x.passou ? <span className="cli-sub">{faltamLabel(x.dias)}</span> : faltamLabel(x.dias)}</td>
-      <td>{x.idade ? `${x.idade} anos` : "—"}</td>
-      <td><span className="chip">{c.unit || "—"}</span></td>
+      <td data-l="Dia"><b style={ehHoje ? { color: "var(--terracota)" } : undefined}>🎂 {diaMesLabel(c.birthday)}</b></td>
+      <td data-l="Quando">{x.passou ? <span className="cli-sub">{faltamLabel(x.dias)}</span> : faltamLabel(x.dias)}</td>
+      <td data-l="Faz">{x.idade ? `${x.idade} anos` : "—"}</td>
+      <td data-l="Unidade"><span className="chip">{c.unit || "—"}</span></td>
       <td className="td-actions">
         <button className="btn wa sm" title="Parabenizar no WhatsApp" disabled={!c.phone}
           onClick={() => openWa(c.phone, parabens(c))}><WaIcon /> Parabenizar</button>
@@ -1381,13 +1478,13 @@ export function Aniversariantes() {
         <table><thead><tr><th>Aluna</th><th>Unidade</th><th></th></tr></thead><tbody>
           {semData.map((c) => (
             <tr key={c.id}>
-              <td>
+              <td className="c-main">
                 <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>
                   <span className="cli-av">{initials(c.name)}</span>
                   <div><span className="cli-name">{c.name}</span><div className="cli-sub">{c.phone || "sem telefone"}</div></div>
                 </div>
               </td>
-              <td><span className="chip">{c.unit || "—"}</span></td>
+              <td data-l="Unidade"><span className="chip">{c.unit || "—"}</span></td>
               <td className="td-actions">
                 <button className="btn wa sm" title="Perguntar no WhatsApp" disabled={!c.phone}
                   onClick={() => openWa(c.phone, `Oi ${c.name.split(" ")[0]}! 💚 Estamos completando o cadastro aqui na Fios que Curam — qual é a sua data de nascimento? Queremos te parabenizar no seu dia! 🎂`)}><WaIcon /> Perguntar</button>

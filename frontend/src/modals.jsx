@@ -82,7 +82,7 @@ function avisarReplicacao(r, semanas) {
    `todosAlunos` = a turma inteira aparece na lista, sem o corte "+N mais".
    É como a visão de SEMANA usa o cartão: ali a Inêz precisa bater o olho na
    coluna do dia e ver quem está em cada turma, sem abrir turma por turma. */
-export function SlotCard({ slot, showUnit, todosAlunos = false }) {
+export function SlotCard({ slot, showUnit, todosAlunos = false, somenteLeitura = false }) {
   const { data } = useStore();
   const { open } = useModal();
   const uc = unitColor(slot.unit);
@@ -96,7 +96,7 @@ export function SlotCard({ slot, showUnit, todosAlunos = false }) {
   const todas = slotBookingsAll(data, slot.id); // inclui canceladas
   return (
     <div className={`slot ${cls}`} style={{ "--uc": uc, background: occ ? unitSoft(slot.unit) : undefined }}
-      onClick={() => open(<SlotDetail slotId={slot.id} />)}>
+      onClick={() => open(somenteLeitura ? <TurmaView slotId={slot.id} /> : <SlotDetail slotId={slot.id} />)}>
       <div className="slot-top">
         <span className="t" style={{ color: occ ? uc : undefined }}>{hhmm(slot.time)}</span>
         <span className={`occ ${full ? "is-full" : occ > 0 ? "is-part" : ""}`}>{occ}/{cap}</span>
@@ -130,7 +130,7 @@ export function SlotCard({ slot, showUnit, todosAlunos = false }) {
 }
 
 /* ======================= Modal do dia ======================= */
-export function DayModal({ date, unit = "Todas" }) {
+export function DayModal({ date, unit = "Todas", somenteLeitura = false }) {
   const { data } = useStore();
   const { open, close } = useModal();
   const todas = unit === "Todas";
@@ -141,11 +141,70 @@ export function DayModal({ date, unit = "Todas" }) {
   return (
     <Modal title={title} subheader={!todas ? <div className="day-sub">📍 Unidade: <b>{unit}</b></div> : undefined} footer={<>
       <button className="btn ghost" onClick={close}>Fechar</button>
-      <button className="btn" onClick={() => open(<SlotForm presetDate={date} presetUnit={unit} />)}>＋ Novo horário</button>
+      {!somenteLeitura && <button className="btn" onClick={() => open(<SlotForm presetDate={date} presetUnit={unit} />)}>＋ Novo horário</button>}
     </>}>
       {slots.length
-        ? <div className="day-view" style={{ maxWidth: "none" }}>{slots.map((s) => <SlotCard key={s.id} slot={s} showUnit={todas} />)}</div>
+        ? <div className="day-view" style={{ maxWidth: "none" }}>{slots.map((s) => <SlotCard key={s.id} slot={s} showUnit={todas} somenteLeitura={somenteLeitura} />)}</div>
         : <div className="empty"><div className="ic">🧶</div><p>Nenhum horário{todas ? "" : ` de ${unit}`} cadastrado neste dia.</p></div>}
+    </Modal>
+  );
+}
+
+/* ================== Turma em modo consulta (instrutoras) ==================
+   Mesma turma do SlotDetail, sem nada que mexa: quem abre aqui está vendo quem
+   tem aula, não operando a agenda. Presença aparece como estado, não como
+   botão — a chamada continua sendo feita por quem tem acesso de gestão. */
+export function TurmaView({ slotId }) {
+  const { data } = useStore();
+  const { close } = useModal();
+  const slot = slotById(data, slotId);
+  if (!slot) return <Modal title="Turma"><p>Horário não encontrado.</p></Modal>;
+  const cap = slotCapacity(slot);
+  const todas = slotBookingsAll(data, slotId);
+  const ativas = todas.filter((b) => b.status !== "cancelada");
+  const uc = unitColor(slot.unit);
+  const wl = slotWaitlist(slot);
+
+  return (
+    <Modal
+      title={`${hhmm(slot.time)} · ${slot.unit}`}
+      subheader={
+        <div className="day-sub" style={{ color: uc }}>
+          📅 {fmtDateLong(slot.date)} · {faixaHorario(slot.time, data.meta.duracaoAulaMin)} ·{" "}
+          <b>{ativas.length}/{cap}</b> {ativas.length === 1 ? "aluna" : "alunas"}
+        </div>
+      }
+      footer={<button className="btn ghost" onClick={close}>Fechar</button>}
+    >
+      {todas.length ? (
+        <div className="tv-lista">
+          {todas.map((b) => {
+            const k = bookingKind(b);
+            const marcas = marcadoresDoAluno(data, b, slot.date);
+            return (
+              <div key={b.id} className={`tv-al ${b.status === "cancelada" ? "canc" : ""}`}
+                style={k ? { "--kc": k.color } : undefined}>
+                <span className="tv-nm">
+                  {marcas.map((m) => <span key={m.k} className="tv-marca" title={m.label}>{m.ic}</span>)}
+                  {b.clientName}
+                </span>
+                <span className="tv-sp">
+                  {k && <span className={`badge ${k.cls}`}>{k.ic} {k.label}</span>}
+                  {b.attendance === "presente" && <span className="badge b-ok">✓ presente</span>}
+                  {b.attendance === "falta" && <span className="badge b-danger">✕ faltou</span>}
+                  <StatusBadge status={b.status} />
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="empty"><div className="ic">🧶</div><p>Nenhuma aluna neste horário ainda.</p></div>
+      )}
+      {wl.length > 0 && (
+        <div className="tv-espera">⏰ {wl.length} na lista de espera</div>
+      )}
+      <p className="tv-nota">Seu acesso é de consulta: aqui você acompanha a agenda, sem alterar nada.</p>
     </Modal>
   );
 }

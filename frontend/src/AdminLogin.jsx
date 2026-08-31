@@ -36,7 +36,7 @@ export default function AdminLogin() {
         : mode === "register"
         ? await api.admin.register(u, password)
         : await api.admin.login(u, password);
-      setToken(r.token);
+      setToken(r.token, r.role, r.nome);
       window.location.reload(); // recarrega já autenticado
     } catch (e2) {
       setErr(e2.message || "Não foi possível entrar.");

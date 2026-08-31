@@ -43,6 +43,14 @@
 // ("Reposição", "Avulsa", "1ª mensalidade") e por isso não ocupa vaga da semana.
 export const PGTO_PLANO = "Mensalista";
 
+/* Números da reposição. Vivem aqui, e não no server.js, porque o texto que a
+   escola manda para a aluna (textosEscola.js) promete exatamente estes valores:
+   mudar num lugar e esquecer o outro é o jeito mais rápido de a regra escrita
+   deixar de ser a regra aplicada. */
+export const REPO_MAX_MES = 2;      // reposições por competência
+export const REPO_HORAS_MIN = 6;    // antecedência mínima do aviso
+export const REPO_MANHA_ATE = "10:00"; // aula antes disso usa o prazo da meia-noite
+
 /* Horário sempre em 'HH:MM', exatamente 5 caracteres.
 
    O `time` do horário e da reserva é texto livre no banco, e nem toda rota
