@@ -170,11 +170,15 @@ const isInstrutoraApi = (req) => INSTRUTORA_API.some(([m, re]) => m === req.meth
 app.use((req, res, next) => {
   if (!req.path.startsWith("/api/")) return next(); // arquivos estáticos etc.
   if (!hasAdmin) return next(); // primeiro uso: sem admin cadastrado, tudo liberado
-  if (isPublicApi(req)) return next();
+
+  // Extrai a sessão se houver token de autorização (necessário para rotas compartilhadas como POST /api/bookings)
   const tok = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
   const sess = tok ? adminTokens.get(tok) : null;
+  if (sess) req.admin = sess;
+
+  if (isPublicApi(req)) return next();
+
   if (!sess) return res.status(401).json({ error: "Acesso restrito ao painel. Faça login." });
-  req.admin = sess;
   if (sess.role === "instrutora" && !isInstrutoraApi(req)) {
     return res.status(403).json({ error: "Seu acesso é apenas de consulta à Agenda." });
   }
