@@ -194,6 +194,14 @@ export function isNewLead(data, booking) {
   return !client || !client.hasPin;
 }
 
+/* ================= feriados: não há aula =================
+   O calendário vem pronto do servidor em `meta.feriados` ({ 'YYYY-MM-DD': nome }),
+   nacionais e manuais já resolvidos — a tela não recalcula Páscoa nem junta
+   listas, só pergunta pelo dia. Quem manda continua sendo o backend: aqui é só
+   para a agenda marcar o dia e os botões avisarem antes de tentar. */
+export const feriadoDe = (data, date) => (data?.meta?.feriados || {})[String(date || "")] || "";
+export const ehFeriado = (data, date) => !!feriadoDe(data, date);
+
 /* ================= tipo da aula: reposição / aula extra =================
    O backend marca o tipo no paymentMethod ao criar a reserva:
    "Reposição" = consumiu crédito do MakeupCredit · "Avulsa" = aula extra paga. */
@@ -218,11 +226,40 @@ export const bookingKind = (b) =>
   : b.paymentMethod === "Avulsa" ? BOOKING_KINDS.extra
   : null;
 
-// Reservas do horário INCLUINDO canceladas (a agenda mostra quem desmarcou).
-export const slotBookingsAll = (data, slotId) =>
-  data.bookings
+/* Tipo da aula com REFORÇO pela ficha da aluna.
+   O paymentMethod só sai marcado quando a reserva nasce no fluxo público da
+   experimental. Quando a Inêz marca a aula pelo painel, a reserva nasce sem
+   marca nenhuma — mas a ficha continua dizendo `firstClass`, e para a agenda
+   aquela ainda é a 1ª aula da pessoa. Só a marcação ATIVA mais antiga dela
+   ganha o destaque: as seguintes já são aula normal de quem está começando. */
+export function bookingKindDe(data, b) {
+  const k = bookingKind(b);
+  if (k) return k;
+  if (b.status === "cancelada") return null;
+  const c = clientOfBooking(data, b);
+  if (!c || !c.firstClass) return null;
+  const tel = (b.phone || "").replace(/\D/g, "").slice(-8);
+  const mesmaPessoa = (x) =>
+    x.clientName === b.clientName ||
+    (tel.length >= 8 && (x.phone || "").replace(/\D/g, "").endsWith(tel));
+  const primeira = data.bookings
+    .filter((x) => x.status !== "cancelada" && mesmaPessoa(x))
+    .sort((x, y) => (x.date + x.time).localeCompare(y.date + y.time))[0];
+  return primeira && primeira.id === b.id ? BOOKING_KINDS.primeira : null;
+}
+
+/* Reservas do horário INCLUINDO canceladas (a agenda mostra quem desmarcou).
+   A aluna nova sobe para o topo da lista: com o corte de "+N mais" no cartão,
+   ordem alfabética escondia justamente quem precisa ser vista. */
+export const slotBookingsAll = (data, slotId) => {
+  const nova = (b) => (bookingKindDe(data, b)?.key === "primeira" ? 0 : 1);
+  return data.bookings
     .filter((b) => b.slotId === slotId)
-    .sort((a, b) => (a.status === "cancelada") - (b.status === "cancelada") || a.clientName.localeCompare(b.clientName));
+    .sort((a, b) =>
+      (a.status === "cancelada") - (b.status === "cancelada") ||
+      nova(a) - nova(b) ||
+      a.clientName.localeCompare(b.clientName));
+};
 
 /* ================= aniversários =================
    `birthday` é 'YYYY-MM-DD' e o ano dela é o de NASCIMENTO — o que interessa

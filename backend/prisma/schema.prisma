@@ -48,6 +48,12 @@ model Client {
   matriculaAt     String? @db.VarChar(10) // quando a taxa foi paga
   matriculaRefundAt String? @db.VarChar(10) // quando a taxa foi devolvida
   trialDate       String? @db.VarChar(10) // data da aula experimental
+  /* De onde veio a ficha. Interessa na tela: o cadastro feito pela conversa do
+     WhatsApp é digitado pela própria aluna, sem ninguém conferindo do outro
+     lado, então o painel mostra "Cadastro via WhatsApp" para a Inêz saber que
+     aquele nome, e-mail e data de nascimento vieram de lá.
+     null = cadastro antigo ou feito no painel. */
+  origem   String? @db.VarChar(20) // "whatsapp" | "portal" | "site"
   makeupCredits Int    @default(0) // LEGADO: não usado — o saldo real vem da tabela MakeupCredit
   createdAt DateTime @default(now())
   invoices  Invoice[]
@@ -190,6 +196,14 @@ model Booking {
   attendance    String   @default("") // '' | presente | falta
   absenceReason String   @default("") @db.VarChar(500) // motivo informado pelo aluno
   value         Float    @default(80)
+  /* Quanto de TAXA DE MATRÍCULA está dentro de `value`. Só a reserva da aula
+     experimental tem isto preenchido; null = reserva sem taxa (todas as antigas).
+
+     Existe porque `value` é o que a aluna PAGA (mensalidade + taxa) e a
+     mensalidade do mês tem que entrar no financeiro pelo valor dela, sem a
+     taxa. Guardado na reserva, e não lido das Configurações na hora de somar:
+     a Inêz pode mudar a taxa amanhã, e o que esta aluna pagou hoje não muda. */
+  taxaMatricula Float?
   paid          Boolean  @default(false)
   paymentMethod String?
   paymentDate   String?
@@ -239,7 +253,7 @@ model Testimonial {
 
 model WaConversation {
   phone     String   @id @db.VarChar(20) // wa_id normalizado
-  // start|unit|slot|confirm|name|nameok|plano|cpf|cobranca|done
+  // start|unit|slot|confirm|cpf|name|nameok|wpp|email|nasc|plano|cobranca|done
   step      String   @default("start") @db.VarChar(20)
   unit      String?  @db.VarChar(60)
   slotId    Int? // horário escolhido (aguardando confirmação/nome)
@@ -248,10 +262,28 @@ model WaConversation {
   // Plano escolhido na conversa (1 ou 2 aulas por semana) — é o que define o
   // valor da 1ª mensalidade, que é o pagamento que matricula a aluna.
   weeklyFreq Int?
-  // CPF do pagador: o Sicredi exige para emitir a cobrança Pix.
+  // CPF do pagador: o Sicredi exige para emitir a cobrança Pix. É também a
+  // CHAVE de entrada da conversa — antes de marcar, o bot pergunta o CPF e
+  // procura a ficha; quem já existe não preenche cadastro de novo.
   cpf       String?  @db.VarChar(14)
+  /* Demais dados do cadastro feito pelo WhatsApp, guardados enquanto a conversa
+     acontece. Só viram ficha de aluna quando o conjunto está completo — meia
+     ficha no painel é pior que nenhuma. */
+  pendingEmail String? @db.VarChar(255)
+  pendingBirthday String? @db.VarChar(10) // 'YYYY-MM-DD'
+  pendingPhone String? @db.VarChar(20)    // WhatsApp confirmado (pode não ser o do chat)
+  clientId  Int? // ficha encontrada pelo CPF ou criada pela conversa
   // Reserva provisória criada por esta conversa, aguardando o Pix.
   bookingId Int?
+  /* Quantas vezes ela pediu para falar com uma pessoa. O número do atendente só
+     sai na 3ª — antes disso o bot mostra o que resolve na hora. Zera junto com
+     a conversa. */
+  humanoPedidos Int @default(0)
+  /* Última mensagem RECEBIDA dela. É por este relógio que a conversa expira:
+     passadas 12h em silêncio, o próximo "oi" começa do zero, sem herdar
+     horário, plano nem cadastro pela metade de ontem. `updatedAt` não serve
+     para isso porque também mexe quando é o BOT que escreve. */
+  lastInboundAt DateTime?
   /* Quando o bot cutucou uma conversa parada no meio. Fica preenchido até a
      aluna responder — é o que impede o lembrete de virar insistência: um por
      abandono, não um a cada meia hora. */
@@ -268,6 +300,19 @@ model AdminUser {
   // "instrutora" = só a Agenda, e só para olhar: não cria, não edita, não apaga
   role      String   @default("admin") @db.VarChar(20)
   nome      String?  @db.VarChar(120) // nome de exibição (ex.: "Francielle Vitorino")
+  createdAt DateTime @default(now())
+}
+
+/* Feriado cadastrado na mão pela Inêz (Configurações).
+   Os feriados NACIONAIS não moram aqui: são calculados em src/feriados.js, os
+   móveis inclusive. Esta tabela é para o que só a escola sabe — o feriado
+   municipal de Ipatinga, o de Timóteo, um recesso, uma emenda de fim de ano —
+   e para o contrário disso: `remove` = neste feriado nacional a escola ABRE. */
+model Holiday {
+  id        Int      @id @default(autoincrement())
+  date      String   @unique @db.VarChar(10) // 'YYYY-MM-DD'
+  nome      String   @default("Feriado") @db.VarChar(120)
+  remove    Boolean  @default(false) // true = desmarca um feriado nacional
   createdAt DateTime @default(now())
 }
 
@@ -299,10 +344,22 @@ model Settings {
   // permite combinar o valor de cada mês antes de a cobrança existir.
   geracaoAuto      Boolean @default(false)
   // ----- tabela de preços -----
-  // A taxa de matrícula saiu em 28/08/2026: o valor dela foi diluído na
-  // mensalidade e quem se matricula paga a 1ª mensalidade cheia.
   valorPlano1x     Float  @default(120) // mensalidade de 1x por semana (4 aulas/mês)
   valorPlano2x     Float  @default(200) // mensalidade de 2x por semana (8 aulas/mês)
   valorAvulsa      Float  @default(40)  // aula extra avulsa
   duracaoAulaMin   Int    @default(120) // duração da aula em minutos
+  /* Taxa de matrícula: cobrada UMA vez, junto da 1ª mensalidade da aluna nova.
+     Saiu em 28/08/2026 (diluída na mensalidade) e voltou em 01/09/2026, por
+     decisão do Vitor — agora como parcela separada e visível, tanto no site
+     quanto na conversa do WhatsApp.
+
+     É por isso que ela é campo, e não número no código: já mudou duas vezes em
+     cinco dias. Zerar aqui DESLIGA a taxa — o primeiro pagamento volta a ser só
+     a mensalidade, sem precisar de deploy.
+
+     Ao contrário da mensalidade, a taxa NÃO é devolvida se a aluna desistir
+     depois da 1ª aula (Vitor, 01/09/2026). Quem guarda quanto foi cobrado de
+     cada aluna é Booking.taxaMatricula — mudar este valor não reescreve o
+     passado. */
+  taxaMatricula    Float  @default(20)
 }

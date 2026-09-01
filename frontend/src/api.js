@@ -78,6 +78,9 @@ export const api = {
 
   // mensalidades (mensalistas)
   batchBook: (clientId, data) => req("POST", `/api/clients/${clientId}/batch-book`, data),
+  // Tira o aluno de várias aulas futuras da mesma turma. `credito: true` libera
+  // a vaga como no portal (gera reposição onde couber); false apaga a aula.
+  batchUnbook: (clientId, data) => req("POST", `/api/clients/${clientId}/batch-unbook`, data),
   getMakeup: (clientId) => req("GET", `/api/clients/${clientId}/makeup`),
   // `forcar` = a Inêz viu o aviso ("sábado não faz parte do plano dela") e
   // decidiu marcar assim mesmo. O portal da aluna nunca manda esse campo.
@@ -107,6 +110,18 @@ export const api = {
   promoteWaitlist: (id) => req("POST", `/api/waitlist/${id}/promote`),
 
   updateSettings: (data) => req("PUT", "/api/settings", data),
+
+  /* Feriados: em feriado a escola não abre. `list` traz o calendário já
+     resolvido (nacionais + o que a Inêz cadastrou) e só as datas manuais, que
+     são as editáveis. `save` devolve as aulas já marcadas naquele dia — quem
+     decide cancelar é a Inêz, por `cancelarAulas`. */
+  feriados: {
+    list: () => req("GET", "/api/feriados"),
+    save: (data) => req("POST", "/api/feriados", data),
+    remove: (date) => req("DELETE", `/api/feriados/${date}`),
+    aulas: (date) => req("GET", `/api/feriados/${date}/aulas`),
+    cancelarAulas: (date) => req("POST", `/api/feriados/${date}/cancelar-aulas`),
+  },
 
   availableSlots: (unit) => req("GET", `/api/slots/available${unit ? `?unit=${encodeURIComponent(unit)}` : ""}`),
 

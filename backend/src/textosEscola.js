@@ -42,9 +42,15 @@ Também não repomos reposição: se marcar reposição e faltar, não remarcamo
 
 Agradecemos pela compreensão e parceria. Essas regras nos ajudam a manter um ambiente organizado, respeitoso e acolhedor para todas. 💕`;
 
-/* Mensagem de agradecimento + confirmação + regras, enviada quando o Pix da 1ª
-   mensalidade cai. `quando` já vem formatado ("sexta, 05/09 às 14:00"). */
-export const textoMatriculaConfirmada = ({ nome, unidade, quando }) =>
+/* Mensagem de agradecimento + confirmação + regras, enviada quando o Pix do 1º
+   pagamento cai. `quando` já vem formatado ("sexta, 05/09 às 14:00").
+
+   `taxa` chega formatada ("R$ 20,00") quando houve taxa de matrícula, e vazia
+   quando não houve. A promessa de devolução muda com ela: com taxa, volta a
+   mensalidade e a taxa fica. Isto é REPETIÇÃO do que ela leu antes de pagar, de
+   propósito — a hora de descobrir o que não volta não é a hora de pedir de
+   volta. */
+export const textoMatriculaConfirmada = ({ nome, unidade, quando, taxa }) =>
 `Obrigada, ${String(nome || "").split(" ")[0]}! 🙏 Recebemos o seu pagamento.
 
 *Confirmação de agendamento*
@@ -53,21 +59,30 @@ export const textoMatriculaConfirmada = ({ nome, unidade, quando }) =>
 
 Sua vaga está garantida. Antes da primeira aula, leia com calma as regras abaixo — é rapidinho e evita mal-entendido depois. 👇
 
-💬 Caso você decida não continuar após a primeira aula, esse valor será devolvido integralmente.
+${taxa
+  ? `💬 Caso você decida não continuar após a primeira aula, devolvemos a *mensalidade integralmente* — a taxa de matrícula de ${taxa} não é devolvida.`
+  : `💬 Caso você decida não continuar após a primeira aula, esse valor será devolvido integralmente.`}
 🧵 Se desejar seguir conosco, a matrícula e a mensalidade já estarão pagas.
 
 Em caso de falta sem aviso prévio de no mínimo ${REPO_HORAS_MIN} horas, não devolvemos o valor da matrícula.
 
 ${REGRAS_REPOSICAO}`;
 
-/* Pix da 1ª mensalidade, com o prazo da vaga dito na cara — é o que faz a aluna
-   pagar agora em vez de deixar para depois. */
-export const textoCobrancaReserva = ({ nome, unidade, quando, valor, minutos }) =>
+/* Pix do 1º pagamento, com o prazo da vaga dito na cara — é o que faz a aluna
+   pagar agora em vez de deixar para depois.
+
+   Quando há taxa de matrícula, o valor vem QUEBRADO: mensalidade, taxa e total.
+   O QR do Pix traz o total, e um número no texto diferente do número no app do
+   banco é o que trava a aluna na hora de pagar — ela para para conferir, e
+   quem para não paga. Discriminar também deixa claro que a taxa é uma vez só. */
+export const textoCobrancaReserva = ({ nome, unidade, quando, valor, mensalidade, taxa, minutos }) =>
 `Quase lá, ${String(nome || "").split(" ")[0]}! 💚
 
 📍 ${unidade}
 🗓️ ${quando}
-💰 1ª mensalidade: ${valor}
+${taxa
+  ? `💰 1ª mensalidade: ${mensalidade}\n🎟️ Taxa de matrícula (uma vez só): ${taxa}\n*Total a pagar: ${valor}*`
+  : `💰 1ª mensalidade: ${valor}`}
 
 Copie o código Pix abaixo e pague pelo app do seu banco. Assim que o pagamento cair, sua vaga é confirmada automaticamente e eu te mando a confirmação por aqui.
 
@@ -122,22 +137,57 @@ export const PENDENCIA_POR_PASSO = {
   unit: "na escolha da unidade",
   slot: "na escolha do horário",
   confirm: "na confirmação do horário",
+  cpf: "no seu CPF, que é como eu encontro (ou crio) o seu cadastro",
   name: "no seu nome completo",
   nameok: "na confirmação do seu nome",
+  wpp: "no WhatsApp de contato",
+  email: "no seu e-mail",
+  nasc: "na sua data de nascimento",
   plano: "na escolha do plano",
-  cpf: "no seu CPF, que o banco pede para emitir o Pix",
 };
 
-/* Atendimento humano. O bot resolve quase tudo, então o texto tenta uma última
-   vez antes de entregar o número — não por burocracia, mas porque a Inêz é uma
-   pessoa só e a maior parte das dúvidas o bot responde na hora. */
-export const textoAtendenteHumano = () =>
-`Claro! Antes de eu te passar para uma pessoa: aqui mesmo eu consigo *agendar sua aula*, *remarcar*, *enviar o Pix da mensalidade* e *explicar as regras de reposição* — na hora, sem espera. 💚
+/* Boas-vindas. É a primeira frase que a escola diz para alguém que talvez nunca
+   tenha falado com a gente — então ela precisa fazer três coisas em quatro
+   linhas: dizer quem está falando, dizer o que dá para resolver aqui e deixar
+   claro que tem gente atrás disso. Nada de "digite 1 para...".
 
-Se ainda assim precisar falar com alguém da equipe, é neste número:
+   Sai uma vez por conversa: no primeiro contato e depois que a conversa expira
+   (12h de silêncio). Voltar ao menu no meio do papo não repete o texto. */
+export const textoBoasVindas = ({ nome }) =>
+`Oi${nome ? ", " + nome.split(" ")[0] : ""}! Que bom te ver por aqui. 💚
+
+Eu sou a assistente virtual da *Fios que Curam*, a escola de crochê da Inêz Pimentel. Estou aqui para te ajudar de verdade — sem espera e sem formulário.
+
+Comigo você pode *agendar sua aula*, *tirar dúvidas sobre os planos*, *receber o Pix* e *conhecer o método*. Se em algum momento você preferir falar com uma pessoa da equipe, é só me dizer que eu te levo até lá. 🧶`;
+
+/* Atendimento humano, em três tempos.
+
+   A Inêz pediu para insistir no automático, e o motivo é concreto: ela é uma
+   pessoa só, e quase toda pergunta que chega o bot responde na hora. Mas
+   insistir sem fim vira parede — quem quer falar com gente tem que conseguir.
+
+   Então: as duas primeiras vezes mostram o que dá para resolver aqui (a segunda
+   já reconhecendo que ela pediu de novo, porque fingir que não ouviu é o que
+   irrita de verdade); na TERCEIRA o número sai, sem discussão. */
+export const textoAtendenteHumano = (vez = 1) => {
+  if (vez <= 1)
+    return `Claro, eu te ajudo! 💚 Antes de chamar alguém da equipe: aqui mesmo eu resolvo na hora *agendar sua aula*, *remarcar*, *enviar o Pix da mensalidade*, *dizer os valores dos planos* e *explicar as regras de reposição*.
+
+Me conta o que você precisa que eu já cuido disso. 🧶`;
+
+  if (vez === 2)
+    return `Entendi que você prefere falar com uma pessoa — e tudo bem. 💚
+
+Só que o atendimento humano é em horário comercial e às vezes demora, enquanto por aqui é na hora. Se for *agendamento*, *valores*, *Pix* ou *reposição*, eu resolvo agora mesmo: é só me dizer em uma frase.
+
+Se ainda assim preferir a equipe, me diz de novo que eu te passo o contato.`;
+
+  return `Sem problema! Aqui está o contato da nossa equipe: 💚
+
 📞 ${WA_ATENDENTE}
 
-O atendimento é em horário comercial. Se preferir tentar por aqui, é só me dizer o que você precisa. 🧶`;
+O atendimento é em horário comercial. Enquanto isso, se mudar de ideia, eu continuo por aqui — é só me chamar. 🧶`;
+};
 
 /* Mensalidade a vencer. Lembrete, não cobrança: o tom é de quem avisa para a
    pessoa não pagar multa à toa. */

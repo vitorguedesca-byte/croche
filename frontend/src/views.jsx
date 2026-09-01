@@ -12,7 +12,7 @@ import {
   UNITS, STATUS, unitColor,
   todayISO, addDays, weekStart, fmtDate, fmtDateLong, weekdayShort, money, waLink, capitalize, faixaHorario, fimDaAula, hhmm,
   bookingsActive, slotBookings, slotBookingsAll, slotCapacity, slotOccupancy, slotWaitlist, clientAttendance,
-  bookingKind, BOOKING_KINDS, compAtual, addComp, compLabel, competenciasDoAluno, mensalidadeDe, matriculaISO,
+  bookingKindDe, BOOKING_KINDS, feriadoDe, compAtual, addComp, compLabel, competenciasDoAluno, mensalidadeDe, matriculaISO,
   mensalidadeDaComp, precoDaComp, situacaoMensalidade, clientOfBooking, ehPagamentoDeMatricula,
   clientMonthClasses, classifyClient, isNewLead,
   aniversariantes, diaMesNasc, diaMesLabel, faltamLabel,
@@ -241,7 +241,7 @@ export function Agenda({ somenteLeitura = false }) {
         </div>
       </div>
       {view === "month" && <MonthView ref0={ref} agSlots={agSlots} open={open} data={data} unit={unit} somenteLeitura={somenteLeitura} />}
-      {view === "week" && <WeekView ref0={ref} agSlots={agSlots} unit={unit} somenteLeitura={somenteLeitura} />}
+      {view === "week" && <WeekView ref0={ref} agSlots={agSlots} data={data} unit={unit} somenteLeitura={somenteLeitura} />}
       {view === "day" && <DayView ref0={ref} agSlots={agSlots} data={data} unit={unit} somenteLeitura={somenteLeitura} irPara={setRef} />}
       {view === "list" && <ListView data={data} unit={unit} open={open} ref0={ref} somenteLeitura={somenteLeitura} />}
     </div>
@@ -268,27 +268,35 @@ function MonthView({ ref0, agSlots, open, data, unit, somenteLeitura = false }) 
     });
     const dots = slots.slice(0, 8).map((s) => <span key={s.id} className="m-dot" style={{ background: slotOccupancy(data, s.id) ? unitColor(s.unit) : "var(--line)", width: 7, height: 7, borderRadius: "50%" }} />);
     const more = slots.length > 3 ? <div className="m-more">+{slots.length - 3} mais</div> : null;
+    // Feriado: a escola não abre. O dia fica marcado no mês para a Inêz não
+    // tentar criar turma ali — e para entender por que a replicação pulou.
+    const fer = feriadoDe(data, date);
     cells.push(
-      <div key={i} className={`m-cell ${out ? "out" : ""} ${date === t ? "today" : ""}`} onClick={() => open(<DayModal date={date} unit={unit} somenteLeitura={somenteLeitura} />)}>
-        <span className="dn">{dd.getDate()}</span>{evs}{more}<div className="m-dots">{dots}</div>
+      <div key={i} className={`m-cell ${out ? "out" : ""} ${date === t ? "today" : ""} ${fer ? "feriado" : ""}`} onClick={() => open(<DayModal date={date} unit={unit} somenteLeitura={somenteLeitura} />)}>
+        <span className="dn">{dd.getDate()}</span>
+        {fer && <div className="m-feriado" title={`${fer} — a escola não abre`}>🚫 {fer}</div>}
+        {evs}{more}<div className="m-dots">{dots}</div>
       </div>
     );
   }
   return <div className="month-grid">{dows.map((d) => <div key={d} className="month-dow">{d}</div>)}{cells}</div>;
 }
 
-function WeekView({ ref0, agSlots, unit, somenteLeitura = false }) {
+function WeekView({ ref0, agSlots, data, unit, somenteLeitura = false }) {
   const start = weekStart(ref0), t = todayISO();
   const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
   return (
     <div className="agenda" style={{ "--cols": 7 }}>
       {days.map((date) => {
         const slots = agSlots(date);
+        const fer = feriadoDe(data, date);
         return (
-          <div key={date} className="day-col">
+          <div key={date} className={`day-col ${fer ? "feriado" : ""}`}>
             <div className={`day-h ${date === t ? "today" : ""}`}><b>{fmtDate(date)}</b><span>{weekdayShort(date)}</span></div>
+            {/* Feriado: a escola não abre. A coluna diz isso antes de qualquer turma. */}
+            {fer && <div className="col-feriado" title="A escola não abre neste dia">🚫 {fer}</div>}
             {/* todosAlunos: na semana o cartão mostra a turma inteira, não os 5 primeiros */}
-            {slots.length ? slots.map((s) => <SlotCard key={s.id} slot={s} showUnit={unit === "Todas"} todosAlunos somenteLeitura={somenteLeitura} />) : <div className="day-empty">—</div>}
+            {slots.length ? slots.map((s) => <SlotCard key={s.id} slot={s} showUnit={unit === "Todas"} todosAlunos somenteLeitura={somenteLeitura} />) : !fer && <div className="day-empty">—</div>}
           </div>
         );
       })}
@@ -308,6 +316,7 @@ function DayView({ ref0, agSlots, data, unit, somenteLeitura = false, irPara }) 
   const slots = agSlots(ref0);
   const totalAlunas = slots.reduce((n, s) => n + slotOccupancy(data, s.id), 0);
   const totalVagas = slots.reduce((n, s) => n + slotCapacity(s), 0);
+  const fer = feriadoDe(data, ref0);
 
   return (
     <>
@@ -324,6 +333,15 @@ function DayView({ ref0, agSlots, data, unit, somenteLeitura = false, irPara }) 
           );
         })}
       </div>
+
+      {/* Feriado: a escola não abre. Fica no topo do dia, acima de tudo — se
+          ainda houver turma marcada aqui, ela é o problema a resolver. */}
+      {fer && (
+        <div className="dia-feriado">
+          🚫 <b>{fer}</b> — feriado, a escola não abre.
+          {slots.length ? " Os horários abaixo ficaram de antes: cancele ou mova a turma." : ""}
+        </div>
+      )}
 
       {slots.length ? (
         <>
@@ -358,9 +376,9 @@ function DayView({ ref0, agSlots, data, unit, somenteLeitura = false, irPara }) 
                     {todas.length ? (
                       <div className="dv-alunas">
                         {todas.map((b) => {
-                          const k = bookingKind(b);
+                          const k = bookingKindDe(data, b);
                           return (
-                            <div key={b.id} className={`dv-al ${b.status === "cancelada" ? "canc" : ""} ${somenteLeitura ? "ro" : ""}`}
+                            <div key={b.id} className={`dv-al ${b.status === "cancelada" ? "canc" : ""} ${somenteLeitura ? "ro" : ""} ${k ? "dv-" + k.key : ""}`}
                               style={k ? { "--kc": k.color } : undefined}
                               onClick={somenteLeitura ? undefined : () => open(<ManageBooking booking={b} />)}>
                               <span className="nm">{b.clientName}</span>
@@ -429,7 +447,7 @@ function ListView({ data, unit, open, ref0, somenteLeitura = false }) {
               </button>
             </div>
             {todas.length ? todas.map((b) => {
-              const k = bookingKind(b);
+              const k = bookingKindDe(data, b);
               return (
                 <div className={`ls-al ${b.status === "cancelada" ? "canc" : ""} ${k ? "kinded" : ""} ${somenteLeitura ? "ro" : ""}`} key={b.id}
                   style={k ? { "--kc": k.color } : undefined}
@@ -677,6 +695,10 @@ export function Clientes({ params }) {
                       {c.plan === "mensalista" ? <span className="badge b-ok ml">📅 {c.weeklyFreq ? `${c.weeklyFreq}x/semana` : "mensalista"}</span> : null}
                       {c.matriculaStatus === "paga" && c.plan !== "mensalista" ? <span className="badge b-warn ml">🎟️ matrícula a concluir</span> : null}
                       {tab === "novato" ? <span className="badge b-terra ml">✨ 1ª aula</span> : null}
+                      {/* Ficha digitada pela própria aluna na conversa do bot,
+                          sem ninguém conferindo do outro lado. Vale como aviso:
+                          nome, e-mail e nascimento podem precisar de revisão. */}
+                      {c.origem === "whatsapp" ? <span className="badge b-info ml" title="Cadastro feito pela própria aluna na conversa do WhatsApp — confira os dados">💬 Cadastro via WhatsApp</span> : null}
                       <div className="cli-sub">{c.phone || "sem telefone"}{c.birthday ? " · 🎂 " + fmtDate(c.birthday) : ""}</div>
                     </div>
                   </div>

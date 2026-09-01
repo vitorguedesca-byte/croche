@@ -4,6 +4,8 @@ import {
   segundaDaSemana, mesmaSemana, tetoSemanal, PGTO_PLANO,
   somarComp, diaDoMes,
   encargosDaMensalidade, diasEntreISO, MULTA_ATRASO_REAIS, JUROS_DIA_PERCENTUAL,
+  primeiroPagamento, mensalidadeDoPagamento,
+  prazoLiberacao, liberouATempo, REPO_HORAS_MIN,
 } from "./src/regrasAula.js";
 
 let falhas = 0;
@@ -197,6 +199,66 @@ ok(encargosDaMensalidade({ amountCents: 0, dueDate: "2026-08-19" }, "2026-09-18"
 ok(encargosDaMensalidade({ amountCents: 20000, dueDate: "2026-08-19" }, undefined).totalCents === 20000,
   "sem data de referência não inventa acréscimo");
 ok(encargosDaMensalidade(null, "2026-09-18").totalCents === 0, "invoice ausente não quebra");
+
+/* ============ o primeiro pagamento da aluna nova ============
+   Mensalidade + taxa de matrícula (uma vez só). O que este bloco prende é o
+   PAR: o que se soma para cobrar tem que ser exatamente o que se subtrai para
+   registrar a mensalidade do mês. Errar isso não quebra nada visível — só faz a
+   receita da escola crescer R$ 20 por aluna nova, em silêncio. */
+console.log("\n— 1º pagamento: mensalidade + taxa de matrícula —");
+ok(primeiroPagamento({ mensalidade: 120, taxa: 20 }) === 140, "plano 1x (R$ 120) + taxa R$ 20 = R$ 140");
+ok(primeiroPagamento({ mensalidade: 200, taxa: 20 }) === 220, "plano 2x (R$ 200) + taxa R$ 20 = R$ 220");
+ok(primeiroPagamento({ mensalidade: 120, taxa: 0 }) === 120, "taxa zerada = só a mensalidade (é o botão de desligar)");
+ok(primeiroPagamento({ mensalidade: 120 }) === 120, "sem taxa informada = só a mensalidade");
+ok(primeiroPagamento({ mensalidade: 149.9, taxa: 20.1 }) === 170, "centavos fecham certos (149,90 + 20,10)");
+ok(primeiroPagamento({ mensalidade: 120, taxa: -5 }) === 120, "taxa negativa não vira desconto");
+
+console.log("\n— voltar da soma à mensalidade (é o que vira a fatura do mês) —");
+ok(mensalidadeDoPagamento({ pago: 140, taxa: 20 }) === 120, "pagou R$ 140 com taxa de R$ 20 → mensalidade R$ 120");
+ok(mensalidadeDoPagamento({ pago: 220, taxa: 20 }) === 200, "pagou R$ 220 com taxa de R$ 20 → mensalidade R$ 200");
+ok(mensalidadeDoPagamento({ pago: 120, taxa: 0 }) === 120, "sem taxa: a mensalidade é o pagamento inteiro");
+ok(mensalidadeDoPagamento({ pago: 120 }) === 120, "reserva antiga (taxa null) é toda mensalidade");
+ok(mensalidadeDoPagamento({ pago: 0, taxa: 20 }) === 0, "não devolve valor negativo");
+
+console.log("\n— ida e volta: o par tem que fechar em todos os preços —");
+let paresOk = true;
+for (const mens of [0, 80, 120, 149.9, 200, 237.35, 1000]) {
+  for (const taxa of [0, 20, 15.5, 49.99]) {
+    const cobrado = primeiroPagamento({ mensalidade: mens, taxa });
+    if (mensalidadeDoPagamento({ pago: cobrado, taxa }) !== mens) {
+      console.log(`        divergiu: mensalidade ${mens} + taxa ${taxa} → cobrou ${cobrado}`);
+      paresOk = false;
+    }
+  }
+}
+ok(paresOk, "28 combinações de preço e taxa: somar e subtrair devolvem a mensalidade original");
+
+/* ---------- prazo para liberar a aula e ganhar crédito de reposição ----------
+   É a regra que a escola promete por escrito ("avise com pelo menos 6 horas").
+   A faixa da manhã existe porque 6 horas antes de uma aula das 8h seria de
+   madrugada: para elas, o prazo é 23:59 da véspera. */
+console.log("\n— prazo da reposição —");
+ok(prazoLiberacao("2026-09-10", "09:00") === "2026-09-09T23:59:59", "aula da manhã: até 23:59 da véspera");
+ok(prazoLiberacao("2026-09-10", "07:00") === "2026-09-09T23:59:59", "aula das 7h: idem");
+ok(prazoLiberacao("2026-09-10", "13:00") === "2026-09-10T07:00:00", "13:00 → 6h antes, no mesmo dia");
+ok(prazoLiberacao("2026-09-10", "18:00") === "2026-09-10T12:00:00", "18:00 → 12:00");
+ok(prazoLiberacao("2026-09-10", "10:00") === "2026-09-10T04:00:00", "10:00 já está fora da faixa da manhã");
+// hora fora do formato não pode derrubar a conta (o banco guarda texto livre)
+ok(prazoLiberacao("2026-09-10", "9:00") === "2026-09-09T23:59:59", "'9:00' sem zero à esquerda cai na manhã");
+ok(prazoLiberacao("2026-09-10", "18:00 as 20:00") === "2026-09-10T12:00:00", "faixa inteira usa a hora de início");
+/* A madrugada NÃO cai na conta das 6 horas: qualquer hora antes das 10:00 usa
+   o prazo da véspera, que é sempre o mais cedo dos dois. É por isso que o
+   `while` da virada de dia dentro de prazoLiberacao nunca dispara na prática —
+   a partir das 10:00, seis horas antes ainda é o mesmo dia. */
+ok(prazoLiberacao("2026-09-10", "03:00") === "2026-09-09T23:59:59", "madrugada usa o prazo da véspera");
+
+console.log("\n— avisou a tempo? —");
+ok(liberouATempo("2026-09-10", "15:00", "2026-09-10T08:59:00") === true, "15:00 avisando às 8h59: no prazo");
+ok(liberouATempo("2026-09-10", "15:00", "2026-09-10T09:00:00") === true, "no limite exato ainda vale");
+ok(liberouATempo("2026-09-10", "15:00", "2026-09-10T09:01:00") === false, "um minuto depois já não gera crédito");
+ok(liberouATempo("2026-09-10", "09:00", "2026-09-09T23:59:00") === true, "manhã: véspera às 23:59 vale");
+ok(liberouATempo("2026-09-10", "09:00", "2026-09-10T06:00:00") === false, "manhã: no próprio dia não vale");
+ok(REPO_HORAS_MIN === 6, "a antecedência prometida continua sendo 6 horas");
 
 console.log(falhas ? `\n${falhas} FALHA(S)` : "\nTodos os casos passaram.");
 process.exit(falhas ? 1 : 0);

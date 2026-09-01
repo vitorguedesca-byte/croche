@@ -9,7 +9,7 @@ import {
   unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize, faixaHorario, hhmm,
   slotById, slotBookings, slotBookingsAll, slotCapacity, slotWaitlist, clientAttendance, nomeCurto,
   marcadoresDoAluno,
-  bookingKind, MARCAS_MATRICULA, ehPagamentoDeMatricula, situacaoMensalidade, clientOfBooking,
+  bookingKind, bookingKindDe, feriadoDe, MARCAS_MATRICULA, ehPagamentoDeMatricula, situacaoMensalidade, clientOfBooking,
   competenciasDoAluno, compLabel, mensalidadeDe, matriculaISO,
   compAtual, addComp, precoDaComp, mensalidadeDaComp,
   WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays,
@@ -39,6 +39,17 @@ function avisarCriacao(r, sempre = false) {
   if (!r) return;
   const criados = r.created?.length ?? 0;
   const conflitos = r.conflitos || [];
+  /* Datas puladas por serem feriado. Dizer isso em voz alta importa: o pulo
+     silencioso foi exatamente como a regra do sábado sumiu da vista — a Inêz
+     via a semana faltando na agenda e não sabia por quê. */
+  const feriados = r.feriados || [];
+  if (feriados.length) {
+    const lista = feriados.slice(0, 3).map((f) => `${fmtDate(f.date)} (${f.nome})`).join(", ");
+    return toast(
+      `${criados} horário(s) criado(s). ${feriados.length} dia(s) pulado(s) por feriado: ${lista}${feriados.length > 3 ? "…" : ""}`,
+      "info",
+    );
+  }
   if (conflitos.length) {
     const lista = conflitos.slice(0, 3).map((c) => `${fmtDate(c.date)} (choca com ${c.conflitaCom})`).join(", ");
     return toast(
@@ -105,12 +116,16 @@ export function SlotCard({ slot, showUnit, todosAlunos = false, somenteLeitura =
       {todas.length ? (
         <div className={`sc-roster ${todosAlunos ? "sc-todos" : ""}`}>
           {(todosAlunos ? todas : todas.slice(0, 5)).map((b) => {
-            const k = bookingKind(b);
+            const k = bookingKindDe(data, b);
             // 🎂 aniversário perto do dia da aula · 🙋 mensalista de escala
             const marcas = marcadoresDoAluno(data, b, slot.date);
             const dica = [b.clientName, ...marcas.map((m) => m.label), k ? k.label : null].filter(Boolean).join(" · ");
             return (
-              <div key={b.id} className={`sc-al ${b.status === "cancelada" ? "canc" : ""}`} title={dica}>
+              /* Reposição ganha destaque próprio (sc-repo): na agenda ela some
+                 no meio da turma, e é justamente a aula que a Inêz precisa
+                 reconhecer de longe — é vaga de outra aluna sendo ocupada, não
+                 aula do plano de quem está ali. */
+              <div key={b.id} className={`sc-al ${b.status === "cancelada" ? "canc" : ""} ${k ? "sc-" + k.key : ""}`} title={dica}>
                 <span className="sc-dot" style={{ background: k ? k.color : "var(--pink)" }} />
                 {marcas.map((m) => (
                   <span key={m.k} className={`sc-marca ${m.forte ? "" : "fraca"}`} aria-label={m.label}>{m.ic}</span>
@@ -138,10 +153,18 @@ export function DayModal({ date, unit = "Todas", somenteLeitura = false }) {
     .filter((s) => s.date === date && (todas || s.unit === unit))
     .sort((a, b) => a.time.localeCompare(b.time));
   const title = capitalize(new Date(date + "T00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" }));
+  // Feriado: a escola não abre. Sem "＋ Novo horário" — o servidor recusaria.
+  const fer = feriadoDe(data, date);
+  const sub = (
+    <>
+      {fer && <div className="day-feriado">🚫 <b>{fer}</b> — feriado, a escola não abre.</div>}
+      {!todas && <div className="day-sub">📍 Unidade: <b>{unit}</b></div>}
+    </>
+  );
   return (
-    <Modal title={title} subheader={!todas ? <div className="day-sub">📍 Unidade: <b>{unit}</b></div> : undefined} footer={<>
+    <Modal title={title} subheader={fer || !todas ? sub : undefined} footer={<>
       <button className="btn ghost" onClick={close}>Fechar</button>
-      {!somenteLeitura && <button className="btn" onClick={() => open(<SlotForm presetDate={date} presetUnit={unit} />)}>＋ Novo horário</button>}
+      {!somenteLeitura && !fer && <button className="btn" onClick={() => open(<SlotForm presetDate={date} presetUnit={unit} />)}>＋ Novo horário</button>}
     </>}>
       {slots.length
         ? <div className="day-view" style={{ maxWidth: "none" }}>{slots.map((s) => <SlotCard key={s.id} slot={s} showUnit={todas} somenteLeitura={somenteLeitura} />)}</div>
@@ -179,7 +202,7 @@ export function TurmaView({ slotId }) {
       {todas.length ? (
         <div className="tv-lista">
           {todas.map((b) => {
-            const k = bookingKind(b);
+            const k = bookingKindDe(data, b);
             const marcas = marcadoresDoAluno(data, b, slot.date);
             return (
               <div key={b.id} className={`tv-al ${b.status === "cancelada" ? "canc" : ""}`}
@@ -473,7 +496,16 @@ export function ManageBooking({ booking, onBack }) {
           dinheiro (é a 1ª mensalidade da aluna). Nas demais, o que importa é
           como está a mensalidade do mês dela. */}
       {cobraNaReserva ? (<>
-        <div className="info-line"><b>{ehPagamentoDeMatricula(booking.paymentMethod) ? "1ª mensalidade" : "Aula extra"}</b><span>{money(booking.value)}</span></div>
+        {/* Quando houve taxa de matrícula, o valor da reserva é a SOMA. Mostrar
+            só o total aqui faria a Inêz ler "1ª mensalidade R$ 140" e achar que
+            o plano mudou de preço — então as parcelas aparecem separadas. */}
+        {ehPagamentoDeMatricula(booking.paymentMethod) && Number(booking.taxaMatricula) > 0 ? (<>
+          <div className="info-line"><b>1ª mensalidade</b><span>{money(booking.value - booking.taxaMatricula)}</span></div>
+          <div className="info-line"><b>Taxa de matrícula</b><span>{money(booking.taxaMatricula)}</span></div>
+          <div className="info-line"><b>Total cobrado</b><span><b>{money(booking.value)}</b></span></div>
+        </>) : (
+          <div className="info-line"><b>{ehPagamentoDeMatricula(booking.paymentMethod) ? "1ª mensalidade" : "Aula extra"}</b><span>{money(booking.value)}</span></div>
+        )}
         <div className="info-line"><b>Pagamento</b><span>{booking.paid ? `Pago (${booking.paymentMethod})` : "Pendente"}</span></div>
       </>) : (() => {
         const sit = situacaoMensalidade(data, clientOfBooking(data, booking));
@@ -782,10 +814,15 @@ export function BookingForm({ slotId }) {
     close();
     if (repetindo) {
       const p = r?.pulos || {};
-      const puladas = (p.lotada || 0) + (p.jaMarcada || 0);
+      const puladas = (p.lotada || 0) + (p.jaMarcada || 0) + (p.teto || 0);
+      const fer = r?.feriados?.length || 0;
       toast(
         `✅ ${r?.created?.length ?? 0} aula(s) marcada(s).` +
-        (puladas ? `\nPuladas: ${p.lotada || 0} turma(s) lotada(s) · ${p.jaMarcada || 0} já marcada(s).` : "")
+        (puladas
+          ? `\nPuladas: ${p.lotada || 0} turma(s) lotada(s) · ${p.jaMarcada || 0} já marcada(s)` +
+            (p.teto ? ` · ${p.teto} acima do plano semanal` : "") + "."
+          : "") +
+        (fer ? `\n${fer} dia(s) em feriado — a escola não abre.` : "")
       );
     }
   };
@@ -1828,7 +1865,9 @@ export function ClientProfile({ client, initialTab }) {
   const total = hist.filter((b) => b.status !== "cancelada").length;
   const pago = hist.filter((b) => b.paid).reduce((s, b) => s + b.value, 0);
   const t = todayISO();
-  const proxima = hist.filter((b) => b.date >= t && b.status !== "cancelada").sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))[0];
+  const futuras = hist.filter((b) => b.date >= t && b.status !== "cancelada");
+  const proxima = futuras.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))[0];
+  const temAulaFutura = futuras.length > 0;
   const ehMensalista = c.plan === "mensalista";
   const temMatricula = c.matriculaStatus && c.matriculaStatus !== "nao_aplica";
   const pendentes = (data.invoices || []).filter((i) => i.clientId === c.id && i.status === "pendente").length;
@@ -1867,6 +1906,7 @@ export function ClientProfile({ client, initialTab }) {
     <>
       <button className="btn wa" onClick={() => openWa(c.phone, `Olá ${c.name}! 💚`)}><WaIcon /> WhatsApp</button>
       {ehMensalista && <button className="btn" onClick={() => open(<BatchBookForm client={c} />)}>📅 Agendar em lote</button>}
+      {ehMensalista && temAulaFutura && <button className="btn sec" onClick={() => open(<BatchUnbookForm client={c} />)}>🗑 Tirar em lote</button>}
       {c.hasPin && <button className="btn ghost" onClick={resetPin}>🔑 Redefinir PIN</button>}
       <div style={{ flex: 1 }} />
       <button className="btn sec" onClick={() => setTab("editar")}>✏️ Editar cadastro</button>
@@ -1895,6 +1935,9 @@ export function ClientProfile({ client, initialTab }) {
               ? <span className="badge b-danger">Inscrição cancelada</span>
               : <span className="badge b-ok">Ativa</span>}
             {c.firstClass ? <span className="badge b-terra">✨ Novo(a)</span> : null}
+            {/* Ficha nascida na conversa do WhatsApp: os dados foram digitados
+                pela própria aluna, sem revisão de ninguém da escola. */}
+            {c.origem === "whatsapp" ? <span className="badge b-info" title="Cadastro feito pela própria aluna na conversa do WhatsApp">💬 Cadastro via WhatsApp</span> : null}
           </div>
         </div>
       </div>
@@ -2029,13 +2072,17 @@ function MatriculaBlock({ client }) {
   const { open } = useModal();
   if (client.matriculaStatus === "nao_aplica") return null;
   const [cls, txt] = MATRICULA_ROTULO[client.matriculaStatus] || ["b-muted", client.matriculaStatus];
-  /* Não existe mais taxa de matrícula: o que ela pagou para entrar foi a 1ª
-     mensalidade, no valor cheio do plano. Mostra o que de fato foi cobrado —
-     a reserva da experimental guarda esse valor. */
+  /* O que ela pagou para entrar: 1ª mensalidade + taxa de matrícula. A reserva
+     da experimental guarda as duas coisas (`value` é o total, `taxaMatricula` é
+     a parte da taxa), então os números aqui são os que ela pagou de fato — não
+     os da tabela de hoje, que pode ter mudado desde então. */
   const reservaMatricula = (data.bookings || [])
     .filter((b) => b.clientName === client.name && MARCAS_MATRICULA.includes(b.paymentMethod))
     .sort((a, b) => a.date.localeCompare(b.date))[0];
   const valorEntrada = reservaMatricula?.value ?? mensalidadeDe(client, data.meta);
+  const taxaPaga = Number(reservaMatricula?.taxaMatricula || 0);
+  // A TAXA NÃO VOLTA: devolve-se a mensalidade que estava dentro do pagamento.
+  const valorDevolucao = Math.max(0, valorEntrada - taxaPaga);
   /* A devolução vale também depois da conversão: a aluna nova já sai matriculada
      ao pagar, então "não quis continuar" precisa desfazer essa matrícula — e não
      só registrar o estorno. */
@@ -2050,9 +2097,16 @@ function MatriculaBlock({ client }) {
     const compMatricula = (client.matriculaAt || t).slice(0, 7);
     const mensalidades = (data.invoices || []).filter((i) => i.clientId === client.id
       && (i.status === "pendente" || (i.status === "pago" && i.competencia === compMatricula))).length;
+    /* O valor a devolver vem escrito na confirmação porque é você quem faz o
+       Pix de volta, na frente da aluna. Fazer essa subtração de cabeça, com
+       alguém esperando, é onde o erro acontece. */
     if (!(await confirmModal({
       title: "Devolver a mensalidade",
-      message: `Confirmar a devolução INTEGRAL de ${money(valorEntrada)} para ${client.name}?\n\n` +
+      message: (taxaPaga > 0
+        ? `Ela pagou ${money(valorEntrada)} (mensalidade ${money(valorDevolucao)} + taxa de matrícula ${money(taxaPaga)}).\n\n` +
+          `➜ Devolver ${money(valorDevolucao)} para ${client.name}.\n` +
+          `A taxa de matrícula de ${money(taxaPaga)} NÃO é devolvida.\n\n`
+        : `Confirmar a devolução INTEGRAL de ${money(valorEntrada)} para ${client.name}?\n\n`) +
         (client.plan === "mensalista" ? "• A matrícula é desfeita — ela volta a ser avulsa\n" : "") +
         (aulas ? `• ${aulas} aula(s) futura(s) serão canceladas\n` : "") +
         (mensalidades ? `• ${mensalidades} mensalidade(s) serão canceladas (inclusive a do mês da matrícula, que está paga)\n` : "") +
@@ -2063,7 +2117,9 @@ function MatriculaBlock({ client }) {
       const r = await run(api.refundMatricula(client.id));
       const d = r?.desfez;
       toast(d
-        ? `Devolução registrada. ${d.aulas} aula(s) e ${d.mensalidades} mensalidade(s) canceladas.`
+        ? `Devolução registrada: devolver ${money(d.devolver ?? valorDevolucao)}` +
+          (d.taxaRetida ? ` (taxa de ${money(d.taxaRetida)} retida)` : "") +
+          `. ${d.aulas} aula(s) e ${d.mensalidades} mensalidade(s) canceladas.`
         : "Devolução registrada.");
     }
     catch { /* run já avisou */ }
@@ -2076,6 +2132,7 @@ function MatriculaBlock({ client }) {
         <span className={`badge ${cls}`}>{txt}</span>
       </div>
       <div className="cli-sub">
+        {taxaPaga > 0 ? <>Mensalidade <b>{money(valorDevolucao)}</b> + taxa de matrícula <b>{money(taxaPaga)}</b>. </> : null}
         {client.trialDate ? <>Aula experimental em <b>{fmtDate(client.trialDate)}</b>. </> : null}
         {client.matriculaAt ? <>1ª mensalidade paga em {fmtDate(client.matriculaAt)}. </> : null}
         {client.matriculaRefundAt ? <>Devolvida em {fmtDate(client.matriculaRefundAt)}.</> : null}
@@ -2394,19 +2451,20 @@ export function BatchBookForm({ client }) {
         porHorario.get(g.time).push(...g.datas);
       });
       let agendadas = 0;
-      const p = { semTurma: 0, cheia: 0, jaAgendado: 0, teto: 0 };
+      const p = { semTurma: 0, cheia: 0, jaAgendado: 0, teto: 0, feriado: 0 };
       for (const [time, datas] of porHorario) {
         const r = await run(api.batchBook(client.id, { unit, time, dates: [...new Set(datas)], forcar }));
         agendadas += r?.agendadas ?? 0;
         const rp = r?.pulos || {};
         p.semTurma += rp.semTurma || 0; p.cheia += rp.cheia || 0; p.jaAgendado += rp.jaAgendado || 0;
-        p.teto += rp.teto || 0;
+        p.teto += rp.teto || 0; p.feriado += rp.feriado || 0;
       }
       close();
       toast(
         `✅ ${agendadas} aula(s) agendada(s).\n` +
         `Puladas: ${p.semTurma} sem turma · ${p.cheia} lotada(s) · ${p.jaAgendado} já agendada(s)` +
-        (p.teto ? ` · ${p.teto} acima do plano semanal` : "") + "."
+        (p.teto ? ` · ${p.teto} acima do plano semanal` : "") +
+        (p.feriado ? ` · ${p.feriado} em feriado (a escola não abre)` : "") + "."
       );
     } finally { setBusy(false); }
   };
@@ -2496,6 +2554,163 @@ export function BatchBookForm({ client }) {
       {escolhidos.length > 0 && (
         <div className="cfg-preview" style={{ marginTop: ".2rem" }}>
           📅 {escolhidos.map((g) => `${WEEKDAYS_SHORT[g.dow]} ${hhmm(g.time)}`).join(" · ")} — <b>{totalAgendar} aula(s)</b> nas próximas {weeks} semana(s).
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/* ============ Tirar aulas em lote (mensalista) ============
+   O contrário do "Agendar em lote": aqui as turmas listadas são as que o aluno
+   JÁ tem marcadas daqui para frente. Só aula futura entra na lista — o que já
+   aconteceu fica no histórico, aconteça o que acontecer nesta tela. */
+export function BatchUnbookForm({ client }) {
+  const { data, run } = useStore();
+  const { open, close } = useModal();
+  // Até onde olhar. "todas" é o padrão porque o caso comum é sair da turma de
+  // vez; recortar por semanas serve para tirar só um pedaço (viagem, licença).
+  const [horizonte, setHorizonte] = useState("todas");
+  const [picked, setPicked] = useState(() => new Set());
+  const [busy, setBusy] = useState(false);
+
+  const t = todayISO();
+  const ate = horizonte === "todas" ? null : addDays(t, Number(horizonte) * 7 - 1);
+
+  /* Turmas em que ela está: agrupadas por unidade + dia da semana + horário,
+     que é como a Inêz pensa ("ela sai da terça das 14h em Boa Vista"). */
+  const grupos = (() => {
+    const map = new Map();
+    data.bookings
+      .filter((b) => b.clientName === client.name && b.status !== "cancelada"
+        && b.date >= t && (!ate || b.date <= ate))
+      .forEach((b) => {
+        const dow = dowMon(b.date);
+        const key = `${b.unit}|${dow}|${b.time}`;
+        if (!map.has(key)) map.set(key, { key, unit: b.unit, dow, time: b.time, aulas: [] });
+        map.get(key).aulas.push(b);
+      });
+    return [...map.values()]
+      .map((g) => {
+        const aulas = g.aulas.sort((a, b) => a.date.localeCompare(b.date));
+        return {
+          ...g, aulas,
+          repo: aulas.filter((b) => b.paymentMethod === "Reposição").length,
+          extra: aulas.filter((b) => b.paymentMethod === "Avulsa").length,
+        };
+      })
+      .sort((a, b) => a.dow - b.dow || a.time.localeCompare(b.time) || a.unit.localeCompare(b.unit));
+  })();
+
+  const toggle = (key) => setPicked((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  const escolhidos = grupos.filter((g) => picked.has(g.key));
+  const totalRemover = escolhidos.reduce((n, g) => n + g.aulas.length, 0);
+
+  const save = async () => {
+    if (!escolhidos.length) return toast("Escolha ao menos uma turma.", "error");
+    const resumo = escolhidos
+      .map((g) => `• ${WEEKDAYS_SHORT[g.dow]} ${hhmm(g.time)} · ${g.unit} — ${g.aulas.length} aula(s), de ${fmtDate(g.aulas[0].date)} a ${fmtDate(g.aulas[g.aulas.length - 1].date)}`)
+      .join("\n");
+    /* Duas saídas, e a diferença é dinheiro/direito da aluna — por isso as duas
+       aparecem escritas aqui, e não numa opção escondida na tela anterior. */
+    const escolha = await confirmModal({
+      title: `Tirar ${totalRemover} aula(s) de ${client.name}`,
+      message:
+        `${resumo}\n\n` +
+        "Aulas já passadas não são tocadas.\n\n" +
+        "SÓ TIRAR DA AGENDA: as aulas somem, sem crédito. É o caso de troca de turma ou marcação errada.\n\n" +
+        "TIRAR E DAR CRÉDITO: as aulas ficam canceladas no histórico e viram crédito de reposição onde as regras permitirem (antecedência e limite do mês continuam valendo).\n\n" +
+        "Não dá para desfazer.",
+      confirmLabel: "Só tirar da agenda",
+      altLabel: "Tirar e dar crédito",
+      cancelLabel: "Voltar",
+      tone: "danger",
+    });
+    if (!escolha) return;
+    const credito = escolha === "alt";
+
+    setBusy(true);
+    try {
+      // a API trabalha uma turma (unidade + horário) por chamada
+      const porTurma = new Map();
+      escolhidos.forEach((g) => {
+        const k = `${g.unit}|${g.time}`;
+        if (!porTurma.has(k)) porTurma.set(k, { unit: g.unit, time: g.time, dates: [] });
+        porTurma.get(k).dates.push(...g.aulas.map((b) => b.date));
+      });
+      let removidas = 0, creditos = 0, semCredito = 0;
+      for (const { unit, time, dates } of porTurma.values()) {
+        const r = await run(api.batchUnbook(client.id, { unit, time, dates: [...new Set(dates)], credito }));
+        removidas += r?.removidas ?? 0;
+        creditos += r?.creditos ?? 0;
+        semCredito += r?.semCredito ?? 0;
+      }
+      close();
+      toast(
+        `✅ ${removidas} aula(s) tirada(s) da agenda.` +
+        (credito ? `\n${creditos} crédito(s) de reposição gerado(s)` + (semCredito ? ` · ${semCredito} sem crédito (fora das regras).` : ".") : "")
+      );
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal title={`Tirar aulas em lote — ${client.name}`} footer={<>
+      <button className="btn ghost" onClick={() => open(<ClientProfile client={client} />)}>← Voltar</button>
+      <button className="btn danger" onClick={save} disabled={busy || !totalRemover}>🗑 Tirar {totalRemover} aula(s)</button>
+    </>}>
+      <div className="cfg-preview" style={{ marginTop: 0, marginBottom: "1rem" }}>
+        Escolha as turmas de que <b>{client.name}</b> vai sair. Só aparecem as aulas <b>de hoje em diante</b> — o histórico não muda.
+      </div>
+
+      <div className="field">
+        <label>Até quando</label>
+        <div className="seg">
+          {[["todas", "Todas as futuras"], ["4", "4 semanas"], ["8", "8 semanas"], ["12", "12 semanas"]].map(([v, label]) => (
+            <button key={v} type="button" className={horizonte === v ? "on" : ""}
+              onClick={() => { setHorizonte(v); setPicked(new Set()); }}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="field">
+        <label>Turmas em que ela está <span className="cfg-count">{grupos.length}</span></label>
+        {grupos.length === 0 ? (
+          <div className="empty" style={{ padding: "1.6rem 1rem" }}>
+            <div className="ic">🧶</div>
+            <p><b>{client.name}</b> não tem aula marcada {horizonte === "todas" ? "daqui para frente" : `nas próximas ${horizonte} semanas`}.</p>
+          </div>
+        ) : (
+          <div className="bb-grid">
+            {grupos.map((g) => {
+              const on = picked.has(g.key);
+              return (
+                <button key={g.key} type="button" className={`bb-card rm ${on ? "on" : ""}`}
+                  onClick={() => toggle(g.key)}>
+                  <div className="bb-top">
+                    <span className="bb-dia">{WEEKDAYS_SHORT[g.dow]}</span>
+                    <span className="bb-hora">{hhmm(g.time)}</span>
+                    {on && <span className="bb-check">✓</span>}
+                  </div>
+                  <div className="bb-prof">{g.unit}</div>
+                  <div className="bb-foot">
+                    <b>{g.aulas.length}</b> aula(s) · de {fmtDate(g.aulas[0].date)} a {fmtDate(g.aulas[g.aulas.length - 1].date)}
+                    {(g.repo > 0 || g.extra > 0) && (
+                      <div className="bb-skip">
+                        {g.repo > 0 && <>· {g.repo} reposição </>}
+                        {g.extra > 0 && <>· {g.extra} extra (paga)</>}
+                      </div>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {escolhidos.length > 0 && (
+        <div className="cfg-warn" style={{ marginTop: ".2rem" }}>
+          ⚠️ Vai sair de {escolhidos.map((g) => `${WEEKDAYS_SHORT[g.dow]} ${hhmm(g.time)}`).join(" · ")} — <b>{totalRemover} aula(s)</b>.
+          {escolhidos.some((g) => g.extra > 0) && <> Aula extra já paga <b>não</b> devolve o valor.</>}
         </div>
       )}
     </Modal>
@@ -2779,6 +2994,70 @@ export function ClientForm({ client }) {
       <button className="btn" onClick={f.save}>Salvar</button>
     </>}>
       <ClientFormFields f={f} />
+    </Modal>
+  );
+}
+
+/* ================= Aulas marcadas num dia que virou feriado =================
+   Cadastrar o feriado não cancela nada: quem decide é a Inêz, olhando quem
+   seria atingida. O cancelamento em massa gera crédito de reposição para as
+   mensalistas — feriado é decisão da escola, ninguém perde aula porque a porta
+   não abriu. A outra saída é fechar aqui e remarcar turma por turma. */
+export function FeriadoAulas({ date, nome, aulas = [] }) {
+  const { reload } = useStore();
+  const { close } = useModal();
+  const [busy, setBusy] = useState(false);
+
+  const cancelarTudo = async () => {
+    if (busy) return;
+    const ok = await confirmModal({
+      title: "Cancelar as aulas do feriado",
+      message: `${aulas.length} aula(s) de ${fmtDateLong(date)} serão canceladas.\n\n` +
+        "Cada mensalista ganha um crédito de reposição — o feriado é decisão da escola, " +
+        "então ninguém perde a aula. Aula extra e experimental não geram crédito.",
+      confirmLabel: "Cancelar as aulas",
+      tone: "danger",
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const r = await api.feriados.cancelarAulas(date);
+      await reload();
+      toast(`${r.canceladas} aula(s) cancelada(s) · ${r.creditos.length} crédito(s) de reposição.`, "ok");
+      close();
+    } catch (e) {
+      toast(e.message || "Não foi possível cancelar.", "error");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal
+      title="Aulas marcadas neste feriado"
+      subheader={<div className="day-sub">🚫 <b>{nome}</b> · {fmtDateLong(date)}</div>}
+      footer={<>
+        <button className="btn ghost" onClick={close}>Deixar como está</button>
+        <button className="btn danger" onClick={cancelarTudo} disabled={busy}>
+          {busy ? "Cancelando…" : `Cancelar ${aulas.length} aula(s) e dar crédito`}
+        </button>
+      </>}
+    >
+      <p className="help" style={{ marginBottom: ".7rem" }}>
+        O dia virou feriado e a escola não abre, mas estas aulas já estavam marcadas.
+        Cancelar aqui avisa a agenda e devolve o crédito de reposição para as mensalistas.
+      </p>
+      <div className="tv-lista">
+        {aulas.map((b) => (
+          <div key={b.id} className="tv-al">
+            <span className="tv-nm">{hhmm(b.time)} · {b.clientName}</span>
+            <span className="tv-sp">
+              <span className="badge b-muted">📍 {b.unit}</span>
+              {b.paymentMethod === "Mensalista"
+                ? <span className="badge b-ok">ganha crédito</span>
+                : <span className="badge b-muted">sem crédito</span>}
+            </span>
+          </div>
+        ))}
+      </div>
     </Modal>
   );
 }

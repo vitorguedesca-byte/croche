@@ -117,18 +117,25 @@
   .sobre p{color:var(--ink);opacity:.86;margin-bottom:1.1rem;max-width:56ch}
   .sig{font-family:'Fraunces',serif;font-style:italic;font-weight:300;font-size:1.35rem;color:var(--terracota);margin-top:1rem}
 
-  /* Manifesto — seção com altura natural; mural centralizado com fotos de tamanho fixo */
+  /* Manifesto — o mural é o FUNDO da seção, então ele cobre a seção inteira.
+     Antes a grade tinha altura fixa (4 linhas de 10vw) e ficava centralizada:
+     quando o texto crescia — no celular e nas larguras intermediárias — a
+     seção ficava mais alta que a grade e sobrava uma faixa preta em cima e
+     embaixo, com as fotos atravessando o texto no meio (é o que aparece nos
+     prints). Agora a grade é `inset:0` e as linhas são `1fr`: as 44 fotos se
+     dividem pela altura real da seção, seja ela qual for.
+
+     As 44 fotos só fecham em grade cheia com 11 ou 4 colunas (44 = 11 × 4),
+     por isso são só esses dois formatos — qualquer outro número deixaria
+     buracos na última linha. */
   .manifesto{background:var(--ink);color:var(--cream);position:relative;overflow:hidden}
-  /* grade de fotos: cada linha = 10vw (fixo) — não estica com a seção */
   .manifesto-bg{
     position:absolute;
-    top:50%;left:0;right:0;
-    transform:translateY(-50%);
-    height:calc(4 * 10vw + 9px);
+    inset:0;
     z-index:0;
     display:grid;
     grid-template-columns:repeat(11,1fr);
-    grid-template-rows:repeat(4,10vw);
+    grid-auto-rows:1fr;
     gap:3px;
     overflow:hidden;
   }
@@ -152,10 +159,26 @@
   }
   .manifesto .wrap{text-shadow:0 2px 18px rgba(0,0,0,.65);position:relative;z-index:2}
   .manifesto .label{color:var(--green-light)}.manifesto .label::before{background:var(--green-light)}
-  @media(max-width:760px){.manifesto-bg{grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(11,8vw);height:calc(11 * 8vw + 30px)}}
+  /* Celular e tablet: 4 colunas × 11 linhas (as mesmas 44 fotos, em retrato).
+     O corte é 880px porque é onde os três pilares viram uma coluna só — a
+     seção fica bem mais alta a partir daí, e é a mudança de proporção que pede
+     a grade em retrato. Trocar de grade num ponto e de layout noutro deixava
+     uma faixa de 20px com fotos deitadas numa seção baixa.
+
+     A seção mais alta também pede um véu mais fechado: no print os pilares
+     ficavam ilegíveis por cima das fotos. */
+  @media(max-width:880px){
+    .manifesto-bg{grid-template-columns:repeat(4,1fr)}
+    .manifesto::before{
+      background:
+        radial-gradient(120% 60% at 50% 40%, rgba(8,12,9,.86) 0%, rgba(8,12,9,.72) 45%, rgba(8,12,9,.6) 100%),
+        linear-gradient(180deg, rgba(8,12,9,.55) 0%, rgba(8,12,9,.62) 100%);
+    }
+  }
   .manifesto .idx{color:rgba(244,236,223,.75)}
-  /* Manifesto: altura mínima = 4 linhas de foto + espaço para o texto */
-  .manifesto.block{padding:clamp(2rem,5vw,4rem) 0;min-height:calc(4 * 10vw + 9px);display:flex;align-items:center}
+  /* Altura mínima só para a seção não encolher demais em telas largas — o
+     mural acompanha o que der, porque agora ele mede a seção, não o contrário. */
+  .manifesto.block{padding:clamp(2.4rem,5vw,4rem) 0;min-height:clamp(26rem,40vw,44rem);display:flex;align-items:center}
   .manifesto .wrap{padding:clamp(.4rem,1.2vw,.7rem) 0}
   .manifesto .sec-head{margin-bottom:.4rem}
   .manifesto .sec-head h2{color:#fff;font-size:clamp(1.4rem,2.4vw,1.9rem)}
@@ -624,7 +647,11 @@
       </details>
       <details>
         <summary>Como funciona o pagamento?<span class="pm">+</span></summary>
-        <div class="faq-body">A <b>matrícula é feita via Pix</b> para agendar a sua aula experimental.<br /><br />A sua <b>primeira aula oficial</b> é agendada junto com você no final da aula experimental — e nesse dia você paga a primeira mensalidade do jeito que for melhor: à vista, no Pix, dinheiro ou cartão.<br /><br />As <b>mensalidades seguintes</b> são pagas por boletos bancários enviados mensalmente a cada aluna.</div>
+        <!-- Esta resposta descrevia o fluxo antigo (pagar a 1ª mensalidade no
+             fim da experimental). Hoje o pagamento vem ANTES: é ele que garante
+             a vaga. Texto de FAQ que contradiz a tela de pagamento é o tipo de
+             detalhe que faz a aluna parar no meio e ir perguntar. -->
+        <div class="faq-body">Para <b>garantir a sua vaga</b> na aula experimental, você escolhe o plano e paga por <b>Pix</b>: a <b>primeira mensalidade</b> mais a <b>taxa de matrícula de R$ 20</b> — cobrada uma vez só, na entrada.<br /><br />A aula experimental em si é <b>gratuita</b>: esse valor é a mensalidade do mês, já adiantada. Fez a aula e não quis continuar? <b>Devolvemos a mensalidade integralmente</b> (a taxa de matrícula não é devolvida).<br /><br />Quis continuar? Você já está matriculada — a <b>próxima mensalidade</b> só vence no mês que vem, no mesmo dia, e daí em diante é <b>só a mensalidade</b>.</div>
       </details>
       <details>
         <summary>Posso remarcar ou cancelar?<span class="pm">+</span></summary>

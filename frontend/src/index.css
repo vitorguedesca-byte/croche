@@ -262,6 +262,10 @@
   .bb-foot{font-size:.75rem;color:var(--muted);line-height:1.35}
   .bb-foot b{color:var(--ink);font-size:.85rem}
   .bb-skip{font-size:.68rem;color:var(--muted);opacity:.85}
+  /* Tirar em lote: escolher aqui é escolher o que SAI, então a marca é vermelha. */
+  .bb-card.rm:hover:not(:disabled){border-color:var(--danger)}
+  .bb-card.rm.on{border-color:var(--danger);background:rgba(194,84,63,.07);box-shadow:0 0 0 2px rgba(194,84,63,.14)}
+  .bb-card.rm.on .bb-check{color:var(--danger)}
 
   /* Agenda calendar */
   .agenda{display:grid;grid-template-columns:repeat(var(--cols,5),1fr);gap:.6rem}
@@ -828,6 +832,42 @@
     .pt-next{gap:.85rem;padding:1rem} .pt-next-n{min-width:60px;height:60px;font-size:1.7rem} .pt-next-l{font-size:1.12rem}
     .mini-agenda{padding:.9rem .7rem} .mini-cell{font-size:.95rem} .mini-vagas .pt-time{flex:1 1 100%} }
 
+  /* ===== FERIADO: A ESCOLA NÃO ABRE =====
+     Tratamento único nas quatro visões da agenda: hachura discreta no fundo do
+     dia e uma tarja com o nome do feriado. Não é alerta de erro (nada está
+     errado num feriado) — é um dia riscado do calendário. */
+  .m-cell.feriado, .day-col.feriado{
+    background:repeating-linear-gradient(45deg,
+      transparent, transparent 7px,
+      color-mix(in srgb, var(--muted) 9%, transparent) 7px,
+      color-mix(in srgb, var(--muted) 9%, transparent) 14px);
+  }
+  .m-feriado{
+    font-size:.62rem;font-weight:700;color:var(--muted);line-height:1.15;
+    margin:.1rem 0 .15rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+  .col-feriado{
+    font-size:.72rem;font-weight:700;color:var(--muted);text-align:center;
+    padding:.4rem .3rem;border:1px dashed var(--line);border-radius:8px;margin-bottom:.3rem;
+  }
+  .dia-feriado, .day-feriado{
+    font-size:.9rem;color:var(--ink);background:color-mix(in srgb, var(--muted) 10%, transparent);
+    border-left:3px solid var(--muted);border-radius:0 8px 8px 0;
+    padding:.55rem .7rem;margin:.5rem 0;
+  }
+  .day-feriado{margin:.2rem 0 .4rem}
+
+  /* Cadastro de feriados (Configurações) */
+  .fer-lista{display:flex;flex-direction:column;gap:.35rem;margin-top:.6rem}
+  .fer-item{
+    display:flex;align-items:center;gap:.6rem;padding:.5rem .7rem;
+    border:1px solid var(--line);border-radius:10px;background:var(--cream);
+  }
+  .fer-item.abre{border-style:dashed;opacity:.85}
+  .fer-data{font-weight:800;font-size:.85rem;min-width:5.5rem}
+  .fer-nome{flex:1;font-size:.86rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fer-fonte{font-size:.7rem;color:var(--muted);font-weight:700}
+
   /* ===== Agenda: alunas dentro do horário ===== */
   .sc-roster{display:flex;flex-direction:column;gap:.18rem;margin-top:.3rem}
   .sc-al{display:flex;align-items:center;gap:.32rem;font-size:.76rem;line-height:1.25;color:var(--ink)}
@@ -840,6 +880,41 @@
   .sc-al .sc-marca{font-size:.72rem;line-height:1;flex-shrink:0}
   .sc-al .sc-marca.fraca{opacity:.5;filter:grayscale(.4)}
   .sc-more{font-size:.7rem;color:var(--muted);font-weight:700}
+
+  /* REPOSIÇÃO EM DESTAQUE NA AGENDA
+     A reposição é a única linha da turma que não é aula do plano de quem está
+     ali: é a vaga que outra aluna liberou, ocupada uma vez só. Na correria de
+     abrir a agenda, o 🔁 miúdo no fim da linha passava batido — aqui ela ganha
+     tarja, fundo e o nome em negrito, para ser reconhecida sem precisar abrir
+     a turma. A cor vem de BOOKING_KINDS.reposicao (var(--info)). */
+  .sc-al.sc-reposicao{
+    background:color-mix(in srgb, var(--info) 12%, transparent);
+    border-left:3px solid var(--info);
+    border-radius:0 5px 5px 0;
+    padding:.06rem .26rem .06rem .3rem;
+    margin-left:-.3rem;
+  }
+  .sc-al.sc-reposicao .sc-nm{font-weight:800;color:var(--info)}
+  .sc-al.sc-reposicao .sc-tag{font-size:.78rem}
+  .sc-al.sc-reposicao.canc{background:transparent;border-left-color:var(--line)}
+  .sc-al.sc-reposicao.canc .sc-nm{font-weight:600;color:var(--muted)}
+
+  /* 1ª AULA (ALUNA NOVA) EM DESTAQUE NA AGENDA
+     Mesmo tratamento da reposição: a aluna nova é quem a Inêz mais precisa
+     reconhecer de longe — é o primeiro contato dela com a escola. Antes só
+     ganhava o 🎟️ miúdo no fim da linha e sumia no meio da turma.
+     A cor vem de BOOKING_KINDS.primeira (var(--danger)). */
+  .sc-al.sc-primeira{
+    background:color-mix(in srgb, var(--danger) 12%, transparent);
+    border-left:3px solid var(--danger);
+    border-radius:0 5px 5px 0;
+    padding:.06rem .26rem .06rem .3rem;
+    margin-left:-.3rem;
+  }
+  .sc-al.sc-primeira .sc-nm{font-weight:800;color:var(--danger)}
+  .sc-al.sc-primeira .sc-tag{font-size:.78rem}
+  .sc-al.sc-primeira.canc{background:transparent;border-left-color:var(--line)}
+  .sc-al.sc-primeira.canc .sc-nm{font-weight:600;color:var(--muted)}
 
   /* Visão de SEMANA: o cartão mostra a turma INTEIRA, então ele cresce.
      Coluna mais larga, nome maior e uma linha separando o horário da lista —
@@ -995,6 +1070,14 @@
   .dv-al .nm{font-weight:700;font-size:.9rem}
   .dv-al.canc .nm{text-decoration:line-through;opacity:.6}
   .dv-al .sp{margin-left:auto;display:flex;gap:.35rem;align-items:center;flex-wrap:wrap}
+  /* Visão Dia: a reposição já vinha com a tarja colorida (--kc) e o selo
+     "🔁 Reposição"; falta só o fundo, para a linha se separar do resto da
+     turma na leitura rápida de quem vai dar a aula. */
+  .dv-al.dv-reposicao{background:color-mix(in srgb, var(--info) 10%, transparent)}
+  .dv-al.dv-reposicao:hover{background:color-mix(in srgb, var(--info) 16%, transparent)}
+  .dv-al.dv-reposicao .nm{color:var(--info)}
+  .dv-al.dv-reposicao.canc{background:transparent}
+  .dv-al.dv-reposicao.canc .nm{color:var(--muted)}
   .dv-vazio{font-size:.82rem;color:var(--muted);padding:.3rem 0}
   @media(max-width:640px){
     .dv-slot{grid-template-columns:minmax(0,1fr);gap:.35rem}

@@ -43,6 +43,43 @@
 // ("Reposição", "Avulsa", "1ª mensalidade") e por isso não ocupa vaga da semana.
 export const PGTO_PLANO = "Mensalista";
 
+/* Aula de reposição (remarcação). É aula ÚNICA: nasce de um crédito gasto e
+   nunca é copiada — nem pela replicação da turma, nem pelo agendamento em lote,
+   nem pela marcação replicada por datas. A constante existe para que esses
+   caminhos comparem contra a MESMA string, em vez de repetir o literal
+   "Reposição" e um deles ficar para trás numa renomeação. */
+export const PGTO_REPOSICAO = "Reposição";
+
+// Aula extra comprada à parte (ou cortesia da Inêz). Também não se replica.
+export const PGTO_EXTRA = "Avulsa";
+
+/* ===================== O PRIMEIRO PAGAMENTO DA ALUNA NOVA =====================
+   A aluna nova paga a MENSALIDADE mais a TAXA DE MATRÍCULA, uma vez só (Vitor,
+   01/09/2026). Da segunda cobrança em diante é só a mensalidade.
+
+   As duas contas moram aqui, e não soltas no server.js, porque elas têm que ser
+   exatamente inversas uma da outra. Somar a taxa ao cobrar e esquecer de
+   descontá-la ao registrar a mensalidade do mês faria a receita da escola
+   crescer R$ 20 por aluna nova — para sempre, e sem ninguém perceber, porque
+   cada número isolado pareceria certo. Com as duas juntas, o teste de ida e
+   volta (test-regras-aula.mjs) prende o par.
+
+   Ambas arredondam para centavos: dinheiro em Float acumula 0.30000000000000004
+   quando se soma e subtrai, e esse resto acaba virando um centavo de diferença
+   entre o Pix e a fatura. */
+const centavos = (v) => Math.round((Number(v) || 0) * 100) / 100;
+
+// O que o Pix cobra da aluna nova.
+export const primeiroPagamento = ({ mensalidade, taxa = 0 }) =>
+  centavos(Math.max(0, Number(mensalidade) || 0) + Math.max(0, Number(taxa) || 0));
+
+/* Quanto daquele pagamento foi MENSALIDADE — é este valor que vira a fatura do
+   mês e é este que volta para a aluna se ela desistir (a taxa não volta).
+   `taxa` tem que ser a GRAVADA na reserva, não a da tabela de hoje: mudar o
+   preço amanhã não pode reescrever o que alguém pagou ontem. */
+export const mensalidadeDoPagamento = ({ pago, taxa = 0 }) =>
+  centavos(Math.max(0, (Number(pago) || 0) - Math.max(0, Number(taxa) || 0)));
+
 /* Números da reposição. Vivem aqui, e não no server.js, porque o texto que a
    escola manda para a aluna (textosEscola.js) promete exatamente estes valores:
    mudar num lugar e esquecer o outro é o jeito mais rápido de a regra escrita
@@ -50,6 +87,37 @@ export const PGTO_PLANO = "Mensalista";
 export const REPO_MAX_MES = 2;      // reposições por competência
 export const REPO_HORAS_MIN = 6;    // antecedência mínima do aviso
 export const REPO_MANHA_ATE = "10:00"; // aula antes disso usa o prazo da meia-noite
+
+/* Até quando dá para liberar a aula e ainda ganhar o crédito.
+   Devolve o instante limite, 'YYYY-MM-DDTHH:MM:SS'.
+
+   Duas faixas, como a escola promete por escrito:
+   • aula ANTES das 10:00 → até 23:59 do dia anterior (ninguém acorda às 3h
+     para avisar, e a vaga precisa ser oferecida a tempo);
+   • demais horários      → REPO_HORAS_MIN horas antes da aula.
+
+   Mora aqui, e não no server, pelo motivo escrito no topo deste arquivo: é
+   regra que a escola PROMETE no texto do WhatsApp e no portal, e regra
+   prometida precisa de teste (ver backend/test-regras-aula.mjs). */
+export function prazoLiberacao(date, time, horasMin = REPO_HORAS_MIN) {
+  const t = hhmm(time) || "00:00";
+  if (t < REPO_MANHA_ATE) return `${somarDias(date, -1)}T23:59:59`;
+  const [h, m] = t.split(":").map(Number);
+  let min = h * 60 + m - horasMin * 60;
+  let d = date;
+  while (min < 0) { min += 1440; d = somarDias(d, -1); }
+  return `${d}T${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}:00`;
+}
+
+// Comparação de texto ISO: 'agora' é o relógio de Brasília, não o UTC do servidor.
+export const liberouATempo = (date, time, agora) => agora <= prazoLiberacao(date, time);
+
+// 'YYYY-MM-DD' ± n dias, em UTC (o mesmo addDays do server, sem depender dele)
+function somarDias(iso, n) {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return iso;
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]) + n * 86400000).toISOString().slice(0, 10);
+}
 
 /* Horário sempre em 'HH:MM', exatamente 5 caracteres.
 

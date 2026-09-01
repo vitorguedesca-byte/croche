@@ -1,10 +1,154 @@
-import { useState } from "react";
-import { toast } from "./toast.jsx";
+import { useEffect, useState } from "react";
+import { toast, confirmModal } from "./toast.jsx";
 import { useStore } from "./store.jsx";
 import { useModal } from "./ui.jsx";
-import { ReajusteGeral } from "./modals.jsx";
+import { ReajusteGeral, FeriadoAulas } from "./modals.jsx";
 import { api } from "./api.js";
-import { WEEKDAYS_PT, DEFAULT_HORARIO, parseHorario, horarioToText, serializeHorario, money } from "./helpers.js";
+import { WEEKDAYS_PT, DEFAULT_HORARIO, parseHorario, horarioToText, serializeHorario, money, todayISO, fmtDateLong } from "./helpers.js";
+
+/* ===================== FERIADOS: A ESCOLA NÃO ABRE =====================
+   Os nacionais o sistema já sabe — os fixos e os móveis (Carnaval, Sexta-feira
+   Santa e Corpus Christi andam com a Páscoa). Aqui se cadastra o que só a
+   escola sabe: o feriado municipal, um recesso, uma emenda — e o contrário
+   disso, o feriado nacional em que a escola resolve abrir.
+
+   Nada é cancelado ao cadastrar. Se o dia já tem aula marcada, a tela abre a
+   lista e pergunta — é a Inêz quem decide. */
+function Feriados() {
+  const { reload } = useStore();
+  const { open } = useModal();
+  const [cal, setCal] = useState({});
+  const [manuais, setManuais] = useState([]);
+  const [date, setDate] = useState("");
+  const [nome, setNome] = useState("");
+  const [abre, setAbre] = useState(false); // "neste feriado nacional a escola ABRE"
+  const [busy, setBusy] = useState(false);
+  const [ano, setAno] = useState(() => Number(todayISO().slice(0, 4)));
+
+  const carregar = async () => {
+    try {
+      const r = await api.feriados.list();
+      setCal(r.feriados || {});
+      setManuais(r.manuais || []);
+    } catch (e) { toast(e.message || "Não foi possível ler os feriados.", "error"); }
+  };
+  useEffect(() => { carregar(); }, []);
+
+  const manualDe = (d) => manuais.find((f) => f.date === d) || null;
+  const doAno = Object.entries(cal)
+    .filter(([d]) => d.startsWith(`${ano}-`))
+    .sort(([a], [b]) => a.localeCompare(b));
+  // As remoções não aparecem no calendário (foram tiradas dele): entram à parte.
+  const aberturas = manuais.filter((f) => f.remove && f.date.startsWith(`${ano}-`));
+
+  const salvar = async () => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return toast("Escolha a data do feriado.", "error");
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await api.feriados.save({ date, nome, remove: abre });
+      setCal(r.feriados || {});
+      await carregar();
+      await reload(); // a agenda passa a mostrar o dia marcado na hora
+      setDate(""); setNome(""); setAbre(false);
+      if (r.aulas?.length) open(<FeriadoAulas date={date} nome={nome || "Feriado"} aulas={r.aulas} />);
+      else toast(abre ? "Dia liberado — a escola abre." : "Feriado cadastrado.", "ok");
+    } catch (e) { toast(e.message || "Não foi possível salvar.", "error"); }
+    finally { setBusy(false); }
+  };
+
+  const remover = async (f) => {
+    const ok = await confirmModal({
+      title: "Tirar da lista",
+      message: `${fmtDateLong(f.date)} — ${f.nome}\n\nO dia volta a valer o que o calendário nacional disser.`,
+      confirmLabel: "Tirar",
+    });
+    if (!ok) return;
+    try {
+      await api.feriados.remove(f.date);
+      await carregar();
+      await reload();
+    } catch (e) { toast(e.message || "Não foi possível remover.", "error"); }
+  };
+
+  // Reabrir a lista de aulas de um feriado que já está cadastrado
+  const verAulas = async (d, n) => {
+    try {
+      const r = await api.feriados.aulas(d);
+      if (!r.aulas?.length) return toast("Nenhuma aula marcada neste dia. 💚", "ok");
+      open(<FeriadoAulas date={d} nome={n} aulas={r.aulas} />);
+    } catch (e) { toast(e.message || "Não foi possível ler as aulas.", "error"); }
+  };
+
+  return (
+    <div className="panel cfg-sec">
+      <div className="cfg-h">
+        <span className="cfg-ic">🚫</span>
+        <div>
+          <h2>Feriados</h2>
+          <p>Em feriado não há aula: o dia é bloqueado na agenda, no portal e no WhatsApp.</p>
+        </div>
+      </div>
+
+      <div className="row2">
+        <div className="field">
+          <label>Data</label>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </div>
+        <div className="field">
+          <label>Nome</label>
+          <input value={nome} onChange={(e) => setNome(e.target.value)}
+            placeholder={abre ? "ex.: emenda — abrimos normalmente" : "ex.: Aniversário de Ipatinga"} />
+        </div>
+      </div>
+      <label className="hf-toggle" style={{ marginTop: ".2rem" }}>
+        <input type="checkbox" checked={abre} onChange={(e) => setAbre(e.target.checked)} />
+        <span className="hf-day">Ao contrário: neste feriado nacional a escola <b>abre</b></span>
+      </label>
+      <div style={{ marginTop: ".7rem" }}>
+        <button className="btn sec" type="button" onClick={salvar} disabled={busy}>
+          {busy ? "Salvando…" : abre ? "Liberar este dia" : "Marcar como feriado"}
+        </button>
+      </div>
+      <div className="help" style={{ marginTop: ".5rem" }}>
+        Feriados nacionais já vêm prontos — inclusive Carnaval, Sexta-feira Santa e Corpus Christi,
+        que mudam de data todo ano. Cadastre aqui só o que é da região ou da escola.
+      </div>
+
+      <div style={{ marginTop: "1.1rem", borderTop: "1px solid var(--line)", paddingTop: ".9rem" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: ".6rem" }}>
+          Calendário de
+          <input type="number" min="2020" max="2100" value={ano} style={{ width: 100 }}
+            onChange={(e) => setAno(Number(e.target.value) || ano)} />
+          <span className="cfg-count">{doAno.length} dias sem aula</span>
+        </label>
+        <div className="fer-lista">
+          {doAno.map(([d, n]) => {
+            const man = manualDe(d);
+            return (
+              <div key={d} className="fer-item">
+                <span className="fer-data">{d.slice(8, 10)}/{d.slice(5, 7)}</span>
+                <span className="fer-nome">{n}</span>
+                <span className="fer-fonte">{man ? "cadastrado" : "nacional"}</span>
+                <button className="btn ghost sm" type="button" onClick={() => verAulas(d, n)}>Ver aulas</button>
+                {man && <button className="btn ghost sm" type="button" onClick={() => remover(man)}>Tirar</button>}
+              </div>
+            );
+          })}
+          {aberturas.map((f) => (
+            <div key={f.date} className="fer-item abre">
+              <span className="fer-data">{f.date.slice(8, 10)}/{f.date.slice(5, 7)}</span>
+              <span className="fer-nome">✅ {f.nome} — a escola abre</span>
+              <span className="fer-fonte">cadastrado</span>
+              <button className="btn ghost sm" type="button" onClick={() => remover(f)}>Tirar</button>
+            </div>
+          ))}
+          {!doAno.length && !aberturas.length && <div className="help">Nenhum feriado neste ano.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* Interruptor liga/desliga com o efeito escrito por extenso nos dois estados —
    estas travas mudam o que a aluna vê no portal, então vale dizer o que
@@ -76,11 +220,13 @@ export default function Config() {
   // sendo preservados no salvamento para não zerar o vencimento usado nos boletos.
   const [mensalidadeValor] = useState(m.mensalidadeValor || "");
   const [vencimentoDia] = useState(m.vencimentoDia || 10);
-  // A taxa de matrícula saiu da tabela: o valor dela está diluído na mensalidade,
-  // e quem se matricula paga a 1ª mensalidade cheia na tela da experimental.
   const [plano1x, setPlano1x] = useState(m.valorPlano1x ?? 120);
   const [plano2x, setPlano2x] = useState(m.valorPlano2x ?? 200);
   const [avulsa, setAvulsa] = useState(m.valorAvulsa ?? 40);
+  /* Taxa de matrícula: somada UMA vez à 1ª mensalidade da aluna nova (site e
+     WhatsApp). Zerar aqui desliga a taxa — o 1º pagamento volta a ser só a
+     mensalidade. Ver `valorPrimeiroPagamento` no server.js. */
+  const [taxaMatricula, setTaxaMatricula] = useState(m.taxaMatricula ?? 20);
   const [duracao, setDuracao] = useState(m.duracaoAulaMin ?? 120);
   // Travas de cobrança — nascem desligadas, a Inêz vira a chave quando quiser
   const [travaAtraso, setTravaAtraso] = useState(!!m.travaAtraso);
@@ -112,6 +258,8 @@ export default function Config() {
       valorPlano1x: Number(plano1x) || 0,
       valorPlano2x: Number(plano2x) || 0,
       valorAvulsa: Number(avulsa) || 0,
+      // `|| 0` é o certo aqui: zero DESLIGA a taxa, e é uma escolha válida
+      taxaMatricula: Math.max(0, Number(taxaMatricula) || 0),
       duracaoAulaMin: Math.min(600, Math.max(15, parseInt(duracao, 10) || 120)),
       travaAtraso,
       pixExpira,
@@ -193,19 +341,40 @@ export default function Config() {
         <div className="row2">
           <div className="field"><label>Aula extra avulsa (R$)</label><input type="number" min="0" step="0.01" value={avulsa} onChange={(e) => setAvulsa(e.target.value)} /></div>
           <div className="field">
+            <label>Taxa de matrícula (R$)</label>
+            <input type="number" min="0" step="0.01" value={taxaMatricula} onChange={(e) => setTaxaMatricula(e.target.value)} />
+            <div className="help" style={{ marginTop: ".4rem" }}>
+              Cobrada <b>uma vez só</b>, somada à 1ª mensalidade da aluna nova — no site e no WhatsApp.
+              Deixe <b>0</b> para não cobrar taxa nenhuma.
+            </div>
+          </div>
+        </div>
+        <div className="row2">
+          <div className="field">
             <label>Duração da aula (minutos)</label>
             <input type="number" min="15" max="600" step="15" value={duracao} onChange={(e) => setDuracao(e.target.value)} />
             <div className="help" style={{ marginTop: ".4rem" }}>Usada para mostrar o fim da aula e impedir turmas sobrepostas na mesma unidade.</div>
           </div>
+          <div className="field" />
         </div>
         <div className="help" style={{ marginTop: ".2rem" }}>
-          Não existe mais taxa de matrícula separada: o valor dela está diluído na mensalidade.
-          Na tela da aula experimental a aluna escolhe o plano e já paga a <b>1ª mensalidade cheia</b> —
-          é esse pagamento que a matricula, e a próxima cobrança cai no mês seguinte, no mesmo dia.
+          Na tela da aula experimental (e na conversa do WhatsApp) a aluna escolhe o plano e paga a{" "}
+          <b>1ª mensalidade</b>{Number(taxaMatricula) > 0 ? <> mais a <b>taxa de matrícula</b></> : null} — é esse pagamento
+          que a matricula, e a próxima cobrança cai no mês seguinte, no mesmo dia
+          {Number(taxaMatricula) > 0 ? <>, já <b>sem a taxa</b></> : null}.
+          {Number(taxaMatricula) > 0
+            ? <> Se ela desistir depois da 1ª aula, a <b>mensalidade volta</b> e a <b>taxa não</b>.</>
+            : null}
         </div>
         <div className="cfg-preview">
           🏷️ 1x/semana <b>R$ {plano1x}</b> (4 aulas) · 2x/semana <b>R$ {plano2x}</b> (8 aulas) · extra <b>R$ {avulsa}</b> · aula de <b>{Math.floor(duracao / 60)}h{duracao % 60 ? String(duracao % 60).padStart(2, "0") : ""}</b>
         </div>
+        {Number(taxaMatricula) > 0 && (
+          <div className="cfg-preview">
+            🎟️ 1º pagamento da aluna nova: 1x/semana <b>R$ {(Number(plano1x) || 0) + Number(taxaMatricula)}</b> ·
+            2x/semana <b>R$ {(Number(plano2x) || 0) + Number(taxaMatricula)}</b> (mensalidade + taxa de R$ {taxaMatricula})
+          </div>
+        )}
 
         {/* Quem cria as mensalidades. Desligada, a mensalidade só existe depois
             que você manda criar — que é o que dá tempo de combinar o valor do
@@ -280,6 +449,9 @@ export default function Config() {
             de preços acima. */}
         <div className="field"><label>Capacidade padrão das turmas (vagas)</label><input type="number" min="1" value={cap} onChange={(e) => setCap(e.target.value)} /></div>
       </div>
+
+      {/* FERIADOS — em feriado não há aula */}
+      <Feriados />
 
       {/* UNIDADES & PROFISSIONAIS */}
       <div className="panel cfg-sec">

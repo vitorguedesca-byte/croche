@@ -84,7 +84,7 @@ function PtAgenda({ available, value, onPick }) {
               aula dela.
 
    Em ambos: de segunda a sexta, até as 18h. */
-function EscolhaDePlano({ tipo, setTipo, freq, setFreq, valor1x, valor2x }) {
+function EscolhaDePlano({ tipo, setTipo, freq, setFreq, valor1x, valor2x, taxa = 0 }) {
   const Opcao = ({ on, onClick, titulo, linhas, preco }) => (
     <button
       type="button"
@@ -123,19 +123,21 @@ function EscolhaDePlano({ tipo, setTipo, freq, setFreq, valor1x, valor2x }) {
       <Opcao
         on={Number(freq) === 1} onClick={() => setFreq(1)}
         titulo="1x por semana"
-        linhas="4 aulas por mês"
+        linhas={taxa > 0 ? `4 aulas por mês · 1º pagamento: ${money(valor1x + taxa)}` : "4 aulas por mês"}
         preco={`${money(valor1x)}/mês`}
       />
       <Opcao
         on={Number(freq) === 2} onClick={() => setFreq(2)}
         titulo="2x por semana"
-        linhas="8 aulas por mês"
+        linhas={taxa > 0 ? `8 aulas por mês · 1º pagamento: ${money(valor2x + taxa)}` : "8 aulas por mês"}
         preco={`${money(valor2x)}/mês`}
       />
 
       <div className="pt-hint" style={{ marginTop: ".2rem" }}>
         Nos dois casos as aulas são de segunda a sexta, até as 18h.
-        Você paga a <b>primeira mensalidade agora</b> e a próxima só vence <b>no mês que vem</b>, no mesmo dia — e todo mês nesse dia.
+        {taxa > 0
+          ? <> Você paga a <b>primeira mensalidade agora</b>, junto da <b>taxa de matrícula de {money(taxa)}</b> (uma vez só). A próxima mensalidade vence <b>no mês que vem</b>, no mesmo dia — e daí em diante é só a mensalidade.</>
+          : <> Você paga a <b>primeira mensalidade agora</b> e a próxima só vence <b>no mês que vem</b>, no mesmo dia — e todo mês nesse dia.</>}
       </div>
     </div>
   );
@@ -158,9 +160,9 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const [email, setEmail] = useState("");
   const [birthday, setBirthday] = useState("");
   /* Plano escolhido já aqui: tipo (fixo/escala) × frequência (1x/2x por semana).
-     O que ela paga nesta tela é a 1ª MENSALIDADE cheia do plano — não existe
-     mais taxa de matrícula à parte, o valor dela está diluído aqui. Pagou, sai
-     matriculada, e a próxima mensalidade cai no mês seguinte, no mesmo dia. */
+     O que ela paga nesta tela é a 1ª MENSALIDADE do plano mais a TAXA DE
+     MATRÍCULA, cobrada uma vez só. Pagou, sai matriculada, e a próxima
+     mensalidade cai no mês seguinte, no mesmo dia — já sem a taxa. */
   const [tipo, setTipo] = useState("fixo");
   const [freq, setFreq] = useState(1);
 
@@ -171,10 +173,19 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const [toast, setToast] = useState("");
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 3800); };
 
-  // A aula experimental em si é gratuita: o que se paga aqui é a 1ª mensalidade
-  // do plano escolhido, e é ela que matricula a aluna.
+  /* A aula experimental em si é gratuita: o que se paga aqui é a 1ª mensalidade
+     do plano escolhido MAIS a taxa de matrícula, cobrada uma vez só. É esse
+     pagamento que matricula a aluna.
+
+     `total` é o que o Pix cobra — quem calcula de verdade é o servidor (ver
+     `valorPrimeiroPagamento` em server.js). Esta conta aqui é a mesma, feita
+     com os valores que vieram do servidor, só para a tela poder mostrar o
+     número antes de a cobrança existir. Se as duas divergirem, o certo é o
+     Pix — e é por isso que os preços vêm no `meta`, e não chumbados aqui. */
   const valorPlano = (f) => (Number(f) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120));
   const mensalidade = valorPlano(freq);
+  const taxa = Math.max(0, Number(meta.taxaMatricula) || 0);
+  const total = mensalidade + taxa;
 
   const loadAvail = async (u) => {
     setLoading(true);
@@ -224,7 +235,9 @@ export default function FirstClassBooking({ onBack, fromSite }) {
     try {
       // O servidor confirma o pagamento E matricula a aluna no plano escolhido,
       // devolvendo em `matricula` o valor mensal e o próximo vencimento.
-      const r = await api.payBooking(booking.id, { value: mensalidade });
+      /* Sem `value`: quem sabe o valor é o servidor (mensalidade + taxa, já
+         gravado na reserva). Mandar daqui já apagou a taxa uma vez. */
+      const r = await api.payBooking(booking.id, {});
       setInscricao(r?.matricula || null);
       setStep("done");
     } catch (e) { flash(e.message || "Erro ao confirmar."); }
@@ -285,9 +298,15 @@ export default function FirstClassBooking({ onBack, fromSite }) {
             <div className="pt-fc-resume">📍 <b>{slot.unit}</b> · {capitalize(fmtDateLong(slot.date))} · <b>{slot.time}</b></div>
 
             <div className="pt-matricula">
-              <p>A <b>aula experimental é gratuita</b> 💚 Para reservar a sua vaga, você escolhe o plano abaixo e paga a <b>primeira mensalidade</b>. Não cobramos taxa de matrícula.</p>
-              <p>💬 Fez a aula e não quis continuar? <b>Devolvemos a mensalidade integralmente</b>, depois da aula — e nada mais é cobrado.</p>
-              <p>🧵 Quis continuar? Você já está matriculada, e a <b>próxima mensalidade</b> só vence no mês que vem.</p>
+              {taxa > 0 ? (<>
+                <p>A <b>aula experimental é gratuita</b> 💚 Para reservar a sua vaga, você escolhe o plano abaixo e paga a <b>primeira mensalidade</b> mais a <b>taxa de matrícula de {money(taxa)}</b> — cobrada uma vez só, na entrada.</p>
+                <p>💬 Fez a aula e não quis continuar? <b>Devolvemos a mensalidade integralmente</b>, depois da aula. A taxa de matrícula não é devolvida.</p>
+                <p>🧵 Quis continuar? Você já está matriculada, e a <b>próxima mensalidade</b> só vence no mês que vem — daí em diante, só a mensalidade.</p>
+              </>) : (<>
+                <p>A <b>aula experimental é gratuita</b> 💚 Para reservar a sua vaga, você escolhe o plano abaixo e paga a <b>primeira mensalidade</b>. Não cobramos taxa de matrícula.</p>
+                <p>💬 Fez a aula e não quis continuar? <b>Devolvemos a mensalidade integralmente</b>, depois da aula — e nada mais é cobrado.</p>
+                <p>🧵 Quis continuar? Você já está matriculada, e a <b>próxima mensalidade</b> só vence no mês que vem.</p>
+              </>)}
             </div>
             <div className="pt-atencao">
               <span className="t">⚠️ Atenção</span>
@@ -312,25 +331,38 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 freq={freq} setFreq={setFreq}
                 valor1x={meta.valorPlano1x ?? 120}
                 valor2x={meta.valorPlano2x ?? 200}
+                taxa={taxa}
               />
 
-              <button className="pt-btn" onClick={gerarPix} disabled={busy}>{busy ? "Gerando…" : `Gerar Pix da 1ª mensalidade (${money(mensalidade)}) →`}</button>
+              {/* O resumo do que vai ser cobrado fica ANTES do botão: ninguém
+                  deve descobrir o total só quando o Pix já está na tela. */}
+              {taxa > 0 && (
+                <div className="pt-pix" style={{ marginTop: "1rem" }}>
+                  <div className="pt-pix-row"><span>1ª mensalidade ({freq}x por semana)</span><b>{money(mensalidade)}</b></div>
+                  <div className="pt-pix-row"><span>Taxa de matrícula (uma vez só)</span><b>{money(taxa)}</b></div>
+                  <div className="pt-pix-row"><span><b>Total a pagar hoje</b></span><b>{money(total)}</b></div>
+                </div>
+              )}
+
+              <button className="pt-btn" onClick={gerarPix} disabled={busy}>{busy ? "Gerando…" : `Gerar Pix de ${money(total)} →`}</button>
             </>) : (<>
               <div className="pt-pay" style={{ borderLeftColor: "var(--green-mid)" }}>
-                <div className="pt-pay-opt-h">💠 Pague a 1ª mensalidade com Pix</div>
+                <div className="pt-pay-opt-h">💠 Pague com Pix</div>
                 {pix.code ? (<>
-                  <div className="pt-pix-row"><span>Pix copia-e-cola</span><b>{money(mensalidade)}</b></div>
+                  <div className="pt-pix-row"><span>Pix copia-e-cola</span><b>{money(total)}</b></div>
                   <div className="pt-pix-code">{pix.code}</div>
                 </>) : (<div className="pt-pix">
                   <div className="pt-pix-row"><span>Chave Pix</span><b>{meta.pixKey || "—"}</b></div>
                   {meta.pixName ? <div className="pt-pix-row"><span>Recebedor</span><b>{meta.pixName}</b></div> : null}
-                  <div className="pt-pix-row"><span>Valor</span><b>{money(mensalidade)}</b></div>
+                  <div className="pt-pix-row"><span>Valor</span><b>{money(total)}</b></div>
                 </div>)}
                 <button className="pt-pix-copy" onClick={copyPix}>📋 Copiar {pix.code ? "código Pix" : "chave Pix"}</button>
               </div>
               <div className="pt-fc-resume" style={{ textAlign: "left" }}>
                 🧵 Seu plano: <b>{tipo === "escala" ? "Escala" : "Fixo"} · {freq}x por semana</b> — {money(mensalidade)}/mês.<br />
-                Este Pix é a mensalidade deste mês. A <b>próxima</b> só vence no mês que vem, no mesmo dia de hoje.
+                {taxa > 0
+                  ? <>Este Pix é a mensalidade deste mês ({money(mensalidade)}) mais a taxa de matrícula ({money(taxa)}). A <b>próxima</b> vence no mês que vem, no mesmo dia de hoje — e é só {money(mensalidade)}.</>
+                  : <>Este Pix é a mensalidade deste mês. A <b>próxima</b> só vence no mês que vem, no mesmo dia de hoje.</>}
               </div>
               <button className="pt-btn" onClick={jaPaguei} disabled={busy}>{busy ? "Confirmando…" : "✅ JÁ PAGUEI — continuar"}</button>
               <p className="pt-hint">Assim que o pagamento for aprovado, sua vaga na aula experimental está garantida. 💚</p>
@@ -356,7 +388,11 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 ? <p>🗓 A próxima vence em <b>{fmtDate(inscricao.primeiroVencimento)}</b>, e todo mês nesse mesmo dia.</p>
                 : <p>🗓 A próxima vence no mês que vem, no mesmo dia de hoje — e todo mês nesse dia.</p>}
               <p>📅 Depois da experimental, você marca as suas aulas pela <b>área do aluno</b>, entrando com o seu CPF.</p>
-              <p>💬 Se preferir não seguir, é só avisar depois da aula: devolvemos os {money(inscricao?.valorMensal ?? mensalidade)} integralmente e cancelamos a mensalidade — você não paga nada.</p>
+              {/* Repete aqui o que ela leu antes de pagar. A hora de descobrir
+                  o que não volta não pode ser a hora de pedir de volta. */}
+              {taxa > 0
+                ? <p>💬 Se preferir não seguir, é só avisar depois da aula: devolvemos os {money(inscricao?.valorMensal ?? mensalidade)} da mensalidade integralmente e cancelamos a cobrança. A taxa de matrícula de {money(taxa)} não é devolvida.</p>
+                : <p>💬 Se preferir não seguir, é só avisar depois da aula: devolvemos os {money(inscricao?.valorMensal ?? mensalidade)} integralmente e cancelamos a mensalidade — você não paga nada.</p>}
             </div>
             <button className="pt-link" onClick={restart}>Marcar outra aula</button>
           </div>
