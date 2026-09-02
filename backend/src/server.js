@@ -947,7 +947,17 @@ app.post(
       const nomeFeriado = feriadoNoDia(d, unit);
       if (nomeFeriado) { feriados.push({ date: d, nome: nomeFeriado }); continue; }
       const doDia = await prisma.slot.findMany({ where: { date: d, unit } });
-      if (doDia.some((s) => s.time === time)) continue; // duplicado exato: ignora em silêncio
+      const existente = doDia.find((s) => s.time === time);
+      if (existente) {
+        /* Numa replicação, o horário de destino pode já existir. Ele continua
+           sendo a mesma turma, mas precisa receber a CAPACIDADE TOTAL da turma
+           base — usar a ocupação atual (ou conservar um limite antigo) produz
+           exatamente o 8/8, 9/9 visto na agenda quando a origem era 16. */
+        if (base && existente.capacity !== cap) {
+          await prisma.slot.update({ where: { id: existente.id }, data: { capacity: cap } });
+        }
+        continue;
+      }
       const choque = doDia.find((s) => haChoque(s.time, time));
       if (choque) {
         conflitos.push({ date: d, time, conflitaCom: choque.time });
@@ -1052,8 +1062,13 @@ app.post(
           data: { unit: base.unit, prof: base.prof, date, time: base.time, capacity: base.capacity, seriesId },
         });
         slotsCriados.push(alvo);
-      } else if (!alvo.seriesId) {
-        alvo = await prisma.slot.update({ where: { id: alvo.id }, data: { seriesId } });
+      } else {
+        const patch = {};
+        if (!alvo.seriesId) patch.seriesId = seriesId;
+        if (alvo.capacity !== base.capacity) patch.capacity = base.capacity;
+        if (Object.keys(patch).length) {
+          alvo = await prisma.slot.update({ where: { id: alvo.id }, data: patch });
+        }
       }
 
       // 2) as alunas
@@ -1200,6 +1215,7 @@ app.post("/api/agenda/replicate", wrap(async (req, res) => {
         resultado.feriados.push({ date, unit: fonte.unit, nome: nomeFeriado });
         continue;
       }
+      const capacidadeFonte = fonte.capacity || SETTINGS.capacidadePadrao;
       const doDia = await prisma.slot.findMany({ where: { date, unit: fonte.unit } });
       let alvo = doDia.find((s) => hhmm(s.time) === hhmm(fonte.time));
       if (!alvo) {
@@ -1216,11 +1232,19 @@ app.post("/api/agenda/replicate", wrap(async (req, res) => {
             time: hhmm(fonte.time),
             unit: fonte.unit,
             prof: fonte.prof || null,
-            capacity: fonte.capacity || SETTINGS.capacidadePadrao,
+            capacity: capacidadeFonte,
             seriesId: sid,
           },
         });
         resultado.slots++;
+      } else if (alvo.capacity !== capacidadeFonte) {
+        /* Replicar substitui a configuração da turma de destino pela turma-base.
+           A capacidade é o total de vagas da turma, nunca a quantidade de alunas
+           que já estão nela. */
+        alvo = await prisma.slot.update({
+          where: { id: alvo.id },
+          data: { capacity: capacidadeFonte },
+        });
       }
       if (!withStudents) continue;
       const reservas = reservasOrigem.filter((b) => b.slotId === fonte.id);
