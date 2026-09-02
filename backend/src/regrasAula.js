@@ -140,6 +140,10 @@ export function tipoMensalista(client) {
   return client.mensalistaTipo === "escala" ? "escala" : "fixo";
 }
 
+// Só a mensalista fixa participa de grade recorrente. A aluna de escala escolhe
+// cada ocorrência separadamente, mesmo quando a ADMIN replica uma turma inteira.
+export const podeReplicarMensalista = (client) => tipoMensalista(client) === "fixo";
+
 export const TIPO_LABEL = { fixo: "Mensalista fixo", escala: "Mensalista escala" };
 
 /* Janela de marcação da escala.

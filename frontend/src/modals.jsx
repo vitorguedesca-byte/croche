@@ -1090,6 +1090,9 @@ export function ReplicateTurmaForm({ slot = null, date: presetDate, unit: preset
   });
   const fonteIds = new Set(fontes.map((s) => s.id));
   const regulares = data.bookings.filter((b) => fonteIds.has(b.slotId) && b.status !== "cancelada" && b.paymentMethod === "Mensalista");
+  const alunasEscala = new Set((data.clients || []).filter((c) => c.mensalistaTipo === "escala").map((c) => c.name));
+  const regularesEscala = regulares.filter((b) => alunasEscala.has(b.clientName));
+  const regularesFixas = regulares.filter((b) => !alunasEscala.has(b.clientName));
   const periodo = scope === "month"
     ? `${repetitions} mês(es), cerca de ${Math.round(repetitions * 4.35)} semana(s)`
     : `${repetitions} semana(s)`;
@@ -1174,13 +1177,17 @@ export function ReplicateTurmaForm({ slot = null, date: presetDate, unit: preset
         <label>O que replicar</label>
         <label style={{ display: "flex", alignItems: "center", gap: ".5rem", fontWeight: 400, cursor: "pointer" }}>
           <input type="checkbox" checked={comAlunas} onChange={(e) => setComAlunas(e.target.checked)} style={{ width: "auto" }} />
-          <span>Levar as alunas mensalistas junto <span className="help" style={{ fontWeight: 400 }}>(desmarque para copiar só os horários)</span></span>
+          <span>Levar as mensalistas fixas junto <span className="help" style={{ fontWeight: 400 }}>(alunas de escala nunca são replicadas)</span></span>
         </label>
       </div>
 
       <div className="help">
         Serão processados até <b>{fontes.length * repetitions} horário(s)</b> ao longo de <b>{periodo}</b>.
-        {comAlunas ? <> Há <b>{regulares.length} marcação(ões) regular(es)</b> na origem. Reposições, aulas extras, experimentais e avulsas <b>nunca</b> serão copiadas.</> : null}
+        {comAlunas ? <>
+          {" "}Há <b>{regularesFixas.length} marcação(ões) fixa(s) replicável(is)</b> na origem.
+          {regularesEscala.length ? <> <b>{regularesEscala.length} marcação(ões) de escala</b> serão ignoradas.</> : null}
+          {" "}Reposições, aulas extras, experimentais e avulsas <b>nunca</b> serão copiadas.
+        </> : null}
         {" "}Feriados fechados serão pulados; se a chave “Terá aula” estiver ligada, o dia será tratado normalmente.
       </div>
     </Modal>
@@ -2186,7 +2193,7 @@ function MatriculaBlock({ client }) {
   );
 }
 
-/* Matricular: escolhe o plano e (opcionalmente) já agenda a 1ª aula oficial. */
+/* Matricular: fixa escolhe a grade de 12 meses; escala não recebe recorrência. */
 export function EnrollForm({ client }) {
   const { data, run } = useStore();
   const { open } = useModal();
@@ -2202,22 +2209,25 @@ export function EnrollForm({ client }) {
     // oficial pode cair em qualquer turma livre da grade.
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const valor = freq === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120);
+  const ehEscala = tipo === "escala";
 
   const salvar = async () => {
-    const escolhidos = slotIds.slice(0, freq).filter(Boolean);
-    if (escolhidos.length !== freq || new Set(escolhidos.map(Number)).size !== freq)
+    const escolhidos = ehEscala ? [] : slotIds.slice(0, freq).filter(Boolean);
+    if (!ehEscala && (escolhidos.length !== freq || new Set(escolhidos.map(Number)).size !== freq))
       return toast(`Escolha ${freq} horário${freq > 1 ? "s" : ""} diferente${freq > 1 ? "s" : ""} para a grade.`, "error");
     if (!(await confirmModal({
       title: "Confirmar matrícula",
       message: `Matricular ${client.name} no plano de ${freq}x por semana (${money(valor)}/mês), como mensalista ${tipo}?\n\n` +
-        `A grade escolhida será reservada automaticamente por 12 meses. Feriados fechados serão pulados e não contarão como aula.\n\n` +
+        (ehEscala
+          ? `Mensalistas de escala não recebem grade replicada: cada aula será marcada individualmente.\n\n`
+          : `A grade escolhida será reservada automaticamente por 12 meses. Feriados fechados serão pulados e não contarão como aula.\n\n`) +
         "A primeira mensalidade será gerada agora.",
       confirmLabel: "Matricular",
     }))) return;
     setBusy(true);
     try {
       const r = await run(api.enroll(client.id, { weeklyFreq: freq, mensalistaTipo: tipo, slotIds: escolhidos.map(Number) }));
-      toast(`Matrícula concluída — ${r.grade?.total || 0} aulas reservadas por 12 meses · ${money(r.valorMensal)}/mês.${r.invoice ? "" : " Atenção: a mensalidade não foi gerada."}`,
+      toast(`Matrícula concluída — ${ehEscala ? "aulas marcadas individualmente" : `${r.grade?.total || 0} aulas reservadas por 12 meses`} · ${money(r.valorMensal)}/mês.${r.invoice ? "" : " Atenção: a mensalidade não foi gerada."}`,
         r.invoice ? "success" : "info");
       open(<ClientProfile client={client} />);
     } catch { /* run já avisou */ }
@@ -2253,7 +2263,12 @@ export function EnrollForm({ client }) {
           options={TIPO_MENSALISTA_OPCOES}
         />
       </div>
-      {Array.from({ length: freq }, (_, i) => (
+      {ehEscala && (
+        <div className="help" style={{ marginBottom: ".8rem" }}>
+          Aluna de <b>escala</b>: nenhuma aula será replicada. Ela marcará cada data individualmente pelo portal.
+        </div>
+      )}
+      {!ehEscala && Array.from({ length: freq }, (_, i) => (
         <div className="field" key={i}>
           <label>{freq === 1 ? "Horário semanal" : `${i + 1}º horário semanal`}</label>
           <Select

@@ -33,6 +33,7 @@ import {
   REPO_MANHA_ATE,
   somarComp,
   tipoMensalista,
+  podeReplicarMensalista,
 } from "./regrasAula.js";
 import {
   anosDoCalendario,
@@ -1006,7 +1007,11 @@ app.post(
     const ativas = comAlunas
       ? await prisma.booking.findMany({ where: { slotId: id, status: { not: "cancelada" } } })
       : [];
-    const naoReplicavel = (b) => ehReposicao(b) || b.paymentMethod === PGTO_EXTRA || ehPagamentoDeMatricula(b.paymentMethod);
+    const nomesAtivos = [...new Set(ativas.map((b) => b.clientName))];
+    const fichas = nomesAtivos.length ? await prisma.client.findMany({ where: { name: { in: nomesAtivos } } }) : [];
+    const fichaDe = (nome) => fichas.find((c) => c.name === nome) || null;
+    const naoReplicavel = (b) => ehReposicao(b) || b.paymentMethod === PGTO_EXTRA ||
+      ehPagamentoDeMatricula(b.paymentMethod) || tipoMensalista(fichaDe(b.clientName)) === "escala";
     const origem = ativas.filter((b) => !naoReplicavel(b));
     const naoReplicadas = ativas.filter(naoReplicavel).map((b) => ({
       clientName: b.clientName,
@@ -1014,11 +1019,11 @@ app.post(
         ? "reposição não é replicada (aula única)"
         : b.paymentMethod === PGTO_EXTRA
           ? "aula extra não é replicada (aula única)"
-          : "aula experimental não é replicada",
+          : ehPagamentoDeMatricula(b.paymentMethod)
+            ? "aula experimental não é replicada"
+            : "mensalista de escala marca cada aula individualmente",
     }));
     const nomes = [...new Set(origem.map((b) => b.clientName))];
-    const fichas = nomes.length ? await prisma.client.findMany({ where: { name: { in: nomes } } }) : [];
-    const fichaDe = (nome) => fichas.find((c) => c.name === nome) || null;
     // aulas já marcadas de todas elas (para o teto semanal enxergar o que vamos criando)
     const agenda = nomes.length
       ? await prisma.booking.findMany({ where: { clientName: { in: nomes }, status: { not: "cancelada" } } })
@@ -1122,8 +1127,8 @@ app.post(
    mês. Turma/dia/semana avançam semanalmente; mês preserva o ordinal do dia da
    semana (ex.: 2ª terça do mês vira a 2ª terça do mês seguinte).
 
-   Só aulas REGULARES de mensalistas acompanham a turma. Reposição, extra,
-   experimental e avulsa são sempre unitárias. */
+   Só aulas REGULARES de mensalistas FIXAS acompanham a turma. Mensalistas de
+   escala, reposição, extra, experimental e avulsa são sempre unitárias. */
 function inicioDaSemanaISO(date) {
   const d = new Date(date + "T00:00Z");
   return addDays(date, -((d.getUTCDay() + 6) % 7));
@@ -1174,6 +1179,14 @@ app.post("/api/agenda/replicate", wrap(async (req, res) => {
   const seriesSlot = new Map();
   const seriesBooking = new Map();
   const resultado = { scope, repetitions, fontes: fontes.length, slots: 0, aulas: 0, pulos: [], feriados: [] };
+  const reservasOrigem = withStudents ? await prisma.booking.findMany({
+    where: { slotId: { in: fontes.map((s) => s.id) }, status: { not: "cancelada" }, paymentMethod: PGTO_PLANO },
+  }) : [];
+  const nomesOrigem = [...new Set(reservasOrigem.map((b) => b.clientName))];
+  const clientesOrigem = nomesOrigem.length
+    ? await prisma.client.findMany({ where: { name: { in: nomesOrigem } } })
+    : [];
+  const clienteOrigemDe = (nome) => clientesOrigem.find((c) => c.name === nome) || null;
 
   for (let n = 1; n <= repetitions; n++) {
     for (const fonte of fontes) {
@@ -1210,10 +1223,17 @@ app.post("/api/agenda/replicate", wrap(async (req, res) => {
         resultado.slots++;
       }
       if (!withStudents) continue;
-      const reservas = await prisma.booking.findMany({
-        where: { slotId: fonte.id, status: { not: "cancelada" }, paymentMethod: PGTO_PLANO },
-      });
+      const reservas = reservasOrigem.filter((b) => b.slotId === fonte.id);
       for (const b of reservas) {
+        if (!podeReplicarMensalista(clienteOrigemDe(b.clientName))) {
+          resultado.pulos.push({
+            date,
+            unit: fonte.unit,
+            clientName: b.clientName,
+            motivo: "mensalista de escala marca cada aula individualmente",
+          });
+          continue;
+        }
         const dup = await prisma.booking.findFirst({
           where: { slotId: alvo.id, clientName: b.clientName, status: { not: "cancelada" } },
         });
@@ -2874,7 +2894,7 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
       return res.status(e.code || 500).json({ error: e.message });
     }
   }
-  if (client.plan === "mensalista")
+  if (client.plan === "mensalista" && client.mensalistaTipo !== "escala")
     return res.status(403).json({
       error: "Sua grade regular já é reservada automaticamente por 12 meses. Para alterar uma data, cancele aquela aula e use a reposição individual. 💚",
     });
@@ -2883,7 +2903,8 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
   const dup = await prisma.booking.findFirst({ where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } } });
   if (dup) return res.status(400).json({ error: "Você já tem essa aula marcada." });
   if ((await occupancy(slot.id)) >= (slot.capacity || 1)) return res.status(400).json({ error: "Turma lotada." });
-  // Regras do plano (teto da semana, janela da escala). No portal não há exceção.
+  // Na escala, a janela de marcação continua valendo. A reserva criada aqui é
+  // somente desta ocorrência e nunca entra em replicação.
   try { await exigirRegras(client, slot); }
   catch (e) { return res.status(e.code || 409).json({ error: e.message, codigo: e.codigo }); }
   const mensalista = client.plan === "mensalista";
@@ -3059,9 +3080,12 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
   const jaMensalista = client.plan === "mensalista" && !!client.weeklyFreq;
   const freq = jaMensalista ? (Number(client.weeklyFreq) === 2 ? 2 : 1) : (Number(weeklyFreq) === 2 ? 2 : 1);
   const tipo = mensalistaTipo === "escala" ? "escala" : "fixo";
+  const tipoEfetivo = jaMensalista ? (client.mensalistaTipo === "escala" ? "escala" : "fixo") : tipo;
   if (jaMensalista && !exigirGrade)
     throw Object.assign(new Error("Esta aluna já é mensalista."), { code: 409 });
   if (jaMensalista && exigirGrade) {
+    if (tipoEfetivo === "escala")
+      throw Object.assign(new Error("Mensalista de escala não possui grade replicada: cada aula é marcada individualmente. 💚"), { code: 409 });
     const jaTemGrade = await prisma.booking.count({
       where: { clientName: client.name, date: { gte: todayISO() }, status: { not: "cancelada" }, paymentMethod: PGTO_PLANO },
     });
@@ -3070,7 +3094,9 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
   }
 
   const ids = [...new Set((Array.isArray(slotIds) ? slotIds : slotId ? [slotId] : []).map(Number).filter(Number.isInteger))];
-  if ((exigirGrade || ids.length) && ids.length !== freq)
+  if (tipoEfetivo === "escala" && ids.length)
+    throw Object.assign(new Error("Mensalista de escala não pode receber horários replicados. Marque cada aula individualmente."), { code: 400 });
+  if (tipoEfetivo === "fixo" && (exigirGrade || ids.length) && ids.length !== freq)
     throw Object.assign(new Error(`Escolha ${freq} horário${freq > 1 ? "s" : ""} semanal${freq > 1 ? "is" : ""} para montar a grade de 12 meses.`), { code: 400 });
   const slotsBase = ids.length ? await prisma.slot.findMany({ where: { id: { in: ids } } }) : [];
   if (slotsBase.length !== ids.length) throw Object.assign(new Error("Um dos horários escolhidos não existe mais."), { code: 404 });
@@ -3083,8 +3109,8 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
     if ((await occupancy(slot.id)) >= (slot.capacity || 1))
       throw Object.assign(new Error(`A turma de ${slot.date} às ${slot.time} acabou de lotar.`), { code: 409 });
   }
-  const grade = slotsBase.length ? await criarGradeInicial12Meses(client, slotsBase) : {
-    booking: null, bookings: [], total: 0, slotsCriados: 0, feriados: [], pulos: [], meses: 12,
+  const grade = tipoEfetivo === "fixo" && slotsBase.length ? await criarGradeInicial12Meses(client, slotsBase) : {
+    booking: null, bookings: [], total: 0, slotsCriados: 0, feriados: [], pulos: [], meses: 0, individual: tipoEfetivo === "escala",
   };
   const booking = grade.booking;
 
@@ -3104,7 +3130,7 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
       plan: "mensalista",
       status: "ativo",
       weeklyFreq: freq,
-      mensalistaTipo: jaMensalista ? client.mensalistaTipo : tipo,
+      mensalistaTipo: tipoEfetivo,
       firstClass: false, // deixou de ser aluna nova/experimental
       monthlyValue: null, // passa a seguir a tabela do plano
       billingDay: dia,

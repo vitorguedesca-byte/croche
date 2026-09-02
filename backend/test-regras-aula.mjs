@@ -1,6 +1,6 @@
 // Teste das regras de marcação do mensalista (backend/src/regrasAula.js)
 import {
-  checarRegras, janelaEscala, freqNaData,
+  checarRegras, janelaEscala, freqNaData, podeReplicarMensalista,
   segundaDaSemana, mesmaSemana, tetoSemanal, PGTO_PLANO,
   somarComp, diaDoMes,
   encargosDaMensalidade, diasEntreISO, MULTA_ATRASO_REAIS, JUROS_DIA_PERCENTUAL,
@@ -44,6 +44,11 @@ ok(c(fixo, { date: "2026-08-22", time: "19:00" }).ok === true, "fixo: sábado à
 
 console.log("\n— avulsa (fora do plano de mensalista) —");
 ok(c(avulsa, { date: "2026-08-22", time: "19:00" }).ok === true, "avulsa: sábado à noite passa");
+
+console.log("\n— recorrência por tipo de mensalista —");
+ok(podeReplicarMensalista(fixo) === true, "mensalista fixa pode participar da grade replicada");
+ok(podeReplicarMensalista(escala) === false, "mensalista de escala nunca é replicada");
+ok(podeReplicarMensalista(avulsa) === false, "aluna avulsa não entra em grade replicada");
 
 console.log("\n— escala: janela de marcação —");
 const alvoOk = { date: "2026-08-26", time: "09:00" }; // quarta

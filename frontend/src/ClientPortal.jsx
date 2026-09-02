@@ -222,10 +222,13 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   // Os horários que ela não pode marcar já vêm de fora da lista `available`; o
   // que sobra para a tela é explicar a janela da escala quando está fechada.
   const regras = data.regras || {};
+  const mensalistaEscala = cliente.plan === "mensalista" && cliente.mensalistaTipo === "escala";
+  const podeMarcarAulaNormal = cliente.plan !== "mensalista" || mensalistaEscala;
   const temGradeRegular = ativos.some((b) => b.date >= t && b.paymentMethod === "Mensalista");
   // Depois do Pix a aluna já é mensalista, mas ainda precisa escolher os 1 ou 2
-  // padrões que serão reservados por 12 meses.
-  const precisaMontarGrade = cliente.plan === "mensalista" && !!cliente.weeklyFreq && !temGradeRegular;
+  // padrões que serão reservados por 12 meses. Escala não monta grade: marca
+  // cada ocorrência separadamente.
+  const precisaMontarGrade = cliente.plan === "mensalista" && cliente.mensalistaTipo !== "escala" && !!cliente.weeklyFreq && !temGradeRegular;
   const podeConverter = (cliente.plan !== "mensalista" && cliente.matriculaStatus !== "devolvida") || precisaMontarGrade;
 
   // Mensagem de retorno ao liberar a aula: diz se virou crédito de reposição ou não.
@@ -263,7 +266,14 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
       repor: { title: "Confirmar reposição", message: `Usar 1 crédito de reposição nesta aula?\n\n${quando}`, confirmLabel: "Usar crédito", okMsg: "Reposição marcada! Te espero lá. 💚" },
       // A aula extra já está paga a esta altura — aqui ela só escolhe o horário.
       extra: { title: "Confirmar aula extra", message: `Usar a sua aula extra já paga neste horário?\n\n${quando}`, confirmLabel: "Marcar aula extra", okMsg: "Aula extra marcada! Te espero lá. 💚" },
-      normal: { title: "Confirmar marcação", message: `Marcar aula em ${quando}?`, confirmLabel: "Marcar", okMsg: "Aula marcada! Toque em “Pagar reserva” para confirmar. 💚" },
+      normal: {
+        title: "Confirmar marcação",
+        message: `Marcar somente esta aula em ${quando}?`,
+        confirmLabel: "Marcar esta aula",
+        okMsg: mensalistaEscala
+          ? "Aula marcada! Esta marcação vale somente para a data escolhida. 💚"
+          : "Aula marcada! Toque em “Pagar reserva” para confirmar. 💚",
+      },
     }[modo];
     if (!(await confirmModal({ title: cfg.title, message: cfg.message, confirmLabel: cfg.confirmLabel }))) return;
     setBusy(true);
@@ -306,7 +316,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
         <ProximaAulaCard booking={prox[0]} meta={meta} />
 
         <div className="pt-actions">
-          {cliente.plan !== "mensalista" && (
+          {podeMarcarAulaNormal && (
             <button className="pt-big" onClick={() => { setModo("normal"); irParaAgenda(); }}>📅<span>Marcar nova aula</span></button>
           )}
           <a className="pt-big pt-big-wa" href={waLink(WA_ESCOLA, `Olá! Sou ${(data.client && data.client.name) || ""} e gostaria de falar sobre as minhas aulas. 💚`)} target="_blank" rel="noreferrer"><WaIcon size={26} /><span>Falar com a escola</span></a>
@@ -343,7 +353,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
           unit={data.client && data.client.unit}
           meta={meta}
           regras={regras}
-          podeMarcarNormal={cliente.plan !== "mensalista"}
+          podeMarcarNormal={podeMarcarAulaNormal}
           busy={busy}
           modo={modo}
           saldo={(data.makeup && data.makeup.saldo) || 0}
