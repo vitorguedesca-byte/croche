@@ -1193,7 +1193,8 @@ app.post("/api/agenda/replicate", wrap(async (req, res) => {
 
   const seriesSlot = new Map();
   const seriesBooking = new Map();
-  const resultado = { scope, repetitions, fontes: fontes.length, slots: 0, aulas: 0, pulos: [], feriados: [] };
+  const capacidadesAlteradas = new Set();
+  const resultado = { scope, repetitions, fontes: fontes.length, slots: 0, aulas: 0, capacidades: 0, pulos: [], feriados: [] };
   const reservasOrigem = withStudents ? await prisma.booking.findMany({
     where: { slotId: { in: fontes.map((s) => s.id) }, status: { not: "cancelada" }, paymentMethod: PGTO_PLANO },
   }) : [];
@@ -1245,6 +1246,7 @@ app.post("/api/agenda/replicate", wrap(async (req, res) => {
           where: { id: alvo.id },
           data: { capacity: capacidadeFonte },
         });
+        capacidadesAlteradas.add(alvo.id);
       }
       if (!withStudents) continue;
       const reservas = reservasOrigem.filter((b) => b.slotId === fonte.id);
@@ -1288,6 +1290,42 @@ app.post("/api/agenda/replicate", wrap(async (req, res) => {
       }
     }
   }
+
+  /* A capacidade do DIA CLICADO é o modelo fixo dos horários equivalentes.
+     Isso é separado da cópia de alunas e do escopo mensal: se 05/09 tem as
+     turmas 07h, 09h e 11h com 16 vagas, todos os sábados equivalentes do
+     período recebem 16, mesmo que já existam com 8/9 vagas e reservas.
+
+     No escopo mensal, inclui também as semanas restantes do mês-base. Antes,
+     cada sábado do mês virava um modelo diferente e só o primeiro sábado do
+     mês seguinte herdava o 16 — exatamente o resultado incorreto observado. */
+  const modelosCapacidade = fontes.filter((fonte) => fonte.date === sourceDate);
+  const limiteExclusivo = scope === "month"
+    ? addMonthsISO(sourceDate.slice(0, 7) + "-01", repetitions + 1)
+    : addDays(sourceDate, repetitions * 7 + 1);
+  for (const modelo of modelosCapacidade) {
+    const dowModelo = new Date(modelo.date + "T00:00Z").getUTCDay();
+    const capacidadeModelo = modelo.capacity || SETTINGS.capacidadePadrao;
+    const equivalentes = await prisma.slot.findMany({
+      where: {
+        date: { gt: sourceDate, lt: limiteExclusivo },
+        unit: modelo.unit,
+        time: modelo.time,
+      },
+    });
+    const ids = equivalentes
+      .filter((alvo) =>
+        new Date(alvo.date + "T00:00Z").getUTCDay() === dowModelo &&
+        !feriadoNoDia(alvo.date, alvo.unit) &&
+        alvo.capacity !== capacidadeModelo
+      )
+      .map((alvo) => alvo.id);
+    if (ids.length) {
+      await prisma.slot.updateMany({ where: { id: { in: ids } }, data: { capacity: capacidadeModelo } });
+      ids.forEach((id) => capacidadesAlteradas.add(id));
+    }
+  }
+  resultado.capacidades = capacidadesAlteradas.size;
   res.json(resultado);
 }));
 

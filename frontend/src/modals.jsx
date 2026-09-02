@@ -1161,6 +1161,7 @@ export function ReplicateTurmaForm({ slot = null, date: presetDate, unit: preset
       }));
       toast(
         `✅ Replicação concluída: ${r.slots} horário(s) e ${r.aulas} aula(s) criados.` +
+        (r.capacidades ? ` ${r.capacidades} turma(s) existente(s) receberam a capacidade total da origem.` : "") +
         (r.feriados?.length ? ` ${r.feriados.length} ocorrência(s) em feriado fechado foram puladas.` : "") +
         (r.pulos?.length ? ` ${r.pulos.length} ocorrência(s) não puderam ser criadas.` : ""),
         "ok",
@@ -1226,6 +1227,7 @@ export function ReplicateTurmaForm({ slot = null, date: presetDate, unit: preset
 
       <div className="help">
         Serão processados até <b>{fontes.length * repetitions} horário(s)</b> ao longo de <b>{periodo}</b>.
+        {" "}A capacidade total dos horários do <b>dia-base</b> será aplicada às turmas equivalentes, mesmo quando elas já existirem e tiverem alunas cadastradas.
         {comAlunas ? <>
           {" "}Há <b>{regularesFixas.length} marcação(ões) fixa(s) replicável(is)</b> na origem.
           {regularesEscala.length ? <> <b>{regularesEscala.length} marcação(ões) de escala</b> serão ignoradas.</> : null}
