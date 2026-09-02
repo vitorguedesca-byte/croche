@@ -586,3 +586,33 @@ export function situacaoMensalidade(data, client, comp = compAtual()) {
 export const tipoMensalista = (c) =>
   !c || c.plan !== "mensalista" ? null : c.mensalistaTipo === "escala" ? "escala" : "fixo";
 export const TIPO_MENSALISTA_LABEL = { fixo: "Fixo", escala: "Escala" };
+
+/**
+ * Validação do algoritmo oficial do CPF (módulo 11 com 2 dígitos verificadores).
+ */
+export function validarCPF(cpf) {
+  const limpo = String(cpf || "").replace(/\D/g, "");
+  if (limpo.length !== 11 || /^(\d)\1{10}$/.test(limpo)) return false;
+  let soma = 0;
+  for (let i = 0; i < 9; i++) soma += parseInt(limpo[i], 10) * (10 - i);
+  let resto = (soma * 10) % 11;
+  if (resto === 10 || resto === 11) resto = 0;
+  if (resto !== parseInt(limpo[9], 10)) return false;
+  soma = 0;
+  for (let i = 0; i < 10; i++) soma += parseInt(limpo[i], 10) * (11 - i);
+  resto = (soma * 10) % 11;
+  if (resto === 10 || resto === 11) resto = 0;
+  if (resto !== parseInt(limpo[10], 10)) return false;
+  return true;
+}
+
+/**
+ * Formata CPF em tempo real: 000.000.000-00
+ */
+export function formatarCPF(cpf) {
+  const d = String(cpf || "").replace(/\D/g, "").slice(0, 11);
+  if (d.length <= 3) return d;
+  if (d.length <= 6) return `${d.slice(0, 3)}.${d.slice(3)}`;
+  if (d.length <= 9) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6)}`;
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9, 11)}`;
+}

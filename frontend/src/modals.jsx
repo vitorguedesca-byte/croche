@@ -14,6 +14,7 @@ import {
   compAtual, addComp, precoDaComp, mensalidadeDaComp,
   WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays, SEMANAS_PADRAO, MESES_PADRAO,
   tipoMensalista, TIPO_MENSALISTA_LABEL,
+  validarCPF, formatarCPF,
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
@@ -2947,8 +2948,12 @@ function useClientForm(client, onDone) {
 
   const save = async () => {
     if (!name.trim()) return toast("Informe o nome.", "error");
+    const limpoCpf = (cpf || "").replace(/\D/g, "");
+    if (limpoCpf && !validarCPF(limpoCpf)) {
+      return toast("CPF inválido. Verifique os números digitados antes de salvar.", "error");
+    }
     const payload = {
-      name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: cpf.trim(), unit, tags, notes: notes.trim(),
+      name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: formatarCPF(cpf) || cpf.trim(), unit, tags, notes: notes.trim(),
       birthday, firstClass, status, mensalistaTipo: tipoMens,
       billingDay: billingDay === "" ? null : Number(billingDay)
     };
@@ -3076,6 +3081,10 @@ function useClientForm(client, onDone) {
 
 function ClientFormFields({ f }) {
   const { meta, client } = f;
+  const cpfLimpo = (f.cpf || "").replace(/\D/g, "");
+  const cpfValido = cpfLimpo.length === 11 && validarCPF(cpfLimpo);
+  const cpfInvalido = cpfLimpo.length === 11 && !validarCPF(cpfLimpo);
+  const cpfMuitoLongo = cpfLimpo.length > 11;
   return (
     <>
       <div className="row2">
@@ -3083,7 +3092,21 @@ function ClientFormFields({ f }) {
         <div className="field"><label>Telefone</label><input value={f.phone} onChange={(e) => f.setPhone(e.target.value)} placeholder="31988880000" /></div>
       </div>
       <div className="row2">
-        <div className="field"><label>CPF <span style={{ color: "var(--muted)", fontWeight: 400 }}>(login do portal)</span></label><input value={f.cpf} onChange={(e) => f.setCpf(e.target.value)} placeholder="000.000.000-00" inputMode="numeric" /></div>
+        <div className="field">
+          <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>CPF <span style={{ color: "var(--muted)", fontWeight: 400 }}>(login do portal)</span></span>
+            {cpfValido && <span style={{ color: "var(--ok)", fontSize: ".8rem", fontWeight: 600 }}>✓ CPF válido</span>}
+            {cpfInvalido && <span style={{ color: "var(--danger)", fontSize: ".8rem", fontWeight: 600 }}>⚠ CPF inválido</span>}
+            {cpfMuitoLongo && <span style={{ color: "var(--danger)", fontSize: ".8rem", fontWeight: 600 }}>⚠ mais de 11 dígitos</span>}
+          </label>
+          <input
+            value={f.cpf}
+            onChange={(e) => f.setCpf(formatarCPF(e.target.value))}
+            placeholder="000.000.000-00"
+            inputMode="numeric"
+            style={cpfInvalido || cpfMuitoLongo ? { borderColor: "var(--danger)", background: "rgba(220,53,69,.06)" } : {}}
+          />
+        </div>
         <div className="field"><label>Email</label><input value={f.email} onChange={(e) => f.setEmail(e.target.value)} placeholder="aluno@email.com" inputMode="email" /></div>
       </div>
       <div className="field"><label>Unidade</label><Select value={f.unit} onChange={f.setUnit} options={unitOptions(meta)} /></div>

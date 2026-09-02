@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "./api.js";
-import { todayISO, addDays, fmtDate, fmtDateLong, money, capitalize, fimDaAula } from "./helpers.js";
+import { todayISO, addDays, fmtDate, fmtDateLong, money, capitalize, fimDaAula, validarCPF, formatarCPF } from "./helpers.js";
 
 const DOW = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
 
@@ -200,7 +200,8 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   // Passo 3: gera a cobrança da 1ª mensalidade (Sicredi) e cria a reserva provisória
   const gerarPix = async () => {
     if (!name.trim() || phone.replace(/\D/g, "").length < 10) return flash("Preencha seu nome e WhatsApp com DDD.");
-    if (cpf.replace(/\D/g, "").length !== 11) return flash("Informe um CPF válido (11 números).");
+    const cpfLimpo = cpf.replace(/\D/g, "");
+    if (!validarCPF(cpfLimpo)) return flash("Informe um CPF válido (verifique os números digitados).");
     if (!/\S+@\S+\.\S+/.test(email.trim())) return flash("Informe um email válido.");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(birthday)) return flash("Informe a sua data de nascimento.");
     if (birthday >= todayISO()) return flash("A data de nascimento precisa ser no passado.");
@@ -320,7 +321,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
               <label className="pt-label" style={{ marginTop: ".9rem" }}>Seu WhatsApp (com DDD)</label>
               <input className="pt-input" style={{ textAlign: "left", fontSize: "1.1rem" }} inputMode="numeric" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="31988880000" />
               <label className="pt-label" style={{ marginTop: ".9rem" }}>Seu CPF</label>
-              <input className="pt-input" style={{ textAlign: "left", fontSize: "1.1rem" }} inputMode="numeric" value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="000.000.000-00" />
+              <input className="pt-input" style={{ textAlign: "left", fontSize: "1.1rem" }} inputMode="numeric" value={cpf} onChange={(e) => setCpf(formatarCPF(e.target.value))} placeholder="000.000.000-00" />
               <label className="pt-label" style={{ marginTop: ".9rem" }}>Seu email</label>
               <input className="pt-input" style={{ textAlign: "left", fontSize: "1.1rem" }} inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="voce@email.com" />
               <label className="pt-label" style={{ marginTop: ".9rem" }}>Sua data de nascimento</label>

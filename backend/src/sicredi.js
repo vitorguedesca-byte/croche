@@ -67,10 +67,12 @@ function request(method, path, { headers = {}, body } = {}) {
         try { parsed = JSON.parse(raw); } catch {}
         if (res.statusCode >= 200 && res.statusCode < 300) resolve(parsed);
         else {
-          // O padrão BACEN devolve erro em { title, detail, violacoes[] } — puxar o
-          // detail deixa o log legível em vez de só "Sicredi 400".
-          const detalhe = parsed?.detail || parsed?.title ||
-            (Array.isArray(parsed?.violacoes) ? parsed.violacoes.map((v) => v.razao).join("; ") : "");
+          // O padrão BACEN devolve erro em { title, detail, violacoes[] } — priorizar
+          // as violações específicas (ex: CPF inválido) deixa o motivo real visível.
+          const violacoes = Array.isArray(parsed?.violacoes) && parsed.violacoes.length
+            ? parsed.violacoes.map((v) => `${v.propriedade ? v.propriedade + ": " : ""}${v.razao}`).join("; ")
+            : null;
+          const detalhe = violacoes || parsed?.detail || parsed?.title || "";
           reject(Object.assign(new Error(`Sicredi ${res.statusCode}${detalhe ? `: ${detalhe}` : ""}`), {
             status: res.statusCode, body: parsed,
           }));

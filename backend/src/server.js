@@ -208,6 +208,22 @@ function addMonthsISO(iso, n) {
   return new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(day, lastDay))).toISOString().slice(0, 10);
 }
 const onlyDigits = (s) => (s || "").replace(/\D/g, "");
+
+function validarCPF(cpf) {
+  const limpo = onlyDigits(cpf);
+  if (limpo.length !== 11 || /^(\d)\1{10}$/.test(limpo)) return false;
+  let soma = 0;
+  for (let i = 0; i < 9; i++) soma += parseInt(limpo[i], 10) * (10 - i);
+  let resto = (soma * 10) % 11;
+  if (resto === 10 || resto === 11) resto = 0;
+  if (resto !== parseInt(limpo[9], 10)) return false;
+  soma = 0;
+  for (let i = 0; i < 10; i++) soma += parseInt(limpo[i], 10) * (11 - i);
+  resto = (soma * 10) % 11;
+  if (resto === 10 || resto === 11) resto = 0;
+  if (resto !== parseInt(limpo[10], 10)) return false;
+  return true;
+}
 /* Etiquetas válidas: nenhuma. A única que existia ("Lead") saiu do sistema em
    22/08/2026 — quem entra pelo site já marca a experimental, então "cadastrou e
    não prosseguiu" deixou de ser um estado real.
@@ -2214,6 +2230,9 @@ const ANTECEDENCIA_DIAS = 5;
 async function emitirCobrancaMensalidade({ client, comp, valorCents, expiraEm, seq = 0 }) {
   const cpf = (client.cpf || "").replace(/\D/g, "");
   if (!cpf) throw Object.assign(new Error("Cadastre o CPF do aluno antes de gerar a cobrança."), { code: 400 });
+  if (!validarCPF(cpf)) {
+    throw Object.assign(new Error(`O CPF cadastrado para ${client.name} (${client.cpf}) é inválido. Corrija o CPF no cadastro da aluna para gerar o Pix.`), { code: 400 });
+  }
   const txid = txidMensalidade(client.id, comp, seq);
   const cob = await createCharge({
     txid,
@@ -4563,6 +4582,9 @@ app.post(
     if (!name) return res.status(400).json({ error: "name é obrigatório" });
     const cpfDigits = onlyDigits(cpf);
     if (cpfDigits) {
+      if (!validarCPF(cpfDigits)) {
+        return res.status(400).json({ error: "CPF inválido. Verifique os números digitados." });
+      }
       const existente = await prisma.client.findFirst({ where: { cpf: cpfDigits } });
       if (existente) {
         return res.status(409).json({ error: `Esse CPF já está cadastrado para ${existente.name}. Edite o cadastro dela em vez de criar um novo.` });
@@ -4594,6 +4616,9 @@ app.patch(
     if (cpf !== undefined) {
       const cpfDigits = onlyDigits(cpf);
       if (cpfDigits) {
+        if (!validarCPF(cpfDigits)) {
+          return res.status(400).json({ error: "CPF inválido. Verifique os números digitados." });
+        }
         const existente = await prisma.client.findFirst({ where: { cpf: cpfDigits, NOT: { id } } });
         if (existente) {
           return res.status(409).json({ error: `Esse CPF já está cadastrado para ${existente.name}.` });
