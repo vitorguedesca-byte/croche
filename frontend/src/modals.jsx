@@ -5,7 +5,7 @@ import { useStore } from "./store.jsx";
 import { api } from "./api.js";
 import { toast, confirmModal, promptModal } from "./toast.jsx";
 import {
-  UNITS, PROFS, TAG_OPTIONS, VALOR_PADRAO, CAPACITY_PADRAO,
+  UNITS, PROFS, TAG_OPTIONS, VALOR_PADRAO, CAPACITY_PADRAO, STATUS, BOOKING_KINDS,
   unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize, faixaHorario, hhmm,
   slotById, slotBookings, slotBookingsAll, slotCapacity, slotWaitlist, clientAttendance, nomeCurto,
   marcadoresDoAluno,
@@ -202,6 +202,34 @@ export function DayModal({ date, unit = "Todas", somenteLeitura = false }) {
   );
 }
 
+/* ================== Legenda da Turma (Cores / Emojis) ================== */
+export function TurmaLegend() {
+  return (
+    <div className="turma-legend">
+      {Object.values(BOOKING_KINDS).map((t) => (
+        <span key={t.key} className="lg">
+          <span className="lgdot" style={{ background: t.color }} />
+          {t.ic} {t.label}
+        </span>
+      ))}
+      <span className="lg-sep" />
+      <span className="lg" title="Aniversário no dia ou na semana da aula">
+        🎂 Aniversário
+      </span>
+      <span className="lg" title="Mensalista que escolhe suas aulas por escala">
+        🙋 Escala
+      </span>
+      <span className="lg-sep" />
+      {Object.keys(STATUS).map((k) => (
+        <span key={k} className="lg">
+          <span className="lgdot" style={{ background: STATUS[k].dot }} />
+          {STATUS[k].label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /* ================== Turma em modo consulta (instrutoras) ==================
    Mesma turma do SlotDetail, sem nada que mexa: quem abre aqui está vendo quem
    tem aula, não operando a agenda. Presença aparece como estado, não como
@@ -228,6 +256,7 @@ export function TurmaView({ slotId }) {
       }
       footer={<button className="btn ghost" onClick={close}>Fechar</button>}
     >
+      <TurmaLegend />
       {todas.length ? (
         <div className="tv-lista">
           {todas.map((b) => {
@@ -262,15 +291,6 @@ export function TurmaView({ slotId }) {
 }
 
 /* ======================= Detalhe da turma ======================= */
-// Etiqueta do tipo do aluno numa reserva (mostrada na turma da agenda)
-function bookingTag(data, b) {
-  if (b.paymentMethod === "Reposição") return { label: "🔁 Reposição", cls: "b-warn" };
-  const c = (data.clients || []).find((x) => x.name === b.clientName);
-  if (c?.plan === "mensalista") return { label: "📅 Mensalista", cls: "b-ok" };
-  if (c?.firstClass) return { label: "✨ Novo(a)", cls: "b-terra" };
-  return { label: "💠 Avulso", cls: "b-muted" };
-}
-
 export function SlotDetail({ slotId }) {
   const { data, run } = useStore();
   const { open, close } = useModal();
@@ -278,7 +298,8 @@ export function SlotDetail({ slotId }) {
   const [capInput, setCapInput] = useState(slot ? slotCapacity(slot) : CAPACITY_PADRAO);
   if (!slot) return <Modal title="Turma"><p>Horário não encontrado.</p></Modal>;
   const cap = slotCapacity(slot);
-  const bks = slotBookings(data, slotId);
+  const todas = slotBookingsAll(data, slotId);
+  const bks = todas.filter((b) => b.status !== "cancelada");
   const occ = bks.length, full = occ >= cap, uc = unitColor(slot.unit);
   const wl = slotWaitlist(slot);
 
@@ -352,23 +373,45 @@ export function SlotDetail({ slotId }) {
         <input type="number" min="1" value={capInput} onChange={(e) => setCapInput(parseInt(e.target.value, 10) || 1)} />
         <div className="help" style={{ marginTop: ".5rem" }}>Esse é o limite de vagas. Quando lotar, o horário some das opções do aluno e (futuramente) o WhatsApp não oferece mais essa vaga.</div>
       </div>
+
+      <TurmaLegend />
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "1rem 0 .3rem" }}>
         <b style={{ color: "var(--brown)" }}>Reservas · {occ}/{cap}</b>
         {full ? <span className="badge b-danger">Turma lotada</span> : <span className="badge b-ok">{cap - occ} vaga(s) livre(s)</span>}
       </div>
-      {bks.length ? bks.map((b) => {
-        const tag = bookingTag(data, b);
+      {todas.length ? todas.map((b) => {
+        const k = bookingKindDe(data, b);
+        const marcas = marcadoresDoAluno(data, b, slot.date);
+        const c = clientOfBooking(data, b);
+        const isCanc = b.status === "cancelada";
         return (
-        <div className="roster-row" key={b.id}>
+        <div className={`roster-row ${isCanc ? "canc" : ""}`} key={b.id} style={isCanc ? { opacity: 0.65 } : undefined}>
+          <span className="sc-dot" style={{ width: "9px", height: "9px", borderRadius: "50%", background: isCanc ? "var(--danger)" : k ? k.color : "var(--pink)", flex: "none" }} />
           <div className="rr-info">
-            <b>{b.clientName}</b>
-            {tag && <span className={`badge ${tag.cls} ml`}>{tag.label}</span>}
-            <div className="cli-sub">{b.phone || "sem telefone"}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: ".35rem", flexWrap: "wrap" }}>
+              {marcas.map((m) => (
+                <span key={m.k} className={`sc-marca ${m.forte ? "" : "fraca"}`} title={m.label} style={{ fontSize: ".95rem", cursor: "help" }}>
+                  {m.ic}
+                </span>
+              ))}
+              <b style={isCanc ? { textDecoration: "line-through" } : undefined}>{b.clientName}</b>
+              {k && <span className={`badge ${k.cls} ml`}>{k.ic} {k.label}</span>}
+              {!k && c?.plan === "mensalista" && <span className="badge b-ok ml">📅 Mensalista</span>}
+              {!k && (!c || c.plan !== "mensalista") && <span className="badge b-muted ml">💠 Avulso</span>}
+              <StatusBadge status={b.status} />
+            </div>
+            <div className="cli-sub">
+              {b.phone || "sem telefone"}
+              {isCanc && b.absenceReason && ` · Motivo: “${b.absenceReason}”`}
+            </div>
           </div>
-          <div className="att" title="Marcar presença">
-            <button className={`att-btn ${b.attendance === "presente" ? "on-pres" : ""}`} onClick={() => mark(b, "presente")} title="Presente">✓</button>
-            <button className={`att-btn ${b.attendance === "falta" ? "on-falt" : ""}`} onClick={() => mark(b, "falta")} title="Faltou">✕</button>
-          </div>
+          {!isCanc && (
+            <div className="att" title="Marcar presença">
+              <button className={`att-btn ${b.attendance === "presente" ? "on-pres" : ""}`} onClick={() => mark(b, "presente")} title="Presente">✓</button>
+              <button className={`att-btn ${b.attendance === "falta" ? "on-falt" : ""}`} onClick={() => mark(b, "falta")} title="Faltou">✕</button>
+            </div>
+          )}
           <button className="btn sec sm" onClick={() => open(<ManageBooking booking={b} />)}>Gerir</button>
         </div>
         );

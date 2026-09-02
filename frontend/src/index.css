@@ -306,6 +306,12 @@
   .ag-legend{display:flex;gap:.9rem;flex-wrap:wrap;font-size:.76rem;color:var(--muted);align-items:center}
   .ag-legend .lg{display:inline-flex;align-items:center;gap:.35rem}
   .ag-legend .lgdot{width:9px;height:9px;border-radius:50%}
+  .ag-legend .lg-sep{width:1px;height:12px;background:var(--line);display:inline-block}
+
+  .turma-legend{display:flex;gap:.7rem;flex-wrap:wrap;font-size:.74rem;color:var(--muted);align-items:center;padding:.5rem .7rem;background:var(--offwhite);border-radius:8px;border:1px solid var(--line);margin:.65rem 0 .9rem}
+  .turma-legend .lg{display:inline-flex;align-items:center;gap:.3rem}
+  .turma-legend .lgdot{width:8px;height:8px;border-radius:50%}
+  .turma-legend .lg-sep{width:1px;height:12px;background:var(--line);display:inline-block}
 
   /* slot: borda = cor da UNIDADE; bolinha = status */
   .slot{border-left:4px solid var(--uc,var(--muted))}
