@@ -28,6 +28,7 @@ import {
   hhmm,
   janelaEscala,
   liberouATempo as liberouATempoPuro,
+  motivoSemCredito,
   REPO_MAX_MES,
   REPO_HORAS_MIN,
   REPO_MANHA_ATE,
@@ -56,6 +57,8 @@ import {
   textoMatriculaConfirmada,
   textoMensalidadeAVencer,
   textoMensalidadeEmAtraso,
+  textoMensalidadePaga,
+  textoAulaExtraPaga,
 } from "./textosEscola.js";
 import { sicrediConfigured, sicrediMissing, createCharge, getCharge, isPaidStatus, extractPix } from "./sicredi.js";
 import { waConfigured, waVerify, sendWaText, sendWaTextOrTemplate, sendWaButtons, sendWaList, parseIncoming, normalizePhone } from "./wa.js";
@@ -69,6 +72,10 @@ import {
   parseNascimento,
   slotAindaDaTempo,
   telefoneBR,
+  acaoDaReserva,
+  HOLD_MIN,
+  HOLD_AVISO_MIN,
+  RODADA_HOLD_MIN,
 } from "./waFluxo.js";
 
 // pasta de fotos de depoimentos (servida estaticamente pelo Vite via frontend/public)
@@ -432,13 +439,17 @@ async function resumoReposicao(client) {
 async function concederCredito(client, booking) {
   const eleg = await elegivelReposicao(client);
   if (!eleg.ok) return { credito: null, motivo: eleg.motivo };
-  if (!liberouATempo(booking.date, booking.time))
-    return {
-      credito: null,
-      motivo: booking.time < REPO_MANHA_ATE
-        ? "Aula da manhã precisa ser liberada até 23:59 do dia anterior para gerar crédito."
-        : `Aviso com menos de ${REPO_HORAS_MIN}h de antecedência não gera crédito de reposição.`,
-    };
+  /* Feriado e antecedência: as duas recusas que não dependem do banco, e nesta
+     ordem — feriado primeiro. Ver motivoSemCredito() e o bloco FERIADO NÃO GERA
+     CRÉDITO em regrasAula.js, que é onde a regra tem teste. */
+  const motivo = motivoSemCredito({
+    nomeFeriado: feriadoNoDia(booking.date, booking.unit),
+    date: booking.date,
+    time: booking.time,
+    agora: agoraBR(),
+    diaBR: fmtDiaBR,
+  });
+  if (motivo) return { credito: null, motivo };
   const competencia = booking.date.slice(0, 7);
   const noMes = await prisma.makeupCredit.count({ where: { clientId: client.id, competencia } });
   if (noMes >= REPO_MAX_MES)
@@ -1329,6 +1340,45 @@ app.post("/api/agenda/replicate", wrap(async (req, res) => {
   res.json(resultado);
 }));
 
+/* ---------- irmãs de uma turma: as ocorrências futuras equivalentes ----------
+   Mesmo critério "pega-tudo" que a exclusão em lote já usava: mesma unidade,
+   mesma hora e mesmo dia da semana, de hoje em diante — mais as da mesma série,
+   caso tenham sido criadas juntas. Os dois critérios somam porque nenhum basta
+   sozinho: o seriesId perde as turmas criadas em levas separadas (e as
+   anteriores à coluna existir), e unidade+hora+dia perde as que já foram
+   movidas para outro horário mas continuam sendo a mesma turma.
+
+   Passado fica de fora sempre. Ele é histórico: quem já teve aula às 09:00 na
+   terça passada teve aula às 09:00, e reescrever isso apaga o registro do que
+   de fato aconteceu. */
+async function irmasDaTurma(slot) {
+  const t = todayISO();
+  const dow = new Date(slot.date + "T00:00").getDay();
+  const hora = hhmm(slot.time);
+  /* A busca filtra por UNIDADE, não por hora: `time` é texto livre no banco
+     (ver a migration de horários HH:MM) e "9:00" é a mesma turma que "09:00" —
+     um `where` por hora exata deixaria essas linhas de fora sem avisar. A
+     comparação normalizada é feita aqui embaixo, igual à do espelho
+     irmasNaAgenda() em frontend/src/helpers.js. Mexeu num, mexa no outro. */
+  const cands = await prisma.slot.findMany({
+    where: {
+      date: { gte: t },
+      OR: [
+        { unit: slot.unit },
+        ...(slot.seriesId ? [{ seriesId: slot.seriesId }] : []),
+      ],
+    },
+  });
+  return cands.filter(
+    (s) =>
+      s.id !== slot.id &&
+      ((slot.seriesId && s.seriesId === slot.seriesId) ||
+        (s.unit === slot.unit &&
+          hhmm(s.time) === hora &&
+          new Date(s.date + "T00:00").getDay() === dow))
+  );
+}
+
 app.patch(
   "/api/slots/:id",
   wrap(async (req, res) => {
@@ -1336,6 +1386,13 @@ app.patch(
     const slot = await prisma.slot.findUnique({ where: { id } });
     if (!slot) return res.status(404).json({ error: "Horário não encontrado." });
     const data = {};
+
+    /* ?match=1: alteração EM LOTE — o padrão do painel. O que a Inêz muda numa
+       turma vale para as ocorrências futuras dela, porque no dia a dia da
+       escola "mudar a turma das 09:00 de terça" quer dizer a turma inteira, não
+       aquela terça. A alteração de uma ocorrência só continua existindo: é esta
+       mesma rota sem o ?match=1 (o "só esta" do painel). */
+    const emLote = req.query.match === "1";
 
     if (req.body.capacity !== undefined) {
       const cap = Math.max(1, parseInt(req.body.capacity, 10) || 1);
@@ -1352,7 +1409,49 @@ app.patch(
     if (req.body.date !== undefined && req.body.date) data.date = String(req.body.date);
     if (req.body.prof !== undefined) data.prof = String(req.body.prof || "").trim() || null;
 
+    /* Mudar a DATA é sempre de uma ocorrência só, e o lote precisa recusar em
+       vez de adivinhar. Uma data nova é um dia da semana novo, e aplicá-la às
+       irmãs empilharia as 52 ocorrências futuras todas no mesmo dia — o lote
+       apagaria a agenda em vez de deslocá-la. */
+    if (emLote && data.date !== undefined && data.date !== slot.date)
+      return res.status(400).json({
+        error: "Mudar a data move só esta aula. Para deslocar a turma inteira, altere o horário ou refaça a grade.",
+      });
+
+    // As irmãs são calculadas ANTES do update: depois dele o horário antigo
+    // (que é a chave da busca) já não existe mais no próprio slot.
+    const irmas = emLote ? await irmasDaTurma(slot) : [];
+
     const updated = await prisma.slot.update({ where: { id }, data });
+
+    /* A capacidade não pode encolher abaixo do que já foi reservado, e cada
+       irmã tem a sua própria lotação. Em vez de derrubar a alteração inteira
+       por causa de uma turma cheia, a irmã apertada fica de fora e volta no
+       relatório: o resto da grade muda e a Inêz vê exatamente qual data ficou
+       para trás. */
+    const apertadas = [];
+    let alteradas = 0;
+    for (const irma of irmas) {
+      const dataIrma = { ...data };
+      delete dataIrma.date; // cada irmã mantém a data dela
+      if (dataIrma.capacity !== undefined) {
+        const occ = await occupancy(irma.id);
+        if (dataIrma.capacity < occ) {
+          apertadas.push({ date: irma.date, reservas: occ });
+          delete dataIrma.capacity;
+        }
+      }
+      if (!Object.keys(dataIrma).length) continue;
+      await prisma.slot.update({ where: { id: irma.id }, data: dataIrma });
+      alteradas++;
+      const propagIrma = {};
+      for (const k of ["time", "unit", "prof"]) if (dataIrma[k] !== undefined) propagIrma[k] = dataIrma[k];
+      if (Object.keys(propagIrma).length)
+        await prisma.booking.updateMany({
+          where: { slotId: irma.id, status: { not: "cancelada" } },
+          data: propagIrma,
+        });
+    }
 
     // As reservas guardam data/hora/unidade/prof copiados do horário; ao editar
     // a turma, movemos junto todas as reservas ativas dela.
@@ -1361,7 +1460,7 @@ app.patch(
     if (Object.keys(propag).length) {
       await prisma.booking.updateMany({ where: { slotId: id, status: { not: "cancelada" } }, data: propag });
     }
-    res.json(updated);
+    res.json({ ...updated, emLote, alteradas: alteradas + 1, apertadas });
   })
 );
 
@@ -1376,25 +1475,7 @@ app.delete(
     // semana), mesmo que tenham sido criados em levas separadas ou antes do
     // seriesId existir. Horários passados ficam para preservar o histórico.
     if (req.query.match === "1") {
-      const t = todayISO();
-      const dow = new Date(slot.date + "T00:00").getDay();
-      const cands = await prisma.slot.findMany({
-        where: {
-          date: { gte: t },
-          OR: [
-            { unit: slot.unit, time: slot.time },
-            ...(slot.seriesId ? [{ seriesId: slot.seriesId }] : []),
-          ],
-        },
-      });
-      const ids = new Set(
-        cands
-          .filter((s) =>
-            (slot.seriesId && s.seriesId === slot.seriesId) ||
-            (s.unit === slot.unit && s.time === slot.time && new Date(s.date + "T00:00").getDay() === dow)
-          )
-          .map((s) => s.id)
-      );
+      const ids = new Set((await irmasDaTurma(slot)).map((s) => s.id));
       ids.add(id); // inclui o próprio, mesmo que esteja no passado
       const r = await prisma.slot.deleteMany({ where: { id: { in: [...ids] } } });
       return res.json({ ok: true, deleted: r.count });
@@ -1961,6 +2042,11 @@ async function confirmarPagamentoPorTxid(txid) {
   if (pass && pass.status === "pendente") {
     await prisma.extraPass.update({ where: { id: pass.id }, data: { status: "pago", paidAt: todayISO() } });
     console.log(`[sicredi] aula extra confirmada — passe ${pass.id}`);
+    const dona = await prisma.client.findUnique({ where: { id: pass.clientId } });
+    await avisarPagamento(dona, textoAulaExtraPaga({
+      nome: dona?.name,
+      valor: moedaBR((pass.amountCents || 0) / 100),
+    }));
     return true;
   }
 
@@ -1971,9 +2057,39 @@ async function confirmarPagamentoPorTxid(txid) {
   if (invoice && invoice.status !== "pago") {
     await prisma.invoice.update({ where: { id: invoice.id }, data: { status: "pago", paidAt: todayISO() } });
     console.log(`[sicredi] mensalidade confirmada — invoice ${invoice.id}`);
+    /* O valor avisado é o que o QR COBROU, não o `amountCents` original nem a
+       conta de hoje. `encargosAte` é a data em que o pixCode foi precificado:
+       usá-la devolve exatamente o número que apareceu no app do banco dela.
+       Recalcular por `todayISO()` daria alguns centavos de juros a mais se o
+       QR foi emitido ontem — e confirmar um valor diferente do que ela acabou
+       de pagar é o tipo de diferença que vira desconfiança. `encargosAte` nulo
+       quer dizer QR emitido sem acréscimo: aí o valor é o original mesmo. */
+    const dona = await prisma.client.findUnique({ where: { id: invoice.clientId } });
+    const pagoCents = invoice.encargosAte
+      ? encargosDe(invoice, invoice.encargosAte).totalCents
+      : invoice.amountCents;
+    await avisarPagamento(dona, textoMensalidadePaga({
+      nome: dona?.name,
+      mes: compPorExtenso(invoice.competencia),
+      valor: moedaBR(pagoCents / 100),
+    }));
     return true;
   }
   return false;
+}
+
+/* Manda uma confirmação de pagamento para a aluna. Sai em silêncio quando o
+   WhatsApp não está configurado ou a ficha não tem telefone — e NUNCA derruba
+   quem chamou: a baixa do pagamento já aconteceu no banco quando chegamos aqui,
+   e uma falha de mensagem não pode desfazer dinheiro que entrou. Foi por isso
+   que a confirmação da matrícula ganhou try/catch, e vale igual para estas. */
+async function avisarPagamento(client, texto) {
+  if (!waConfigured() || !client?.phone) return;
+  try {
+    await waSend(client.phone, texto);
+  } catch (e) {
+    console.warn(`[wa] confirmação de pagamento de ${client.name} não saiu: ${e.message}`);
+  }
 }
 
 // Webhook do Sicredi — apenas um GATILHO. O corpo chega como { pix: [ { txid, ... } ] }
@@ -3659,10 +3775,26 @@ const waDescricaoSlot = (s) => descricaoDaTurma(s);
    antes disso a conversa reservava sem pagar nada, e conversa abandonada tirava
    a vaga de quem ia pagar.
 
-   A meia hora do fim (HOLD_AVISO_MIN), o bot pergunta se ficou dúvida e oferece
-   o atendimento humano: é a última chance de destravar antes de a vaga sair. */
-const HOLD_MIN = 60;
-const HOLD_AVISO_MIN = 30;
+   O prazo era de 1 HORA até 02/09/2026, quando o Vitor cortou para 10 minutos.
+   Pix cai em segundos: o que a hora inteira segurava, na prática, era a vaga
+   parada esperando quem já tinha desistido — enquanto a próxima aluna via a
+   turma como lotada.
+
+   O prazo curto só é seguro por causa da rede de proteção que já existia, e ela
+   não pode ser removida junto com o prazo: quem paga DEPOIS de o prazo estourar
+   não perde o dinheiro. `confirmarPagamentoPorTxid` é consultado antes de a
+   vaga sair e de novo quando o pagamento chega — se ainda houver lugar na
+   turma, a aula volta; se não houver, o pagamento fica registrado e a Inêz
+   remarca. Sem isso, 10 minutos seria só um jeito rápido de cobrar de alguém e
+   não entregar a vaga.
+
+   A HOLD_AVISO_MIN minutos do fim, o bot dá o último toque e oferece reenviar o
+   Pix. Três minutos, não trinta: no prazo de dez, um lembrete cedo demais chega
+   colado na mensagem do Pix e vira cobrança.
+
+   Os números e a decisão de "expirar / avisar / esperar" moram em waFluxo.js,
+   onde têm teste — a relação entre o prazo, o aviso e o intervalo da varredura
+   quebra em silêncio quando um dos três muda sozinho. */
 
 /* Cadastro feito pela conversa do WhatsApp.
 
@@ -3755,16 +3887,24 @@ async function expirarReservaWa(booking) {
   console.log(`[wa hold] reserva ${booking.id} (${booking.clientName}) expirou — vaga liberada.`);
 }
 
-/* Rodada das reservas seguradas. Roda de 5 em 5 minutos: cutuca quem está a
-   meia hora do fim e libera quem passou do prazo. Só olha reserva com holdUntil,
-   então nada do painel ou do site entra aqui. */
+/* Rodada das reservas seguradas: cutuca quem está a HOLD_AVISO_MIN do fim e
+   libera quem passou do prazo. Só olha reserva com holdUntil, então nada do
+   painel ou do site entra aqui.
+
+   Roda de MINUTO em minuto. Rodava de 5 em 5 quando o prazo era de uma hora, e
+   os dois números andam juntos: num prazo de 10 minutos, uma rodada de 5
+   soltaria a vaga com até metade do prazo de atraso e faria o aviso dos 3
+   minutos sair ora aos 5, ora nunca. A varredura é uma consulta por minuto num
+   índice de holdUntil — barata o bastante para não valer a pena economizar. */
 async function rodadaReservasSeguradas() {
   const agora = new Date();
   const pendentes = await prisma.booking.findMany({
     where: { holdUntil: { not: null }, paid: false, status: "aguardando" },
   });
   for (const b of pendentes) {
-    const fim = new Date(b.holdUntil);
+    // Expirar, avisar ou esperar — a decisão é de acaoDaReserva (waFluxo.js).
+    const { acao, faltam } = acaoDaReserva(b, agora.getTime());
+    if (acao === "esperar") continue;
     /* ANTES de soltar a vaga, pergunta ao banco se o Pix caiu.
 
        O webhook do Sicredi é o caminho normal, mas ele é um caminho só: se
@@ -3776,7 +3916,7 @@ async function rodadaReservasSeguradas() {
        pago, faz a baixa inteira: confirma a reserva, matricula e dispara o
        agradecimento com as regras. Custa uma chamada por reserva prestes a
        expirar — raras, e o cenário que evita é caro demais para economizar. */
-    if (agora >= fim) {
+    if (acao === "expirar") {
       if (b.txid && (await confirmarPagamentoPorTxid(b.txid).catch(() => false))) {
         console.log(`[wa hold] reserva ${b.id} estava paga — confirmada na consulta ao Sicredi, não expirou.`);
         continue;
@@ -3784,14 +3924,13 @@ async function rodadaReservasSeguradas() {
       await expirarReservaWa(b);
       continue;
     }
-    const faltam = Math.round((fim - agora) / 60_000);
-    if (!b.holdNudged && faltam <= HOLD_AVISO_MIN) {
+    if (acao === "avisar") {
       // Mesma consulta antes de cutucar: perguntar "ficou alguma dúvida?" para
       // quem já pagou é a mensagem errada na pior hora.
       if (b.txid && (await confirmarPagamentoPorTxid(b.txid).catch(() => false))) continue;
       await prisma.booking.update({ where: { id: b.id }, data: { holdNudged: true } });
       if (b.phone) {
-        await waSend(b.phone, textoLembreteHold({ nome: b.clientName, minutos: Math.max(1, faltam) }));
+        await waSend(b.phone, textoLembreteHold({ nome: b.clientName, minutos: faltam }));
         await waButtons(b.phone, "Posso te ajudar com alguma coisa?", [
           { id: "duvida:pix", title: "💠 Reenviar o Pix" },
           { id: "humano", title: "Falar com atendente" },
@@ -3844,7 +3983,9 @@ async function rodadaConversasParadas() {
   }
 }
 
-setInterval(() => rodadaReservasSeguradas().catch((e) => console.warn("[wa hold]", e.message)), 5 * 60 * 1000);
+// RODADA_HOLD_MIN vem de waFluxo.js, junto de HOLD_MIN e HOLD_AVISO_MIN: os
+// três só fazem sentido juntos, e o teste de lá guarda a relação entre eles.
+setInterval(() => rodadaReservasSeguradas().catch((e) => console.warn("[wa hold]", e.message)), RODADA_HOLD_MIN * 60 * 1000);
 setTimeout(() => rodadaReservasSeguradas().catch(() => {}), 30_000);
 setInterval(() => rodadaConversasParadas().catch((e) => console.warn("[wa parada]", e.message)), 5 * 60 * 1000);
 setTimeout(() => rodadaConversasParadas().catch(() => {}), 60_000);
@@ -4728,11 +4869,18 @@ app.get("/api/feriados/:date/aulas", wrap(async (req, res) => {
   res.json({ aulas: await aulasDoDia(String(req.params.date || "").slice(0, 10)) });
 }));
 
-/* Cancelar as aulas de um feriado, com crédito de reposição para as mensalistas.
-   O crédito aqui NÃO passa por `concederCredito`: aquelas regras (antecedência
-   mínima, teto de 2 por mês, mensalidade em dia) medem a aluna que desmarca. Um
-   feriado é decisão da ESCOLA — ninguém perde aula porque a porta não abriu.
-   Aula extra e experimental não geram crédito: não são aula do plano. */
+/* Cancelar as aulas de um feriado. SEM crédito de reposição — Vitor, 02/09/2026.
+
+   Esta rota fazia o contrário até esta data: gerava um crédito por mensalista,
+   com o argumento de que feriado é decisão da escola e ninguém deveria perder
+   aula. A regra foi invertida. O que a aluna contrata é a grade da escola, e a
+   grade não tem aula em feriado: a mensalidade já é calculada sobre os dias em
+   que a porta abre. Creditar o feriado pagaria a aluna duas vezes pelo mesmo
+   dia — uma no preço, outra na reposição.
+
+   Continua cancelando as aulas: a agenda do feriado tem que ficar limpa, e o
+   motivo escrito na reserva é o que explica o cancelamento para quem olhar o
+   histórico depois. */
 app.post("/api/feriados/:date/cancelar-aulas", wrap(async (req, res) => {
   const date = String(req.params.date || "").slice(0, 10);
   const unit = String(req.body?.unit || "");
@@ -4742,30 +4890,17 @@ app.post("/api/feriados/:date/cancelar-aulas", wrap(async (req, res) => {
     where: { date, ...(unit ? { unit } : {}), status: { not: "cancelada" } },
     orderBy: [{ time: "asc" }, { clientName: "asc" }],
   });
-  const canceladas = [], creditadas = [];
+  const canceladas = [];
   for (const b of aulas) {
     await prisma.booking.update({
       where: { id: b.id },
       data: { status: "cancelada", absenceReason: `Feriado: ${nome} — a escola não abre.` },
     });
     canceladas.push(b.id);
-    if ((b.paymentMethod || "") !== PGTO_PLANO) continue;
-    const client = await prisma.client.findFirst({ where: { name: b.clientName } });
-    if (!client) continue;
-    const competencia = date.slice(0, 7);
-    const credito = await prisma.makeupCredit.create({
-      data: {
-        clientId: client.id,
-        competencia,
-        expiresOn: fimDoMesSeguinte(competencia),
-        originBookingId: b.id,
-        originDate: date,
-        originTime: hhmm(b.time) || String(b.time || "").slice(0, 5),
-      },
-    });
-    creditadas.push({ clientName: b.clientName, creditoId: credito.id });
   }
-  res.json({ ok: true, feriado: nome, canceladas: canceladas.length, creditos: creditadas });
+  // `creditos: []` continua na resposta para não quebrar telas antigas que
+  // contam o tamanho da lista. Hoje ela é sempre vazia, por regra.
+  res.json({ ok: true, feriado: nome, canceladas: canceladas.length, creditos: [] });
 }));
 
 /* ---------- SETTINGS ---------- */

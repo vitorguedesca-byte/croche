@@ -17,6 +17,10 @@ import {
   parseNascimento,
   slotAindaDaTempo,
   telefoneBR,
+  acaoDaReserva,
+  HOLD_MIN,
+  HOLD_AVISO_MIN,
+  RODADA_HOLD_MIN,
 } from "./src/waFluxo.js";
 
 let falhas = 0;
@@ -106,6 +110,34 @@ ok(!conversaExpirou(hAtras(11.9), AGORA), "11h54: ainda vale");
 ok(conversaExpirou(hAtras(12), AGORA), "12h em ponto: recomeça");
 ok(conversaExpirou(hAtras(48), AGORA), "dois dias depois: recomeça");
 ok(!conversaExpirou(null, AGORA), "conversa que nunca recebeu mensagem não 'expira'");
+
+/* ============ a vaga segurada por 10 minutos ============
+   Vitor, 02/09/2026: o prazo caiu de 1h para 10 minutos e o aviso passou a sair
+   a 3 do fim. O que este bloco guarda é a RELAÇÃO entre os três números — ela
+   quebra em silêncio: com a varredura mais espaçada que o aviso, o último toque
+   simplesmente não sai, ninguém vê o erro, e a aluna perde a vaga sem ele. */
+titulo(`vaga segurada por ${HOLD_MIN} min, aviso a ${HOLD_AVISO_MIN} do fim`);
+const emMin = (m) => new Date(AGORA + m * 60_000);
+const acao = (m, nudged = false) => acaoDaReserva({ holdUntil: emMin(m), holdNudged: nudged }, AGORA).acao;
+
+ok(acao(10) === "esperar", "recém-criada (faltam 10): não faz nada");
+ok(acao(4) === "esperar", "faltando 4 min: ainda cedo para o aviso");
+ok(acao(3) === "avisar", "faltando 3 min: sai o último toque");
+ok(acao(1) === "avisar", "faltando 1 min: ainda dá para avisar");
+ok(acao(3, true) === "esperar", "já avisado não é avisado de novo");
+ok(acao(0) === "expirar", "no instante do fim: expira");
+ok(acao(-5) === "expirar", "prazo estourado há 5 min: expira");
+ok(acao(-5, true) === "expirar", "quem já foi avisado também expira");
+ok(acaoDaReserva({ holdUntil: null }, AGORA).acao === "esperar", "reserva sem prazo não é tocada");
+
+// O minuto mostrado na mensagem nunca é "0 minutos" — soa como já era.
+ok(acaoDaReserva({ holdUntil: emMin(0.4) }, AGORA).faltam === 1, "menos de um minuto é dito como 1");
+
+/* A trava que justifica os outros números: a varredura tem que caber dentro da
+   janela do aviso. Se alguém subir RODADA_HOLD_MIN sem olhar, isto quebra. */
+ok(RODADA_HOLD_MIN <= HOLD_AVISO_MIN,
+  `a varredura (${RODADA_HOLD_MIN} min) cabe na janela do aviso (${HOLD_AVISO_MIN} min)`);
+ok(HOLD_AVISO_MIN < HOLD_MIN, "o aviso sai antes do fim do prazo, não depois");
 
 console.log(falhas ? `\n${falhas} caso(s) falharam.` : "\nTodos os casos passaram.");
 process.exit(falhas ? 1 : 0);

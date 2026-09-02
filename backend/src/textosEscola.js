@@ -40,6 +40,8 @@ Obs: válido somente para alunos(as) que estão em vigência com o curso e mensa
 
 Também não repomos reposição: se marcar reposição e faltar, não remarcamos, mesmo avisando com antecedência.
 
+Em feriado a escola não abre, e esses dias não geram crédito de reposição: a mensalidade já é calculada sobre os dias em que temos aula.
+
 Agradecemos pela compreensão e parceria. Essas regras nos ajudam a manter um ambiente organizado, respeitoso e acolhedor para todas. 💕`;
 
 /* Mensagem de agradecimento + confirmação + regras, enviada quando o Pix do 1º
@@ -88,18 +90,25 @@ Copie o código Pix abaixo e pague pelo app do seu banco. Assim que o pagamento 
 
 ⏳ Consigo segurar essa vaga por ${minutos} minutos.`;
 
-/* Cutucada a meia hora do fim do prazo: pergunta se há dúvida e oferece o
-   humano. Não é cobrança — é a última chance de resolver o que travou. */
+/* Último toque, a poucos minutos do fim do prazo. É a única mensagem entre o
+   Pix e a vaga sair, então ela é curta: no prazo de 10 minutos não há espaço
+   para conversa, só para destravar o que travou. */
 export const textoLembreteHold = ({ nome, minutos }) =>
-`${String(nome || "").split(" ")[0]}, sua vaga ainda está reservada, mas o prazo termina em ${minutos} minutos. ⏳
+`${String(nome || "").split(" ")[0]}, sua vaga sai da reserva em ${minutos} minuto${minutos === 1 ? "" : "s"}. ⏳
 
-Ficou alguma dúvida sobre o pagamento ou sobre o curso? É só me perguntar por aqui que eu te ajudo agora. 💚`;
+Se o Pix não chegou ou deu algum problema, me fala agora que eu resolvo. 💚`;
 
-// Prazo estourado: a vaga volta para a fila, sem drama e com a porta aberta.
+/* Prazo estourado: a vaga volta para a fila, sem drama e com a porta aberta.
+
+   A última linha não é gentileza à toa — é a informação que evita o pior caso
+   deste fluxo. Com prazo de 10 minutos, é bem possível que ela pague poucos
+   segundos depois de a vaga sair, e o sistema aceita esse pagamento (ver
+   confirmarPagamentoPorTxid). Quem leu que "o dinheiro não se perde" não entra
+   em pânico nem paga duas vezes. */
 export const textoHoldExpirado = ({ nome, quando }) =>
 `${String(nome || "").split(" ")[0]}, o prazo da sua reserva de ${quando} terminou e a vaga voltou para a lista. 😔
 
-Sem problema nenhum: quando quiser, é só me chamar aqui que a gente marca de novo. 💚`;
+Se você acabou de pagar, fica tranquila: o seu dinheiro não se perde. Me chama aqui que eu confirmo e a gente acerta o seu horário. 💚`;
 
 /* Lembrete da aula, na véspera.
 
@@ -207,3 +216,35 @@ export const textoMensalidadeEmAtraso = ({ nome, mes, valor, dias }) =>
 💰 Total com multa e juros: ${valor}
 
 Segue o Pix atualizado logo abaixo. Se já tiver pago, me avisa por aqui que eu confiro. 💚`;
+
+/* ===================== TODO PAGAMENTO É CONFIRMADO =====================
+   Vitor, 02/09/2026. Até esta data, só a MATRÍCULA avisava a aluna quando o Pix
+   caía; mensalidade e aula extra eram baixadas em silêncio. Quem pagava ficava
+   sem saber se deu certo — e a dúvida sempre volta como mensagem para a Inêz
+   ("caiu?"), ou pior, como um segundo pagamento.
+
+   As duas mensagens abaixo fecham isso. Elas são curtas de propósito: pagamento
+   confirmado não é assunto, é alívio. Cada uma diz O QUE foi pago e o que isso
+   destravou — sem pedir nada de volta, porque a aluna acabou de fazer a parte
+   dela.
+
+   `avisarPagamento` no server.js é quem manda; ele sai em silêncio quando o
+   WhatsApp não está configurado ou a aluna não tem telefone. */
+
+// Mensalidade do mês. Diz a competência para não confundir com o mês seguinte.
+export const textoMensalidadePaga = ({ nome, mes, valor }) =>
+`Recebemos, ${String(nome || "").split(" ")[0]}! ✅
+
+🧾 Mensalidade de ${mes}
+💰 ${valor}
+
+Está tudo certo por aqui, nada mais a pagar neste mês. Boas aulas! 🧶💚`;
+
+/* Aula extra: o passe pago é o que libera a marcação, então a mensagem diz o
+   próximo passo. Sem isso a aluna paga e fica esperando algo acontecer. */
+export const textoAulaExtraPaga = ({ nome, valor }) =>
+`Recebemos, ${String(nome || "").split(" ")[0]}! ✅
+
+🎟️ Aula extra${valor ? ` · ${valor}` : ""}
+
+Seu passe está liberado. É só entrar na área do aluno e escolher o dia e o horário da sua aula extra. 💚`;

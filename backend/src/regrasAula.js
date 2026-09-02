@@ -40,9 +40,70 @@
    painel conseguir avisar antes de mandar a requisição. Ao mexer numa regra
    aqui, mexa lá também. */
 
+/* ===================== QUEM AGE EM LOTE, QUEM AGE EM UNIDADE =====================
+   Combinado com o Vitor em 02/09/2026.
+
+   O PAINEL (Inêz) age em LOTE por padrão — incluir, alterar e excluir. O que
+   ela faz num dia ou numa turma vale para as ocorrências seguintes, porque é
+   assim que ela pensa a agenda: "a turma das 09:00 de terça" é a turma, não
+   aquela terça. O horizonte padrão é de 12 meses (52 semanas), o mesmo da grade
+   inicial da mensalista — se os dois números divergirem, a aluna nova ganha uma
+   agenda mais longa que a turma dela e as últimas aulas ficam sem horário.
+
+   O lote é o PADRÃO, não uma obrigação: toda tela do painel mantém a saída
+   "só esta" (o seletor de alcance ao editar, o "Só este" da exclusão, os chips
+   de dia da semana desmarcados ao incluir). Sem essa saída não haveria como
+   consertar uma aula específica sem desfazer a grade inteira.
+
+   O PORTAL (aluna) continua agindo em UNIDADE. Ela marca, desmarca e remarca
+   uma aula por vez. A única exceção é a PRIMEIRA marcação — a matrícula, que
+   monta a grade de 12 meses de uma vez. Depois disso, nunca mais em lote.
+
+   TRÊS AULAS NUNCA ENTRAM NO LOTE, em nenhum dos caminhos: a reposição
+   (PGTO_REPOSICAO), a aula extra (PGTO_EXTRA) e a aula da avulsa/experimental.
+   As três são ocorrências únicas — existem por causa de um crédito, de um
+   pagamento à parte ou de uma visita, e não por causa de uma grade. Copiá-las
+   inventaria aula que ninguém contratou. Quem replica tem que filtrar por
+   PGTO_PLANO em vez de copiar tudo que encontrar na turma.
+
+   Alterar/excluir em lote é diferente de replicar: mover a turma das 09:00 para
+   as 09:30 move junto quem estiver dentro dela, reposição inclusive — a aula
+   continua sendo a mesma, só mudou de hora. O que o lote não faz é CRIAR cópias
+   dessas três. */
+
 // Marca que o backend põe no paymentMethod das aulas regulares do plano. É por
 // ela que a replicação diferencia a grade normal das ocorrências unitárias.
 export const PGTO_PLANO = "Mensalista";
+
+/* Horizonte padrão de tudo que o painel faz em lote. Espelhado em
+   frontend/src/helpers.js (SEMANAS_PADRAO / MESES_PADRAO) — ao mudar aqui,
+   mude lá. 52 semanas ≈ 12 meses. */
+export const SEMANAS_PADRAO = 52;
+export const MESES_PADRAO = 12;
+
+/* ===================== FERIADO NÃO GERA CRÉDITO =====================
+   Vitor, 02/09/2026. Esta regra foi INVERTIDA nesta data — até então, cancelar
+   as aulas de um feriado dava um crédito de reposição para cada mensalista, com
+   o argumento de que feriado é decisão da escola e ninguém deveria perder aula.
+
+   Passa a valer o contrário: a aluna que tinha aula num feriado não ganha
+   crédito nem direito de reposição. O que ela contrata é a GRADE da escola, e a
+   grade não tem aula em feriado — a mensalidade já é calculada sobre os dias em
+   que a porta abre. Creditar o feriado pagaria a aluna duas vezes pelo mesmo
+   dia: uma no preço, outra na reposição.
+
+   Onde isso é aplicado (os três precisam concordar):
+   • concederCredito() no server.js recusa antes de olhar a antecedência. A
+     ordem importa: as regras de janela medem o AVISO da aluna, e responder
+     "avisou tarde demais" para um dia sem aula dá o motivo errado.
+   • POST /api/feriados/:date/cancelar-aulas cancela as aulas e não credita.
+   • scripts/revogar-creditos-feriado.mjs limpa os créditos de feriado que já
+     tinham sido gerados e ainda não foram gastos (os usados ficam: apagá-los
+     deixaria a aula de reposição órfã).
+
+   O que NÃO muda: em feriado continua não existindo horário para marcar, em
+   nenhum caminho — a recusa é de exigirRegras(), antes até do `forcar` da Inêz.
+   Feriado não é regra de plano; é o dia em que a escola não abre. */
 
 /* Aula de reposição (remarcação). É aula ÚNICA: nasce de um crédito gasto e
    nunca é copiada — nem pela replicação da turma, nem pelo agendamento em lote,
@@ -112,6 +173,28 @@ export function prazoLiberacao(date, time, horasMin = REPO_HORAS_MIN) {
 
 // Comparação de texto ISO: 'agora' é o relógio de Brasília, não o UTC do servidor.
 export const liberouATempo = (date, time, agora) => agora <= prazoLiberacao(date, time);
+
+/* Por que uma aula liberada NÃO vira crédito — a parte da decisão que não
+   precisa do banco. `concederCredito` no server.js consulta esta função antes
+   de olhar teto do mês e elegibilidade (essas dependem de contar linhas).
+
+   Devolve "" quando o crédito pode sair, ou o motivo escrito para a aluna.
+
+   A ORDEM É A REGRA, e é por isso que ela mora aqui com teste: o feriado
+   responde ANTES da antecedência. As duas recusas são verdadeiras ao mesmo
+   tempo numa véspera de feriado, e a que a aluna lê muda o sentido — "você
+   avisou tarde" acusa a aluna de algo que não aconteceu, quando o motivo real é
+   que aquele dia não tinha aula nenhuma. Ver o bloco FERIADO NÃO GERA CRÉDITO
+   no topo deste arquivo. */
+export function motivoSemCredito({ nomeFeriado = "", date, time, agora, diaBR = (d) => d }) {
+  if (nomeFeriado)
+    return `${diaBR(date)} é ${nomeFeriado} e a escola não abre — não há aula para repor, então não gera crédito.`;
+  if (!liberouATempo(date, time, agora))
+    return hhmm(time) < REPO_MANHA_ATE
+      ? "Aula da manhã precisa ser liberada até 23:59 do dia anterior para gerar crédito."
+      : `Aviso com menos de ${REPO_HORAS_MIN}h de antecedência não gera crédito de reposição.`;
+  return "";
+}
 
 // 'YYYY-MM-DD' ± n dias, em UTC (o mesmo addDays do server, sem depender dele)
 function somarDias(iso, n) {

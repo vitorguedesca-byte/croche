@@ -7,12 +7,12 @@ import { toast, confirmModal, promptModal } from "./toast.jsx";
 import {
   UNITS, PROFS, TAG_OPTIONS, VALOR_PADRAO, CAPACITY_PADRAO, STATUS, BOOKING_KINDS,
   unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize, faixaHorario, hhmm,
-  slotById, slotBookings, slotBookingsAll, slotCapacity, slotWaitlist, clientAttendance, nomeCurto,
+  slotById, slotBookings, slotBookingsAll, slotCapacity, slotWaitlist, clientAttendance, nomeCurto, irmasNaAgenda,
   marcadoresDoAluno,
   bookingKind, bookingKindDe, feriadoDe, feriadoBaseDe, MARCAS_MATRICULA, ehPagamentoDeMatricula, situacaoMensalidade, clientOfBooking,
   competenciasDoAluno, compLabel, mensalidadeDe, matriculaISO,
   compAtual, addComp, precoDaComp, mensalidadeDaComp,
-  WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays,
+  WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays, SEMANAS_PADRAO, MESES_PADRAO,
   tipoMensalista, TIPO_MENSALISTA_LABEL,
 } from "./helpers.js";
 
@@ -304,20 +304,37 @@ export function SlotDetail({ slotId }) {
   const wl = slotWaitlist(slot);
 
   const mark = (b, val) => run(api.updateBooking(b.id, { attendance: b.attendance === val ? "" : val }));
-  const saveCap = () => {
+  /* A capacidade também é em lote: o tamanho da sala é da turma, não do dia.
+     Como toda ação do painel, ela pergunta antes e mantém a saída "só esta".
+     Datas cujas reservas já passam da nova capacidade ficam de fora sozinhas —
+     o backend as devolve em `apertadas` em vez de derrubar a alteração toda. */
+  const saveCap = async () => {
     if (capInput < occ) return toast(`A capacidade (${capInput}) não pode ser menor que as ${occ} reservas já feitas.`, "error");
-    run(api.updateSlotCapacity(slotId, capInput));
+    const irmas = irmasNaAgenda(data, slot);
+    let lote = false;
+    if (irmas.length) {
+      const ans = await confirmModal({
+        title: "Capacidade em lote",
+        message: `Há mais ${irmas.length} ocorrência(s) futura(s) desta turma na agenda.\n\nAplicar a capacidade de ${capInput} a todas?`,
+        confirmLabel: `Aplicar às ${irmas.length + 1}`,
+        altLabel: "Só esta",
+      });
+      if (!ans) return;
+      lote = ans !== "alt";
+    }
+    const r = await run(api.updateSlotCapacity(slotId, capInput, lote));
+    const apertadas = r?.apertadas || [];
+    if (lote)
+      toast(
+        `Capacidade aplicada a ${r?.alteradas ?? irmas.length + 1} turma(s).` +
+        (apertadas.length ? `\n${apertadas.length} data(s) ficaram de fora: já têm mais reservas que isso.` : "")
+      );
   };
   const del = async () => {
     // Exclusão em lote "pega-tudo": além dos criados juntos (mesma série),
     // considera TODOS os horários futuros equivalentes — mesma unidade, hora e
     // dia da semana — mesmo que tenham sido criados em levas separadas.
-    const t = todayISO();
-    const dow = new Date(slot.date + "T00:00").getDay();
-    const sibs = data.slots.filter((s) => s.id !== slot.id && s.date >= t && (
-      (slot.seriesId && s.seriesId === slot.seriesId) ||
-      (s.unit === slot.unit && s.time === slot.time && new Date(s.date + "T00:00").getDay() === dow)
-    ));
+    const sibs = irmasNaAgenda(data, slot);
     if (!sibs.length) {
       const msg = occ > 0
         ? `Este horário tem ${occ} reserva(s). Excluir o horário também remove essas reservas. Continuar?`
@@ -838,10 +855,34 @@ export function BookingForm({ slotId }) {
   const [unit, setUnit] = useState(slot ? slot.unit : meta.units[0]);
   const [date, setDate] = useState(slot ? slot.date : todayISO());
   const [time, setTime] = useState(slot ? slot.time : "09:00");
-  // repetição (igual à criação de horários): dias da semana × nº de semanas
-  const [weekdays, setWeekdays] = useState(() => new Set());
-  const [weeks, setWeeks] = useState(4);
-  const toggleWd = (i) => setWeekdays((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
+  /* Repetição (igual à criação de horários): dias da semana × nº de semanas.
+     Nasce EM LOTE — o dia da semana da data escolhida já vem marcado e o
+     horizonte é o padrão de 12 meses. A marcação de uma aula só continua a um
+     clique de distância: basta desmarcar o dia. Ver SEMANAS_PADRAO.
+
+     Com uma exceção, que é o combinado: só a MENSALISTA FIXA tem grade para
+     replicar. A avulsa vem para uma aula, e a mensalista de escala marca cada
+     ocorrência sozinha pelo portal — pré-marcar 52 datas para qualquer uma das
+     duas inventaria aula que ninguém contratou. Enquanto não há aluna escolhida
+     o lote fica ligado, porque a marcação nova do painel é da grade; escolher
+     uma avulsa ou uma aluna de escala desliga (ver o efeito mais abaixo). */
+  const [weekdays, setWeekdays] = useState(() => new Set([dowMon(slot ? slot.date : todayISO())]));
+  const [weeks, setWeeks] = useState(SEMANAS_PADRAO);
+  /* Enquanto a Inêz não mexer nos dias, eles seguem a data escolhida — trocar
+     a data para uma quinta e continuar repetindo na terça seria uma agenda que
+     ninguém pediu. Depois do primeiro toque nos chips, a escolha dela manda. */
+  const mexeuNosDias = useRef(false);
+  const toggleWd = (i) => {
+    mexeuNosDias.current = true;
+    setWeekdays((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
+  };
+  /* Quem manda no padrão: a data escolhida diz QUAL dia repetir, a aluna diz SE
+     repete. Enquanto a Inêz não tocar nos chips, os dois seguem sozinhos. */
+  const tipo = tipoMensalista(selectedClient);
+  const temGrade = !selectedClient || tipo === "fixo";
+  useEffect(() => {
+    if (!mexeuNosDias.current) setWeekdays(temGrade ? new Set([dowMon(date)]) : new Set());
+  }, [date, temGrade]);
   const dates = weekdays.size ? datesForWeekdays(date, [...weekdays], weeks) : [date];
   const repetindo = dates.length > 1;
 
@@ -938,7 +979,7 @@ export function BookingForm({ slotId }) {
       <div className="field">
         <label>
           Repetir nos dias da semana{" "}
-          <span className="field-subtext">(deixe em branco para marcar só na data)</span>
+          <span className="field-subtext">(desmarque tudo para marcar só nesta data)</span>
         </label>
         <WeekdayChips selected={weekdays} onToggle={toggleWd} />
         {weekdays.size > 0 && (
@@ -957,13 +998,25 @@ export function BookingForm({ slotId }) {
         )}
       </div>
 
-      {repetindo && (
+      {repetindo ? (
         <div className="repeat-info-box">
           <div className="repeat-info-title">
             <span>📅</span> <b>{dates.length} marcações recorrentes agendadas</b>
           </div>
           <div className="repeat-info-desc">
             Serão criadas aulas às <b>{time}</b> a partir de <b>{fmtDate(date)}</b>. Turmas lotadas e aulas já marcadas serão puladas automaticamente.
+          </div>
+        </div>
+      ) : (
+        <div className="repeat-info-box">
+          <div className="repeat-info-title"><span>📌</span> <b>Só nesta data</b></div>
+          <div className="repeat-info-desc">
+            Vai marcar uma aula só, em <b>{fmtDate(date)}</b>.{" "}
+            {tipo === "escala"
+              ? <>{selectedClient.name} é mensalista de <b>escala</b> — ela marca cada aula pelo portal, por isso a repetição não vem ligada.</>
+              : selectedClient && !tipo
+                ? <>{selectedClient.name} não é mensalista: aula avulsa não tem grade para repetir.</>
+                : <>Para voltar ao padrão da escola, marque o dia da semana acima.</>}
           </div>
         </div>
       )}
@@ -1003,9 +1056,18 @@ export function SlotForm({ presetDate, presetUnit }) {
   const [date, setDate] = useState(presetDate || todayISO());
   const [time, setTime] = useState("09:00");
   const [capacity, setCapacity] = useState(meta.capacidadePadrao);
-  const [weekdays, setWeekdays] = useState(() => new Set());
-  const [weeks, setWeeks] = useState(4);
-  const toggleWd = (i) => setWeekdays((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
+  // Nasce em lote, como todo o resto do painel: o dia da semana da data já vem
+  // marcado, por 12 meses. Desmarcar tudo cria o horário avulso. Ver SEMANAS_PADRAO.
+  const [weekdays, setWeekdays] = useState(() => new Set([dowMon(presetDate || todayISO())]));
+  const [weeks, setWeeks] = useState(SEMANAS_PADRAO);
+  const mexeuNosDias = useRef(false);
+  const toggleWd = (i) => {
+    mexeuNosDias.current = true;
+    setWeekdays((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
+  };
+  useEffect(() => {
+    if (!mexeuNosDias.current) setWeekdays(new Set([dowMon(date)]));
+  }, [date]);
 
   const dates = weekdays.size ? datesForWeekdays(date, [...weekdays], weeks) : [date];
   const save = async () => {
@@ -1035,7 +1097,7 @@ export function SlotForm({ presetDate, presetUnit }) {
       </div>
       <div className="field"><label>Capacidade da turma (vagas)</label><input type="number" min="1" value={capacity} onChange={(e) => setCapacity(parseInt(e.target.value, 10) || 1)} /></div>
       <div className="field">
-        <label>Repetir nos dias da semana <span className="help" style={{ fontWeight: 400 }}>(deixe em branco para criar só na data)</span></label>
+        <label>Repetir nos dias da semana <span className="help" style={{ fontWeight: 400 }}>(desmarque tudo para criar só nesta data)</span></label>
         <WeekdayChips selected={weekdays} onToggle={toggleWd} />
         {weekdays.size > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: ".6rem", marginTop: ".7rem" }}>
@@ -1047,7 +1109,7 @@ export function SlotForm({ presetDate, presetUnit }) {
         <div className="help" style={{ marginTop: ".5rem" }}>
           {weekdays.size
             ? `Serão criados ${dates.length} horário(s) às ${time}. Horários já existentes são ignorados.`
-            : "Ex.: marque Seg e Qua por 4 semanas para criar 8 horários. Horários já existentes são ignorados."}
+            : `Vai criar um horário só, nesta data. Marque o dia da semana para repetir a turma pelos próximos ${MESES_PADRAO} meses.`}
         </div>
       </div>
     </Modal>
@@ -1065,21 +1127,45 @@ export function EditSlotForm({ slot }) {
   const [prof, setProf] = useState(slot.prof || "");
   const [date, setDate] = useState(slot.date);
   const [time, setTime] = useState(hhmm(slot.time) || "09:00");
+  /* Editar é em LOTE por padrão, como incluir e excluir: mudar "a turma das
+     09:00 de terça" quer dizer a turma, não aquela terça. O escape é este
+     seletor. Mudar a DATA é a única alteração que só existe em unidade — uma
+     data nova é um dia da semana novo, e o backend recusa o lote nesse caso. */
+  const [emLote, setEmLote] = useState(true);
+  const mudouData = date !== slot.date;
+
+  /* As mesmas irmãs que o backend vai alcançar (ver irmasDaTurma no server.js).
+     Contamos aqui só para dizer à Inêz quantas turmas ela vai mexer. */
+  const irmas = irmasNaAgenda(data, slot);
+  const loteVale = emLote && !mudouData && irmas.length > 0;
 
   const mudou = unit !== slot.unit || (prof || "") !== (slot.prof || "") || date !== slot.date || hhmm(slot.time) !== time;
 
   const save = async () => {
     if (!time) return toast("Informe o horário.", "error");
-    if (bks.length) {
+    if (bks.length || loteVale) {
+      const reservasLote = loteVale
+        ? irmas.reduce((n, s) => n + slotBookings(data, s.id).length, 0)
+        : 0;
       const ok = await confirmModal({
-        title: "Editar turma",
-        message: `Esta turma tem ${bks.length} reserva(s).\n\nAo salvar, todas serão movidas para o novo dia/horário/unidade. Continuar?`,
-        confirmLabel: "Salvar e mover",
+        title: loteVale ? "Editar turma em lote" : "Editar turma",
+        message: loteVale
+          ? `A alteração vale para esta e mais ${irmas.length} ocorrência(s) futura(s) desta turma.` +
+            (bks.length + reservasLote > 0
+              ? `\n\n${bks.length + reservasLote} reserva(s) ao todo serão movidas junto para o novo horário/unidade.`
+              : "") +
+            `\n\nContinuar?`
+          : `Esta turma tem ${bks.length} reserva(s).\n\nAo salvar, todas serão movidas para o novo dia/horário/unidade. Continuar?`,
+        confirmLabel: loteVale ? `Salvar nas ${irmas.length + 1}` : "Salvar e mover",
       });
       if (!ok) return;
     }
-    await run(api.updateSlot(slot.id, { unit, prof, date, time }));
-    toast("Turma atualizada. 💚");
+    const r = await run(api.updateSlot(slot.id, { unit, prof, date, time }, loteVale));
+    const apertadas = r?.apertadas || [];
+    toast(
+      (loteVale ? `${r?.alteradas ?? irmas.length + 1} turma(s) atualizada(s). 💚` : "Turma atualizada. 💚") +
+      (apertadas.length ? `\n${apertadas.length} data(s) ficaram de fora: já têm mais reservas que a nova capacidade.` : "")
+    );
     open(<SlotDetail slotId={slot.id} />);
   };
 
@@ -1107,7 +1193,33 @@ export function EditSlotForm({ slot }) {
         <div className="field"><label>Data</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
         <div className="field"><label>Horário</label><input type="time" value={time} onChange={(e) => setTime(e.target.value)} /></div>
       </div>
-      <div className="help">Só altera <b>esta</b> turma. Para mudar várias de uma vez, exclua e recrie com a replicação, ou use “Replicar”.</div>
+      <div className="field" style={{ marginTop: ".2rem" }}>
+        <label>Alcance da alteração</label>
+        {mudouData ? (
+          <div className="help">
+            Você mudou a <b>data</b>: isso move <b>só esta aula</b>. Uma data nova é um dia da semana novo —
+            aplicar isso à turma inteira empilharia as próximas ocorrências todas no mesmo dia.
+          </div>
+        ) : irmas.length === 0 ? (
+          <div className="help">Esta é a única ocorrência futura desta turma na agenda. A alteração vale só para ela.</div>
+        ) : (
+          <>
+            <Select
+              value={emLote ? "lote" : "uma"}
+              onChange={(v) => setEmLote(v === "lote")}
+              options={[
+                { value: "lote", label: `Esta e as próximas (${irmas.length + 1})`, icon: "🗓" },
+                { value: "uma", label: "Só esta aula", icon: "📌" },
+              ]}
+            />
+            <div className="help" style={{ marginTop: ".5rem" }}>
+              {emLote
+                ? <>Alcança as ocorrências <b>futuras</b> de {capitalize(new Date(slot.date + "T00:00").toLocaleDateString("pt-BR", { weekday: "long" }))} às {hhmm(slot.time)} em {slot.unit}. Aulas já realizadas ficam como estão.</>
+                : <>Muda só {fmtDate(slot.date)}. As outras ocorrências da turma continuam no horário atual.</>}
+            </div>
+          </>
+        )}
+      </div>
     </Modal>
   );
 }
@@ -1119,7 +1231,10 @@ export function ReplicateTurmaForm({ slot = null, date: presetDate, unit: preset
   const date = slot?.date || presetDate;
   const unit = slot?.unit || presetUnit;
   const [scope, setScope] = useState(slot ? "class" : "day");
-  const [repetitions, setRepetitions] = useState(4);
+  /* Horizonte padrão do painel: 12 meses ≈ 52 semanas (ver SEMANAS_PADRAO). O
+     escopo inicial ("class" ou "day") conta em SEMANAS; só "month" conta em
+     meses, e a troca de escopo reajusta a unidade logo abaixo. */
+  const [repetitions, setRepetitions] = useState(SEMANAS_PADRAO);
   const [comAlunas, setComAlunas] = useState(true);
   const [busy, setBusy] = useState(false);
 
@@ -1170,7 +1285,7 @@ export function ReplicateTurmaForm({ slot = null, date: presetDate, unit: preset
     } catch { /* o run já avisou do erro */ } finally { setBusy(false); }
   };
 
-  const atalhos = scope === "month" ? [1, 3, 6, 12] : [1, 2, 4, 8, 12];
+  const atalhos = scope === "month" ? [1, 3, 6, MESES_PADRAO] : [1, 4, 12, 26, SEMANAS_PADRAO];
   return (
     <Modal title="Replicação" footer={<>
       <button className="btn ghost" onClick={() => slot ? open(<SlotDetail slotId={slot.id} />) : close()}>← Voltar</button>
@@ -1190,7 +1305,7 @@ export function ReplicateTurmaForm({ slot = null, date: presetDate, unit: preset
           {escopos.map(([value, label, hint]) => (
             <button key={value} type="button" disabled={value === "class" && !slot}
               className={`wd-chip ${scope === value ? "on" : ""}`}
-              title={hint} onClick={() => { setScope(value); setRepetitions(value === "month" ? 1 : 4); }}>
+              title={hint} onClick={() => { setScope(value); setRepetitions(value === "month" ? MESES_PADRAO : SEMANAS_PADRAO); }}>
               {label}
             </button>
           ))}
@@ -2476,7 +2591,11 @@ export function BatchBookForm({ client }) {
   const { open, close } = useModal();
   const meta = data.meta;
   const [unit, setUnit] = useState(client.unit || meta.units[0]);
-  const [weeks, setWeeks] = useState(4);
+  /* A primeira marcação da aluna é a única do lado da aluna que vai em lote, e
+     ela nasce com o horizonte da grade da escola: 12 meses. Se aqui fosse menor
+     que a replicação da turma, a aluna nova acabaria com a agenda terminando
+     antes da turma dela. Ver SEMANAS_PADRAO. */
+  const [weeks, setWeeks] = useState(SEMANAS_PADRAO);
   // turmas escolhidas: chave "dow|HH:MM"
   const [picked, setPicked] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
@@ -3077,9 +3196,10 @@ export function ClientForm({ client }) {
 
 /* ================= Aulas marcadas num dia que virou feriado =================
    Cadastrar o feriado não cancela nada: quem decide é a Inêz, olhando quem
-   seria atingida. O cancelamento em massa gera crédito de reposição para as
-   mensalistas — feriado é decisão da escola, ninguém perde aula porque a porta
-   não abriu. A outra saída é fechar aqui e remarcar turma por turma. */
+   seria atingida. O cancelamento em massa NÃO gera crédito de reposição
+   (Vitor, 02/09/2026): a mensalidade já é calculada sobre os dias em que a
+   escola abre, e creditar o feriado pagaria a aluna duas vezes pelo mesmo dia.
+   A outra saída é fechar aqui e remarcar turma por turma. */
 export function FeriadoAulas({ date, unit, nome, aulas = [] }) {
   const { reload } = useStore();
   const { close } = useModal();
@@ -3090,8 +3210,8 @@ export function FeriadoAulas({ date, unit, nome, aulas = [] }) {
     const ok = await confirmModal({
       title: "Cancelar as aulas do feriado",
       message: `${aulas.length} aula(s) de ${fmtDateLong(date)} serão canceladas.\n\n` +
-        "Cada mensalista ganha um crédito de reposição — o feriado é decisão da escola, " +
-        "então ninguém perde a aula. Aula extra e experimental não geram crédito.",
+        "Feriado não gera crédito de reposição: a mensalidade já considera os dias em que a escola abre, " +
+        "então não há aula perdida para repor.",
       confirmLabel: "Cancelar as aulas",
       tone: "danger",
     });
@@ -3100,7 +3220,7 @@ export function FeriadoAulas({ date, unit, nome, aulas = [] }) {
     try {
       const r = await api.feriados.cancelarAulas(date, unit);
       await reload();
-      toast(`${r.canceladas} aula(s) cancelada(s) · ${r.creditos.length} crédito(s) de reposição.`, "ok");
+      toast(`${r.canceladas} aula(s) cancelada(s). Feriado não gera crédito de reposição.`, "ok");
       close();
     } catch (e) {
       toast(e.message || "Não foi possível cancelar.", "error");
@@ -3114,13 +3234,14 @@ export function FeriadoAulas({ date, unit, nome, aulas = [] }) {
       footer={<>
         <button className="btn ghost" onClick={close}>Deixar como está</button>
         <button className="btn danger" onClick={cancelarTudo} disabled={busy}>
-          {busy ? "Cancelando…" : `Cancelar ${aulas.length} aula(s) e dar crédito`}
+          {busy ? "Cancelando…" : `Cancelar ${aulas.length} aula(s)`}
         </button>
       </>}
     >
       <p className="help" style={{ marginBottom: ".7rem" }}>
         O dia virou feriado e a escola não abre, mas estas aulas já estavam marcadas.
-        Cancelar aqui avisa a agenda e devolve o crédito de reposição para as mensalistas.
+        Cancelar aqui limpa a agenda do dia. <b>Nenhuma delas gera crédito de reposição</b> —
+        a mensalidade já considera os dias em que a escola abre.
       </p>
       <div className="tv-lista">
         {aulas.map((b) => (
@@ -3128,9 +3249,7 @@ export function FeriadoAulas({ date, unit, nome, aulas = [] }) {
             <span className="tv-nm">{hhmm(b.time)} · {b.clientName}</span>
             <span className="tv-sp">
               <span className="badge b-muted">📍 {b.unit}</span>
-              {b.paymentMethod === "Mensalista"
-                ? <span className="badge b-ok">ganha crédito</span>
-                : <span className="badge b-muted">sem crédito</span>}
+              <span className="badge b-muted">sem crédito</span>
             </span>
           </div>
         ))}

@@ -83,6 +83,17 @@ export const WEEKDAYS_PT = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "S
 export const WEEKDAYS_SHORT = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
 export const dowMon = (iso) => (new Date(iso + "T00:00").getDay() + 6) % 7;
 
+/* Horizonte padrão de tudo que a ADMIN faz no painel (Vitor, 02/09/2026).
+   O painel age em LOTE por padrão: incluir, alterar e excluir valem para as
+   próximas ocorrências da turma, não para a data isolada em que a Inêz clicou.
+   52 semanas ≈ 12 meses, o mesmo horizonte da grade inicial da mensalista — as
+   duas coisas têm que bater, senão a aluna nova ganha uma agenda mais longa que
+   a turma dela e as últimas aulas ficam sem horário.
+
+   O lote é o padrão, não uma obrigação: toda tela mantém a saída "só esta". */
+export const SEMANAS_PADRAO = 52;
+export const MESES_PADRAO = 12;
+
 // horário de funcionamento: 7 posições (Seg..Dom), cada uma { open, from, to }
 export const DEFAULT_HORARIO = WEEKDAYS_PT.map((_, i) => ({ open: i < 6, from: "09:00", to: "17:00" }));
 // Formato compacto guardado no banco: array de 7 posições (Seg..Dom),
@@ -159,6 +170,27 @@ export const slotBookings = (data, slotId) =>
   data.bookings
     .filter((b) => b.slotId === slotId && b.status !== "cancelada")
     .sort((a, b) => a.time.localeCompare(b.time));
+/* As outras ocorrências FUTURAS da mesma turma — as que o lote do painel
+   alcança ao incluir, alterar ou excluir. Espelho de irmasDaTurma() no
+   backend/src/server.js: mesma unidade, hora e dia da semana, ou mesma série.
+   Os dois critérios somam porque nenhum basta sozinho — o seriesId perde as
+   turmas criadas em levas separadas, e unidade+hora+dia perde as que já foram
+   movidas para outro horário. Mexeu num, mexa no outro.
+
+   Passado nunca entra: aula que já aconteceu é histórico.
+
+   A hora passa por hhmm() dos dois lados porque `time` é texto livre no banco
+   (ver a migration de horários HH:MM) — "9:00" e "09:00" são a mesma turma. */
+export const irmasNaAgenda = (data, slot) => {
+  if (!slot) return [];
+  const t = todayISO();
+  const dow = new Date(slot.date + "T00:00").getDay();
+  const hora = hhmm(slot.time);
+  return (data.slots || []).filter((s) => s.id !== slot.id && s.date >= t && (
+    (slot.seriesId && s.seriesId === slot.seriesId) ||
+    (s.unit === slot.unit && hhmm(s.time) === hora && new Date(s.date + "T00:00").getDay() === dow)
+  ));
+};
 export const slotCapacity = (s) => (s ? s.capacity || 1 : 1);
 export const slotOccupancy = (data, slotId) => slotBookings(data, slotId).length;
 export const slotIsFull = (data, s) => slotOccupancy(data, s.id) >= slotCapacity(s);

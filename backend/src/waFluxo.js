@@ -91,6 +91,61 @@ export function telefoneBR(numero) {
   return `(${ddd}) ${resto.slice(0, resto.length - 4)}-${resto.slice(-4)}`;
 }
 
+/* ============ A VAGA É SEGURADA POR 10 MINUTOS, E TODO PAGAMENTO AVISA ============
+   Vitor, 02/09/2026. Duas regras que andam juntas.
+
+   1) O prazo caiu de 1 hora para HOLD_MIN = 10 minutos (a constante mora no
+      server.js, junto de quem cria a reserva). Pix cai em segundos; o que a
+      hora inteira segurava era vaga parada de quem já tinha desistido,
+      enquanto a próxima aluna via a turma como lotada. A HOLD_AVISO_MIN = 3
+      minutos do fim sai um último toque oferecendo reenviar o Pix — três, não
+      trinta: em dez minutos, lembrete cedo demais chega colado na mensagem do
+      Pix e vira cobrança. A rodada que varre os prazos passou a rodar de minuto
+      em minuto; num prazo de dez, uma varredura de cinco soltaria a vaga com
+      metade do prazo de atraso.
+
+      O prazo curto SÓ é seguro por causa da rede que já existia, e ela não pode
+      ser removida junto: quem paga depois de o prazo estourar não perde o
+      dinheiro. O Sicredi é consultado antes de a vaga sair e de novo quando o
+      pagamento chega — se ainda houver lugar, a aula volta; se não houver, o
+      pagamento fica registrado e a Inêz remarca. E o texto de expiração diz
+      isso à aluna, para ela não pagar duas vezes por susto.
+
+   2) TODO pagamento confirmado manda mensagem. Antes, só a matrícula avisava;
+      mensalidade e aula extra eram baixadas em silêncio, e a dúvida ("caiu?")
+      voltava como trabalho para a Inêz — ou como um segundo pagamento. Ver
+      `avisarPagamento` no server.js e os textos em textosEscola.js.
+
+   A parte da (1) que não depende do banco — QUANDO expirar e quando avisar —
+   está logo abaixo, com teste. O resto (consultar o Sicredi, soltar a vaga,
+   mandar a mensagem) fica no server.js. */
+
+export const HOLD_MIN = 10;       // quanto tempo a vaga fica segurada
+export const HOLD_AVISO_MIN = 3;  // último toque, a esta distância do fim
+export const RODADA_HOLD_MIN = 1; // de quanto em quanto tempo a varredura roda
+
+/* O que fazer com uma reserva segurada, agora: "expirar", "avisar" ou
+   "esperar". `holdUntil` é o instante em que o prazo acaba.
+
+   Mora aqui porque a relação entre os três números acima é frágil de um jeito
+   que não dá erro: se a varredura rodar mais espaçada que HOLD_AVISO_MIN, o
+   aviso dos 3 minutos simplesmente não sai em algumas reservas — ninguém vê,
+   e a aluna perde a vaga sem o último toque. O teste prende isso. */
+export function acaoDaReserva({ holdUntil, holdNudged = false }, agora = Date.now()) {
+  /* Sem prazo, nada a fazer. O teste de nulo vem ANTES do Date porque
+     `new Date(null)` é 1970 — data válida, no passado, que faria a reserva ser
+     "expirada" na primeira varredura. A rodada filtra por holdUntil não-nulo,
+     mas essa é a proteção de quem chama; a função não pode depender dela. */
+  if (holdUntil === null || holdUntil === undefined || holdUntil === "")
+    return { acao: "esperar", faltam: 0 };
+  const fim = new Date(holdUntil).getTime();
+  if (!Number.isFinite(fim)) return { acao: "esperar", faltam: 0 };
+  const faltam = Math.round((fim - agora) / 60_000);
+  if (agora >= fim) return { acao: "expirar", faltam: 0 };
+  if (!holdNudged && faltam <= HOLD_AVISO_MIN) return { acao: "avisar", faltam: Math.max(1, faltam) };
+  return { acao: "esperar", faltam };
+}
+
 /* A conversa expira em 12 horas de silêncio DELA.
 
    O horário que ela escolheu de manhã pode ter lotado à noite; retomar do meio

@@ -5,7 +5,7 @@ import {
   somarComp, diaDoMes,
   encargosDaMensalidade, diasEntreISO, MULTA_ATRASO_REAIS, JUROS_DIA_PERCENTUAL,
   primeiroPagamento, mensalidadeDoPagamento,
-  prazoLiberacao, liberouATempo, REPO_HORAS_MIN,
+  prazoLiberacao, liberouATempo, REPO_HORAS_MIN, motivoSemCredito,
 } from "./src/regrasAula.js";
 
 let falhas = 0;
@@ -262,6 +262,30 @@ ok(liberouATempo("2026-09-10", "15:00", "2026-09-10T09:01:00") === false, "um mi
 ok(liberouATempo("2026-09-10", "09:00", "2026-09-09T23:59:00") === true, "manhã: véspera às 23:59 vale");
 ok(liberouATempo("2026-09-10", "09:00", "2026-09-10T06:00:00") === false, "manhã: no próprio dia não vale");
 ok(REPO_HORAS_MIN === 6, "a antecedência prometida continua sendo 6 horas");
+
+/* FERIADO NÃO GERA CRÉDITO (Vitor, 02/09/2026) — regra invertida nesta data.
+   O que este bloco prende não é só o "não": é a ORDEM. Numa véspera de feriado
+   as duas recusas são verdadeiras ao mesmo tempo, e responder "você avisou
+   tarde" para um dia em que a escola nem abriria acusa a aluna de algo que não
+   aconteceu. O feriado tem que falar primeiro. */
+console.log("\n— feriado não gera crédito —");
+const semCred = (o) => motivoSemCredito({ agora: "2026-09-10T08:00:00", ...o });
+
+ok(semCred({ date: "2026-09-10", time: "15:00" }) === "",
+  "dia comum, avisando a tempo: o crédito sai");
+ok(semCred({ date: "2026-09-07", time: "15:00", nomeFeriado: "Independência" }) !== "",
+  "feriado não gera crédito");
+ok(semCred({ date: "2026-09-07", time: "15:00", nomeFeriado: "Independência" }).includes("Independência"),
+  "o motivo diz qual feriado é");
+/* Aviso em cima da hora E feriado: as duas recusas valem, mas quem responde é
+   o feriado. Se esta trocar de lado, a aluna leva a culpa por um dia sem aula. */
+ok(semCred({ date: "2026-09-07", time: "09:00", nomeFeriado: "Independência", agora: "2026-09-07T08:00:00" })
+     .includes("não abre"),
+  "feriado responde ANTES da antecedência, mesmo com aviso em cima da hora");
+ok(semCred({ date: "2026-09-10", time: "09:00", agora: "2026-09-10T06:00:00" }).includes("23:59"),
+  "sem feriado, a recusa volta a ser a da antecedência");
+ok(semCred({ date: "2026-09-10", time: "15:00", agora: "2026-09-10T09:01:00" }).includes("6h"),
+  "tarde: a recusa cita as 6 horas prometidas");
 
 console.log(falhas ? `\n${falhas} FALHA(S)` : "\nTodos os casos passaram.");
 process.exit(falhas ? 1 : 0);

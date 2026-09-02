@@ -698,7 +698,8 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
       title: "Confirmar matrícula",
       message: `Plano de ${freq}x por semana — ${money(planos.find((p) => p.freq === freq).valor)} por mês.\n\n` +
         `Sua grade semanal:\n${resumo}\n\n` +
-        `Esses horários serão reservados automaticamente por 12 meses. Feriados sem aula serão pulados.`,
+        `Esses horários serão reservados automaticamente por 12 meses. Em feriado a escola não abre, ` +
+        `então esses dias ficam de fora da grade — eles não geram crédito de reposição.`,
       confirmLabel: "Confirmar",
     }))) return;
     setBusy(true);
@@ -725,7 +726,7 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
       {resultado.grade?.total > 0 && (
         <div className="pt-fc-resume">
           📅 <b>{resultado.grade.total} aulas regulares reservadas</b> para os próximos 12 meses.
-          {resultado.grade.feriados?.length ? <> {resultado.grade.feriados.length} data(s) de feriado ficaram sem aula.</> : null}
+          {resultado.grade.feriados?.length ? <> {resultado.grade.feriados.length} data(s) de feriado ficaram sem aula — nesses dias a escola não abre.</> : null}
         </div>
       )}
       <div className="pt-pay">

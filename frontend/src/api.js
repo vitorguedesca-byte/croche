@@ -58,8 +58,11 @@ export const api = {
   getState: () => req("GET", "/api/state"),
 
   createSlot: (data) => req("POST", "/api/slots", data),
-  updateSlotCapacity: (id, capacity) => req("PATCH", `/api/slots/${id}`, { capacity }),
-  updateSlot: (id, data) => req("PATCH", `/api/slots/${id}`, data),
+  // `lote` (padrão do painel): a alteração alcança as ocorrências futuras
+  // equivalentes da turma — mesma unidade, hora e dia da semana. Sem ele, muda
+  // só esta aula. Mudança de data nunca vai em lote (o backend recusa).
+  updateSlotCapacity: (id, capacity, lote) => req("PATCH", `/api/slots/${id}${lote ? "?match=1" : ""}`, { capacity }),
+  updateSlot: (id, data, lote) => req("PATCH", `/api/slots/${id}${lote ? "?match=1" : ""}`, data),
   // repete a turma inteira (horário + alunas) nas próximas `weeks` semanas
   replicateSlot: (id, weeks, alunas = true) => req("POST", `/api/slots/${id}/replicate`, { weeks, alunas }),
   replicateAgenda: (data) => req("POST", "/api/agenda/replicate", data),
