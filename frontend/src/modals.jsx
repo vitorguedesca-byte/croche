@@ -910,12 +910,13 @@ export function BookingForm({ slotId }) {
     close();
     if (repetindo) {
       const p = r?.pulos || {};
-      const puladas = (p.lotada || 0) + (p.jaMarcada || 0);
+      const puladas = (p.lotada || 0) + (p.jaMarcada || 0) + (p.liberada || 0);
       const fer = r?.feriados?.length || 0;
       toast(
         `✅ ${r?.created?.length ?? 0} aula(s) marcada(s).` +
         (puladas
-          ? `\nPuladas: ${p.lotada || 0} turma(s) lotada(s) · ${p.jaMarcada || 0} já marcada(s).`
+          ? `\nPuladas: ${p.lotada || 0} turma(s) lotada(s) · ${p.jaMarcada || 0} já marcada(s)` +
+            (p.liberada ? ` · ${p.liberada} liberada(s) pela aluna` : "") + "."
           : "") +
         (fer ? `\n${fer} dia(s) em feriado — a escola não abre.` : "")
       );
@@ -2617,14 +2618,20 @@ export function BatchBookForm({ client }) {
       });
 
     const minhas = data.bookings.filter((b) => b.clientName === client.name && b.status !== "cancelada");
+    /* Datas que ela LIBEROU nesta turma. O backend não remarca aula liberada
+       (situacaoNaTurma), então contá-las como agendáveis prometia na tela um
+       número de aulas que nunca seria criado. */
+    const liberadas = data.bookings.filter((b) => b.clientName === client.name && b.status === "cancelada");
 
     return [...map.values()]
       .map((g) => {
         const noPeriodo = new Set(datesForWeekdays(t, [g.dow], weeks));
         const relevantes = g.slots.filter((s) => noPeriodo.has(s.date));
-        let ok = 0, cheias = 0, jaAgendadas = 0;
+        let ok = 0, cheias = 0, jaAgendadas = 0, jaLiberadas = 0;
+        const mesmaAula = (b, s) => b.date === s.date && b.time === s.time && b.unit === s.unit;
         relevantes.forEach((s) => {
-          if (minhas.some((b) => b.date === s.date && b.time === s.time && b.unit === s.unit)) jaAgendadas++;
+          if (minhas.some((b) => mesmaAula(b, s))) jaAgendadas++;
+          else if (liberadas.some((b) => mesmaAula(b, s))) jaLiberadas++;
           else if (slotBookings(data, s.id).length >= slotCapacity(s)) cheias++;
           else ok++;
         });
@@ -2633,7 +2640,7 @@ export function BatchBookForm({ client }) {
         const proxVagas = prox ? slotCapacity(prox) - slotBookings(data, prox.id).length : null;
         const proxCap = prox ? slotCapacity(prox) : null;
         const prof = prox?.prof || g.slots[0]?.prof || "";
-        return { ...g, total: relevantes.length, ok, cheias, jaAgendadas, prox, proxVagas, proxCap, prof, datas: relevantes.map((s) => s.date) };
+        return { ...g, total: relevantes.length, ok, cheias, jaAgendadas, jaLiberadas, prox, proxVagas, proxCap, prof, datas: relevantes.map((s) => s.date) };
       })
       .filter((g) => g.total > 0)
       .sort((a, b) => a.dow - b.dow || a.time.localeCompare(b.time));
@@ -2654,18 +2661,19 @@ export function BatchBookForm({ client }) {
         porHorario.get(g.time).push(...g.datas);
       });
       let agendadas = 0;
-      const p = { semTurma: 0, cheia: 0, jaAgendado: 0, feriado: 0 };
+      const p = { semTurma: 0, cheia: 0, jaAgendado: 0, feriado: 0, liberada: 0 };
       for (const [time, datas] of porHorario) {
         const r = await run(api.batchBook(client.id, { unit, time, dates: [...new Set(datas)] }));
         agendadas += r?.agendadas ?? 0;
         const rp = r?.pulos || {};
         p.semTurma += rp.semTurma || 0; p.cheia += rp.cheia || 0; p.jaAgendado += rp.jaAgendado || 0;
-        p.feriado += rp.feriado || 0;
+        p.feriado += rp.feriado || 0; p.liberada += rp.liberada || 0;
       }
       close();
       toast(
         `✅ ${agendadas} aula(s) agendada(s).\n` +
         `Puladas: ${p.semTurma} sem turma · ${p.cheia} lotada(s) · ${p.jaAgendado} já agendada(s)` +
+        (p.liberada ? ` · ${p.liberada} liberada(s) pela aluna` : "") +
         (p.feriado ? ` · ${p.feriado} em feriado (a escola não abre)` : "") + "."
       );
     } finally { setBusy(false); }
@@ -2733,10 +2741,11 @@ export function BatchBookForm({ client }) {
                   </div>
                   <div className="bb-foot">
                     <b>{g.ok}</b> de {g.total} data(s) livre(s)
-                    {(g.cheias > 0 || g.jaAgendadas > 0) && (
+                    {(g.cheias > 0 || g.jaAgendadas > 0 || g.jaLiberadas > 0) && (
                       <div className="bb-skip">
                         {g.cheias > 0 && <>· {g.cheias} lotada(s) </>}
-                        {g.jaAgendadas > 0 && <>· {g.jaAgendadas} já agendada(s)</>}
+                        {g.jaAgendadas > 0 && <>· {g.jaAgendadas} já agendada(s) </>}
+                        {g.jaLiberadas > 0 && <>· {g.jaLiberadas} liberada(s) pela aluna</>}
                       </div>
                     )}
                   </div>

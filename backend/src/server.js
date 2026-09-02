@@ -230,6 +230,35 @@ async function occupancy(slotId) {
   });
 }
 
+/* ---------- A ALUNA JÁ RESOLVEU ESTA TURMA? ----------
+   Para o LOTE, "já resolvida" tem dois sentidos, e os dois impedem criar aula:
+
+   · reserva ativa  → ela já está marcada; criar de novo duplicaria a aula;
+   · reserva CANCELADA → ela SAIU desta data de propósito (liberou a aula,
+     viajou, a escola desmarcou em lote). O lote não pode desfazer isso.
+
+   Esta é a diferença entre LIBERAR e EXCLUIR, que o painel já assume no
+   batch-unbook: excluir apaga a linha (marcação errada — pode voltar), liberar
+   deixa a linha cancelada no histórico (saída intencional — não volta). Sem
+   olhar a cancelada, replicar a turma ressuscitava a aula que a aluna tinha
+   liberado, e ela reaparecia `confirmada` ao lado da própria linha cancelada.
+
+   Vale SÓ para as rotas de lote/replicação. Na marcação de UMA aula (portal,
+   reposição, aula extra) a cancelada continua sendo ignorada de propósito: é
+   assim que a aluna consegue remarcar a aula que ela mesma liberou. */
+async function situacaoNaTurma(slotId, clientName) {
+  // a ativa vem primeiro: se ela liberou e depois voltou, quem vale é a de pé
+  const ativa = await prisma.booking.findFirst({
+    where: { slotId, clientName, status: { not: "cancelada" } },
+  });
+  if (ativa) return { tipo: "ativa", motivo: "já marcada", booking: ativa };
+  const liberada = await prisma.booking.findFirst({
+    where: { slotId, clientName, status: "cancelada" },
+  });
+  if (liberada) return { tipo: "liberada", motivo: "aula liberada — o lote não remarca", booking: liberada };
+  return null;
+}
+
 /* Multa e juros só entram com SETTINGS.cobrarEncargos LIGADA. Desligada (o
    padrão), toda mensalidade custa o valor original — mesma ideia das outras
    travas de cobrança: a regra existe no código e a Inêz decide quando passa a
@@ -1089,10 +1118,14 @@ app.post(
           pulos.push({ date, clientName: b.clientName, motivo: "cadastro cancelado" });
           continue;
         }
-        const jaTem = await prisma.booking.findFirst({
-          where: { slotId: alvo.id, clientName: b.clientName, status: { not: "cancelada" } },
-        });
-        if (jaTem) continue; // silencioso: já estava marcada
+        const sit = await situacaoNaTurma(alvo.id, b.clientName);
+        if (sit?.tipo === "ativa") continue; // silencioso: já estava marcada
+        /* Liberada NÃO é silencioso: a Inêz precisa ver que aquela semana ficou
+           de fora porque a aluna desmarcou, e não por falha da replicação. */
+        if (sit?.tipo === "liberada") {
+          pulos.push({ date, clientName: b.clientName, motivo: sit.motivo });
+          continue;
+        }
         if ((await occupancy(alvo.id)) >= alvo.capacity) {
           pulos.push({ date, clientName: b.clientName, motivo: "turma lotada" });
           continue;
@@ -1271,10 +1304,12 @@ app.post("/api/agenda/replicate", wrap(async (req, res) => {
           });
           continue;
         }
-        const dup = await prisma.booking.findFirst({
-          where: { slotId: alvo.id, clientName: b.clientName, status: { not: "cancelada" } },
-        });
-        if (dup) continue;
+        const sit = await situacaoNaTurma(alvo.id, b.clientName);
+        if (sit?.tipo === "ativa") continue;
+        if (sit?.tipo === "liberada") {
+          resultado.pulos.push({ date, unit: fonte.unit, clientName: b.clientName, motivo: sit.motivo });
+          continue;
+        }
         if ((await occupancy(alvo.id)) >= (alvo.capacity || 1)) {
           resultado.pulos.push({ date, unit: fonte.unit, clientName: b.clientName, motivo: "turma lotada" });
           continue;
@@ -1578,7 +1613,7 @@ app.post(
     const replicando = datas.length > 1;
 
     const criadas = [];
-    const pulos = { lotada: 0, jaMarcada: 0, teto: 0 };
+    const pulos = { lotada: 0, jaMarcada: 0, teto: 0, liberada: 0 };
     const painel = doPainel(req);
 
     /* Fora do painel esta rota só existe para a aula experimental. A aluna já
@@ -1636,10 +1671,9 @@ app.post(
           pulos.lotada++; continue;
         }
         if (replicando) {
-          const dup = await prisma.booking.findFirst({
-            where: { slotId: slot.id, clientName: b.clientName, status: { not: "cancelada" } },
-          });
-          if (dup) { pulos.jaMarcada++; continue; }
+          const sit = await situacaoNaTurma(slot.id, b.clientName);
+          if (sit?.tipo === "ativa") { pulos.jaMarcada++; continue; }
+          if (sit?.tipo === "liberada") { pulos.liberada++; continue; }
         }
       } else {
         /* Horário que ainda não existe na grade só nasce pelo painel. Pela
@@ -3213,10 +3247,14 @@ async function criarGradeInicial12Meses(client, slotsBase) {
         });
         slotsCriados.push(alvo);
       }
-      const duplicada = await prisma.booking.findFirst({
-        where: { slotId: alvo.id, clientName: client.name, status: { not: "cancelada" } },
-      });
-      if (duplicada) continue;
+      const sit = await situacaoNaTurma(alvo.id, client.name);
+      if (sit?.tipo === "ativa") continue;
+      /* Remontar a grade (troca de plano, novo horário) não pode ressuscitar as
+         datas que a aluna já tinha liberado nesta mesma turma. */
+      if (sit?.tipo === "liberada") {
+        pulos.push({ date, unit: base.unit, motivo: sit.motivo });
+        continue;
+      }
       if ((await occupancy(alvo.id)) >= (alvo.capacity || 1)) {
         pulos.push({ date, unit: base.unit, motivo: "turma lotada" });
         continue;
@@ -3594,15 +3632,16 @@ app.post("/api/clients/:id/batch-book", wrap(async (req, res) => {
   // Marcação replicada: as aulas criadas na mesma leva ganham um seriesId em
   // comum, para a exclusão poder oferecer "excluir também as demais".
   const seriesId = new Set(dates).size > 1 ? crypto.randomUUID() : null;
-  const agendadas = [], pulos = { semTurma: 0, cheia: 0, jaAgendado: 0, feriado: 0 };
+  const agendadas = [], pulos = { semTurma: 0, cheia: 0, jaAgendado: 0, feriado: 0, liberada: 0 };
   for (const date of alvos) {
     // Feriado fechado: não cria aula e, portanto, não conta como aula do plano.
     if (feriadoNoDia(date, unit)) { pulos.feriado++; continue; }
     const slot = await prisma.slot.findFirst({ where: { date, time, unit } });
     if (!slot) { pulos.semTurma++; continue; }
-    // já agendado nesta turma?
-    const jaTem = await prisma.booking.findFirst({ where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } } });
-    if (jaTem) { pulos.jaAgendado++; continue; }
+    // já agendado nesta turma? (ou liberado de propósito — o lote não remarca)
+    const sit = await situacaoNaTurma(slot.id, client.name);
+    if (sit?.tipo === "ativa") { pulos.jaAgendado++; continue; }
+    if (sit?.tipo === "liberada") { pulos.liberada++; continue; }
     // capacidade
     if ((await occupancy(slot.id)) >= (slot.capacity || 1)) { pulos.cheia++; continue; }
     const b = await prisma.booking.create({
