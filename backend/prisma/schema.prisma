@@ -316,6 +316,21 @@ model Holiday {
   createdAt DateTime @default(now())
 }
 
+/* Exceção decidida na própria agenda. O calendário automático continua sendo
+   a fonte do nome do feriado; esta linha apenas registra que, naquela unidade,
+   a ADMIN ligou "Terá aula". A chave composta impede Ipatinga de alterar
+   Timóteo no mesmo dia. */
+model HolidayOverride {
+  id         Int      @id @default(autoincrement())
+  date       String   @db.VarChar(10)
+  unit       String   @db.VarChar(100)
+  hasClasses Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  @@unique([date, unit])
+  @@index([date])
+}
+
 model Settings {
   id               Int    @id @default(1)
   valorPadrao      Float  @default(80)

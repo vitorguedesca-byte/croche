@@ -1,17 +1,15 @@
 /* ========================= FERIADOS: NÃO HÁ AULA =========================
-   Regra da escola, combinada em 01/09/2026: em feriado a escola não abre.
-   Nenhum horário é criado, nenhuma aula é marcada — nem pelo painel, nem pelo
-   portal da aluna, nem pelo WhatsApp, e a replicação semanal pula a data.
+   Em feriado a escola não abre, salvo quando a ADMIN liga "Terá aula" para a
+   unidade naquele dia. O calendário é calculado por UNIDADE: um feriado
+   municipal de Ipatinga não pode fechar Timóteo (nem o contrário).
 
    De onde saem as datas, nesta ordem:
 
-   1. NACIONAIS, calculados aqui. Os fixos são sempre os mesmos; os móveis
-      (Carnaval, Sexta-feira Santa, Corpus Christi) andam com a Páscoa e por
-      isso são calculados, nunca digitados.
-   2. MANUAIS, cadastrados pela Inêz em Configurações — o feriado municipal de
-      Ipatinga, o de Timóteo, um recesso, uma emenda. Uma data manual também
-      pode DESMARCAR um nacional (`remove`), para o caso de a escola decidir
-      abrir num feriado.
+   1. NACIONAIS, calculados aqui.
+   2. MUNICIPAIS, próprios de Ipatinga e Timóteo. Sexta-feira da Paixão e
+      Corpus Christi são datas móveis, por isso nascem a partir da Páscoa.
+   3. MANUAIS, cadastrados pela escola em Configurações.
+   4. ABERTURAS, ligadas no próprio dia da agenda para uma unidade específica.
 
    Este módulo é PURO de propósito: não toca no banco e não conhece Prisma.
    Quem chama traz as datas manuais. */
@@ -33,8 +31,7 @@ const FIXOS = {
    para o calendário de anos anteriores não sair errado no histórico. */
 const CONSCIENCIA_NEGRA_DESDE = 2024;
 
-/* Domingo de Páscoa pelo algoritmo de Meeus/Butcher (calendário gregoriano).
-   É a âncora dos três feriados móveis; todos são contados a partir dele. */
+/* Domingo de Páscoa pelo algoritmo de Meeus/Butcher (calendário gregoriano). */
 export function domingoDePascoa(ano) {
   const a = ano % 19;
   const b = Math.floor(ano / 100);
@@ -63,24 +60,34 @@ function maisDias(iso, n) {
 }
 
 /* Feriados nacionais de um ano: { 'YYYY-MM-DD': 'nome' }.
-   Móveis, contados a partir do Domingo de Páscoa:
-     Carnaval        −47 dias (terça-feira)
-     Sexta-feira Santa −2 dias
-     Corpus Christi  +60 dias
-   A segunda-feira de carnaval e a quarta-feira de cinzas NÃO entram: não são
-   feriado nacional. Onde a escola não abre nesses dias, a Inêz cadastra na mão
-   — é justamente para isso que existe a lista manual. */
+   Carnaval e Corpus Christi são pontos facultativos no calendário federal;
+   Sexta-feira da Paixão é feriado religioso definido localmente. Portanto eles
+   não entram nesta lista nacional. */
 export function feriadosNacionais(ano) {
   const y = Number(ano);
   if (!y) return {};
   const cal = {};
   for (const [md, nome] of Object.entries(FIXOS)) cal[`${y}-${md}`] = nome;
   if (y >= CONSCIENCIA_NEGRA_DESDE) cal[`${y}-11-20`] = "Consciência Negra";
-  const pascoa = domingoDePascoa(y);
-  cal[maisDias(pascoa, -47)] = "Carnaval";
-  cal[maisDias(pascoa, -2)] = "Sexta-feira Santa";
-  cal[maisDias(pascoa, 60)] = "Corpus Christi";
   return cal;
+}
+
+/* Feriados municipais recorrentes das duas cidades atendidas.
+   Fontes municipais: Lei 528/1975 e Lei 1.676/1999 (Ipatinga); Lei 590/1975
+   e Lei 1.833/1997 (Timóteo). A separação por unidade fica explícita mesmo
+   quando as cidades coincidem em uma data. */
+export function feriadosMunicipais(ano, unidade) {
+  const y = Number(ano);
+  if (!y) return {};
+  const u = String(unidade || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  if (u !== "ipatinga" && u !== "timoteo") return {};
+  const pascoa = domingoDePascoa(y);
+  return {
+    [maisDias(pascoa, -2)]: "Sexta-feira da Paixão",
+    [`${y}-04-29`]: u === "ipatinga" ? "Emancipação de Ipatinga" : "Aniversário de Timóteo",
+    [maisDias(pascoa, 60)]: "Corpus Christi",
+    [`${y}-08-15`]: "Assunção de Nossa Senhora",
+  };
 }
 
 /* Calendário completo usado pelo sistema.
@@ -90,12 +97,13 @@ export function feriadosNacionais(ano) {
 
    Devolve { 'YYYY-MM-DD': 'nome' } já com as remoções aplicadas. O manual vence
    o nacional: é a Inêz quem decide o que acontece na porta da escola. */
-export function calendarioFeriados(anos = [], manuais = []) {
+export function calendarioFeriados(anos = [], manuais = [], unidade = "") {
   const cal = {};
-  for (const ano of anos) Object.assign(cal, feriadosNacionais(ano));
+  for (const ano of anos) Object.assign(cal, feriadosNacionais(ano), feriadosMunicipais(ano, unidade));
   for (const f of manuais || []) {
     const d = String(f?.date || "");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+    if (f.unit && unidade && f.unit !== unidade) continue;
     if (f.remove) delete cal[d];
     else cal[d] = String(f.nome || "Feriado").trim() || "Feriado";
   }

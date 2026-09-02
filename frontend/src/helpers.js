@@ -199,8 +199,19 @@ export function isNewLead(data, booking) {
    nacionais e manuais já resolvidos — a tela não recalcula Páscoa nem junta
    listas, só pergunta pelo dia. Quem manda continua sendo o backend: aqui é só
    para a agenda marcar o dia e os botões avisarem antes de tentar. */
-export const feriadoDe = (data, date) => (data?.meta?.feriados || {})[String(date || "")] || "";
-export const ehFeriado = (data, date) => !!feriadoDe(data, date);
+export const feriadoDe = (data, date, unit) => {
+  const porUnidade = data?.meta?.feriadosPorUnidade || {};
+  if (unit && unit !== "Todas") return (porUnidade[unit] || {})[String(date || "")] || "";
+  const nomes = [...new Set(Object.values(porUnidade).map((cal) => cal?.[String(date || "")]).filter(Boolean))];
+  return nomes.join(" / ") || (data?.meta?.feriados || {})[String(date || "")] || "";
+};
+export const feriadoBaseDe = (data, date, unit) => {
+  const porUnidade = data?.meta?.feriadosBasePorUnidade || {};
+  if (unit && unit !== "Todas") return (porUnidade[unit] || {})[String(date || "")] || "";
+  const nomes = [...new Set(Object.values(porUnidade).map((cal) => cal?.[String(date || "")]).filter(Boolean))];
+  return nomes.join(" / ") || "";
+};
+export const ehFeriado = (data, date, unit) => !!feriadoDe(data, date, unit);
 
 /* ================= tipo da aula: reposição / aula extra =================
    O backend marca o tipo no paymentMethod ao criar a reserva:
@@ -529,7 +540,7 @@ export function situacaoMensalidade(data, client, comp = compAtual()) {
    verdade; aqui é só para o painel avisar a Inêz ANTES de mandar a requisição.
    Ao mexer numa regra, mexa nos dois lugares.
 
-   • Teto do plano: 1x ou 2x por semana, conforme o contratado.
+   • A frequência do plano define a grade inicial de 12 meses.
    • Escala: a aluna marca a próxima aula no dia da aula dela.
 
    Não há mais regra por DATA. As duas que existiam saíram, porque as duas
@@ -539,8 +550,7 @@ export function situacaoMensalidade(data, client, comp = compAtual()) {
    avisavam a Inêz antes de mandar a requisição — sem regra de data, elas
    respondiam "" para tudo. Ver o cabeçalho de backend/src/regrasAula.js.
 
-   O teto semanal não é espelhado aqui de propósito: ele depende das aulas da
-   semana inteira, então quem responde é o backend. */
+   Ajustes posteriores da aluna são sempre unitários. */
 export const tipoMensalista = (c) =>
   !c || c.plan !== "mensalista" ? null : c.mensalistaTipo === "escala" ? "escala" : "fixo";
 export const TIPO_MENSALISTA_LABEL = { fixo: "Fixo", escala: "Escala" };

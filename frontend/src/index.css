@@ -855,7 +855,9 @@
     border-left:3px solid var(--muted);border-radius:0 8px 8px 0;
     padding:.55rem .7rem;margin:.5rem 0;
   }
+  .day-feriado,.dia-feriado{display:flex;align-items:center;justify-content:space-between;gap:.8rem;flex-wrap:wrap}
   .day-feriado{margin:.2rem 0 .4rem}
+  .day-feriado.aberto,.dia-feriado.aberto{border-left-color:var(--green-mid);background:color-mix(in srgb, var(--green-mid) 9%, transparent)}
 
   /* Cadastro de feriados (Configurações) */
   .fer-lista{display:flex;flex-direction:column;gap:.35rem;margin-top:.6rem}

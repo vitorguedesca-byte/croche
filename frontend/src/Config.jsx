@@ -7,10 +7,9 @@ import { api } from "./api.js";
 import { WEEKDAYS_PT, DEFAULT_HORARIO, parseHorario, horarioToText, serializeHorario, money, todayISO, fmtDateLong } from "./helpers.js";
 
 /* ===================== FERIADOS: A ESCOLA NÃO ABRE =====================
-   Os nacionais o sistema já sabe — os fixos e os móveis (Carnaval, Sexta-feira
-   Santa e Corpus Christi andam com a Páscoa). Aqui se cadastra o que só a
-   escola sabe: o feriado municipal, um recesso, uma emenda — e o contrário
-   disso, o feriado nacional em que a escola resolve abrir.
+   O sistema conhece os feriados nacionais e os municipais de cada unidade.
+   Aqui se cadastra o que só a escola sabe: um recesso, uma emenda ou um ponto
+   facultativo — e o contrário disso, um feriado em que a escola resolve abrir.
 
    Nada é cancelado ao cadastrar. Se o dia já tem aula marcada, a tela abre a
    lista e pergunta — é a Inêz quem decide. */
@@ -111,8 +110,8 @@ function Feriados() {
         </button>
       </div>
       <div className="help" style={{ marginTop: ".5rem" }}>
-        Feriados nacionais já vêm prontos — inclusive Carnaval, Sexta-feira Santa e Corpus Christi,
-        que mudam de data todo ano. Cadastre aqui só o que é da região ou da escola.
+        Feriados nacionais e municipais de Ipatinga e Timóteo já vêm prontos por unidade.
+        Carnaval é ponto facultativo: cadastre-o aqui quando a escola decidir fechar.
       </div>
 
       <div style={{ marginTop: "1.1rem", borderTop: "1px solid var(--line)", paddingTop: ".9rem" }}>

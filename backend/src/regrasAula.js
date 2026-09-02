@@ -4,11 +4,13 @@
    • FIXO   — tem dia e hora fixos; quem monta a agenda dela é a Inêz (em lote).
    • ESCALA — ela mesma marca a aula pelo portal, durante a semana.
 
-   Sobraram DUAS regras, valendo tanto para marcar aula normal quanto para
-   marcar reposição (remarcação):
+   A frequência de 1x ou 2x por semana define somente quantos padrões entram
+   na grade inicial de 12 meses. Ela não cria um teto semanal: feriado fechado,
+   cancelamento, remarcação, reposição e aula extra não alteram uma contagem
+   obrigatória da semana.
 
-   1. O teto do plano: 1x ou 2x aulas por semana, conforme o contratado.
-   2. Só na escala: a aluna marca a próxima aula NO DIA da aula dela — ou seja,
+   Para a modalidade ESCALA, continua valendo que a aluna marca a próxima aula
+   NO DIA da aula dela — ou seja,
       a janela de marcação só abre nos dias em que ela tem aula. Quantas aulas
       ela marca nesse dia é com ela; o que a regra prende é o dia.
 
@@ -38,9 +40,8 @@
    painel conseguir avisar antes de mandar a requisição. Ao mexer numa regra
    aqui, mexa lá também. */
 
-// Marca que o backend põe no paymentMethod das aulas DO PLANO. É por ela que o
-// teto semanal separa o que conta ("Mensalista") do que é aula à parte
-// ("Reposição", "Avulsa", "1ª mensalidade") e por isso não ocupa vaga da semana.
+// Marca que o backend põe no paymentMethod das aulas regulares do plano. É por
+// ela que a replicação diferencia a grade normal das ocorrências unitárias.
 export const PGTO_PLANO = "Mensalista";
 
 /* Aula de reposição (remarcação). É aula ÚNICA: nasce de um crédito gasto e
@@ -224,28 +225,19 @@ export function tetoSemanal(client, date, aulasAtivas) {
                   `time` segue no contrato porque quem chama já tem os dois e
                   uma regra de horário pode voltar)
    ctx.hoje     — 'YYYY-MM-DD' pelo relógio de Brasília
-   ctx.aulasAtivas — aulas não canceladas da aluna (a escala e o teto usam)
+   ctx.aulasAtivas — aulas não canceladas da aluna (a escala usa)
    ctx.ignorarJanela — true em caminhos onde a janela da escala não faz sentido
-   ctx.ignorarTeto — true quando a aula não é do plano (reposição, extra)
 
    Devolve { ok:true } ou { ok:false, codigo, motivo }.
-   `codigo` é 'escala' | 'teto'. */
+   `codigo` é 'escala'. */
 export function checarRegras(client, alvo, ctx = {}) {
   const tipo = tipoMensalista(client);
   if (!tipo) return { ok: true, codigo: "", motivo: "" }; // avulsa/experimental seguem como antes
 
-  const { date } = alvo || {};
-
-  if (!ctx.ignorarTeto) {
-    const { limite, marcadas } = tetoSemanal(client, date, ctx.aulasAtivas);
-    if (limite && marcadas >= limite)
-      return {
-        ok: false,
-        codigo: "teto",
-        motivo: `Seu plano é de ${limite} aula${limite > 1 ? "s" : ""} por semana e você já ${marcadas > 1 ? "tem" : "tem"} ${marcadas} marcada${marcadas > 1 ? "s" : ""} nesta semana. ` +
-          "Escolha um dia da semana que vem, ou fale com a Inêz sobre uma aula extra. 💚",
-      };
-  }
+  /* A frequência 1x/2x define quantos padrões semanais a aluna escolhe na
+     matrícula. Esses padrões são replicados por 12 meses; não existe mais um
+     teto calculado semana a semana. Assim, feriado fechado não vira uma aula
+     fictícia e também não bloqueia nenhuma operação posterior. */
 
   if (tipo === "escala" && !ctx.ignorarJanela) {
     const j = janelaEscala(ctx.aulasAtivas, ctx.hoje);
@@ -326,7 +318,4 @@ export function encargosDaMensalidade(inv, data) {
 /* Havia aqui um `horarioPermitido(client, { date })`, que respondia se a data
    cabia no plano da aluna e filtrava a lista de horários do portal e do lote.
    Ele existia só para as regras de sábado e das 18h; sem as duas, respondia
-   `true` para todo mundo — e um filtro que nunca filtra é pior do que nenhum,
-   porque parece que alguém está conferindo. Saiu junto com a regra em
-   30/08/2026. O que sobrou de regra por data é o teto semanal, que já vive em
-   `checarRegras` porque precisa das aulas da semana para decidir. */
+   `true` para todo mundo e foi removido junto com essas regras. */

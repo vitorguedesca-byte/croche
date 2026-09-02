@@ -62,6 +62,7 @@ export const api = {
   updateSlot: (id, data) => req("PATCH", `/api/slots/${id}`, data),
   // repete a turma inteira (horário + alunas) nas próximas `weeks` semanas
   replicateSlot: (id, weeks, alunas = true) => req("POST", `/api/slots/${id}/replicate`, { weeks, alunas }),
+  replicateAgenda: (data) => req("POST", "/api/agenda/replicate", data),
   // mode: falsy = só este · "series" = mesmos da série · "match" = todos os
   // futuros equivalentes (mesma unidade/hora/dia da semana), pega-tudo
   deleteSlot: (id, mode) => req("DELETE", `/api/slots/${id}${mode === "match" ? "?match=1" : mode ? "?series=1" : ""}`),
@@ -120,7 +121,9 @@ export const api = {
     save: (data) => req("POST", "/api/feriados", data),
     remove: (date) => req("DELETE", `/api/feriados/${date}`),
     aulas: (date) => req("GET", `/api/feriados/${date}/aulas`),
-    cancelarAulas: (date) => req("POST", `/api/feriados/${date}/cancelar-aulas`),
+    cancelarAulas: (date, unit) => req("POST", `/api/feriados/${date}/cancelar-aulas`, { unit }),
+    dia: (date, unit) => req("GET", `/api/feriados-dia?date=${encodeURIComponent(date)}&unit=${encodeURIComponent(unit)}`),
+    definirAulas: (date, unit, hasClasses) => req("POST", "/api/feriados-dia", { date, unit, hasClasses }),
   },
 
   availableSlots: (unit) => req("GET", `/api/slots/available${unit ? `?unit=${encodeURIComponent(unit)}` : ""}`),

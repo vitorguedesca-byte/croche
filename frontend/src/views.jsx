@@ -5,14 +5,14 @@ import { useModal, StatusBadge, Select } from "./ui.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import {
-  SlotCard, DayModal, ManageBooking, ClientProfile, SlotDetail, TurmaView, AlterarMensalidade,
+  SlotCard, DayModal, ManageBooking, ClientProfile, SlotDetail, TurmaView, AlterarMensalidade, FeriadoAulas,
   baixarMensalidade,
 } from "./modals.jsx";
 import {
   UNITS, STATUS, unitColor,
   todayISO, addDays, weekStart, fmtDate, fmtDateLong, weekdayShort, money, waLink, capitalize, faixaHorario, fimDaAula, hhmm,
   bookingsActive, slotBookings, slotBookingsAll, slotCapacity, slotOccupancy, slotWaitlist, clientAttendance,
-  bookingKindDe, BOOKING_KINDS, feriadoDe, compAtual, addComp, compLabel, competenciasDoAluno, mensalidadeDe, matriculaISO,
+  bookingKindDe, BOOKING_KINDS, feriadoDe, feriadoBaseDe, compAtual, addComp, compLabel, competenciasDoAluno, mensalidadeDe, matriculaISO,
   mensalidadeDaComp, precoDaComp, situacaoMensalidade, clientOfBooking, ehPagamentoDeMatricula,
   clientMonthClasses, classifyClient, isNewLead,
   aniversariantes, diaMesNasc, diaMesLabel, faltamLabel,
@@ -270,7 +270,7 @@ function MonthView({ ref0, agSlots, open, data, unit, somenteLeitura = false }) 
     const more = slots.length > 3 ? <div className="m-more">+{slots.length - 3} mais</div> : null;
     // Feriado: a escola não abre. O dia fica marcado no mês para a Inêz não
     // tentar criar turma ali — e para entender por que a replicação pulou.
-    const fer = feriadoDe(data, date);
+    const fer = feriadoDe(data, date, unit);
     cells.push(
       <div key={i} className={`m-cell ${out ? "out" : ""} ${date === t ? "today" : ""} ${fer ? "feriado" : ""}`} onClick={() => open(<DayModal date={date} unit={unit} somenteLeitura={somenteLeitura} />)}>
         <span className="dn">{dd.getDate()}</span>
@@ -289,7 +289,7 @@ function WeekView({ ref0, agSlots, data, unit, somenteLeitura = false }) {
     <div className="agenda" style={{ "--cols": 7 }}>
       {days.map((date) => {
         const slots = agSlots(date);
-        const fer = feriadoDe(data, date);
+        const fer = feriadoDe(data, date, unit);
         return (
           <div key={date} className={`day-col ${fer ? "feriado" : ""}`}>
             <div className={`day-h ${date === t ? "today" : ""}`}><b>{fmtDate(date)}</b><span>{weekdayShort(date)}</span></div>
@@ -304,6 +304,40 @@ function WeekView({ ref0, agSlots, data, unit, somenteLeitura = false }) {
   );
 }
 
+function FeriadoDayControls({ date, unit, data, somenteLeitura }) {
+  const { reload } = useStore();
+  const { open } = useModal();
+  const [busy, setBusy] = useState("");
+  const unidades = unit === "Todas" ? (data.meta?.units || []) : [unit];
+  const itens = unidades
+    .map((u) => ({ unit: u, nome: feriadoBaseDe(data, date, u), fechado: !!feriadoDe(data, date, u) }))
+    .filter((f) => f.nome);
+  if (!itens.length) return null;
+
+  const alternar = async (f) => {
+    setBusy(f.unit);
+    try {
+      const r = await api.feriados.definirAulas(date, f.unit, f.fechado);
+      await reload();
+      if (!f.fechado && r.aulas?.length) open(<FeriadoAulas date={date} unit={f.unit} nome={f.nome} aulas={r.aulas} />);
+      else toast(f.fechado ? `Aulas ativadas em ${f.unit}.` : `Dia fechado em ${f.unit}.`, "success");
+    } catch (e) { toast(e.message || "Não foi possível alterar o feriado.", "error"); }
+    finally { setBusy(""); }
+  };
+
+  return itens.map((f) => (
+    <div className={`dia-feriado ${f.fechado ? "" : "aberto"}`} key={f.unit}>
+      <span>{f.fechado ? "🚫" : "✅"} <b>{f.nome}</b>{unit === "Todas" ? ` · ${f.unit}` : ""}</span>
+      {!somenteLeitura && (
+        <label className="hf-toggle" style={{ margin: 0 }}>
+          <input type="checkbox" checked={!f.fechado} disabled={busy === f.unit} onChange={() => alternar(f)} />
+          <span className="hf-day">Terá aula</span>
+        </label>
+      )}
+    </div>
+  ));
+}
+
 /* Visão DIA: um único dia inteiro, hora a hora, com a turma aberta em cada
    horário. É a tela de quem vai dar aula — não precisa procurar o dia na grade
    do mês nem espremer sete colunas para ler os nomes. A tira da semana em cima
@@ -316,8 +350,6 @@ function DayView({ ref0, agSlots, data, unit, somenteLeitura = false, irPara }) 
   const slots = agSlots(ref0);
   const totalAlunas = slots.reduce((n, s) => n + slotOccupancy(data, s.id), 0);
   const totalVagas = slots.reduce((n, s) => n + slotCapacity(s), 0);
-  const fer = feriadoDe(data, ref0);
-
   return (
     <>
       <div className="dv-tira">
@@ -336,12 +368,7 @@ function DayView({ ref0, agSlots, data, unit, somenteLeitura = false, irPara }) 
 
       {/* Feriado: a escola não abre. Fica no topo do dia, acima de tudo — se
           ainda houver turma marcada aqui, ela é o problema a resolver. */}
-      {fer && (
-        <div className="dia-feriado">
-          🚫 <b>{fer}</b> — feriado, a escola não abre.
-          {slots.length ? " Os horários abaixo ficaram de antes: cancele ou mova a turma." : ""}
-        </div>
-      )}
+      <FeriadoDayControls date={ref0} unit={unit} data={data} somenteLeitura={somenteLeitura} />
 
       {slots.length ? (
         <>

@@ -103,13 +103,13 @@ ok(tetoSemanal(plano2x, "2026-08-26", [{ ...doPlano("2026-08-25"), status: "canc
 ok(tetoSemanal(plano2x, "2026-08-26", [doPlano("2026-08-31")]).marcadas === 0, "aula de outra semana não conta");
 ok(tetoSemanal(planoAntigo, "2026-08-26", [doPlano("2026-08-25")]).limite === 0, "plano antigo (sem weeklyFreq) não tem teto");
 
-console.log("\n— teto: barra na hora de marcar —");
+console.log("\n— frequência não bloqueia mais a marcação —");
 const alvoQua = { date: "2026-08-26", time: "09:00" }; // quarta
 ok(c(plano1x, alvoQua, { aulasAtivas: [] }).ok === true, "1x sem nada na semana: pode marcar");
-ok(c(plano1x, alvoQua, { aulasAtivas: [doPlano("2026-08-25")] }).codigo === "teto", "1x com 1 aula na semana: barrada");
+ok(c(plano1x, alvoQua, { aulasAtivas: [doPlano("2026-08-25")] }).ok === true, "1x com aula na semana: não há bloqueio calculado");
 ok(c(plano2x, alvoQua, { aulasAtivas: [doPlano("2026-08-25")] }).ok === true, "2x com 1 aula na semana: ainda pode");
-ok(c(plano2x, alvoQua, { aulasAtivas: [doPlano("2026-08-25"), doPlano("2026-08-27")] }).codigo === "teto",
-  "2x com 2 aulas na semana: barrada");
+ok(c(plano2x, alvoQua, { aulasAtivas: [doPlano("2026-08-25"), doPlano("2026-08-27")] }).ok === true,
+  "2x com 2 aulas na semana: não há bloqueio calculado");
 ok(c(plano1x, { date: "2026-08-31", time: "09:00" }, { aulasAtivas: [doPlano("2026-08-25")] }).ok === true,
   "1x: a semana que vem está livre de novo");
 ok(c(plano1x, alvoQua, { aulasAtivas: [reposicao("2026-08-25"), extraPaga("2026-08-27")] }).ok === true,
@@ -133,17 +133,15 @@ ok(freqNaData({ weeklyFreq: 2 }, "2026-08-31") === 2, "sem troca: usa o weeklyFr
 ok(freqNaData({ weeklyFreq: 1, weeklyFreqAnterior: 2 }, "2026-08-31") === 1, "anterior sem 'desde' é ignorado");
 ok(freqNaData({}, "2026-08-31") === 0, "sem plano nenhum: 0");
 
-// e o teto usa esse resolvedor: 1 aula na semana já enche o plano antigo
-ok(c(trocou, { date: "2026-08-26", time: "09:00" }, { aulasAtivas: [doPlano("2026-08-25")] }).codigo === "teto",
-  "agosto: 1 aula marcada já bate no teto antigo de 1x");
+// O histórico da troca continua disponível para cobrança, mas não bloqueia agenda.
+ok(c(trocou, { date: "2026-08-26", time: "09:00" }, { aulasAtivas: [doPlano("2026-08-25")] }).ok === true,
+  "agosto: frequência antiga não bloqueia agenda");
 ok(c(trocou, { date: "2026-09-02", time: "09:00" }, { aulasAtivas: [doPlano("2026-09-01")] }).ok === true,
   "setembro: com o plano novo, a 2ª aula da semana passa");
 
-/* Sem regras de data, o teto é a única coisa que barra por data — e num sábado
-   com a semana cheia, é ele que responde. */
-console.log("\n— o teto é o que sobrou barrando —");
-ok(c(plano1x, { date: "2026-08-22", time: "09:00" }, { aulasAtivas: [doPlano("2026-08-19")] }).codigo === "teto",
-  "sábado com a semana cheia: o motivo é o teto, não a data");
+console.log("\n— nenhuma data é bloqueada por total semanal —");
+ok(c(plano1x, { date: "2026-08-22", time: "09:00" }, { aulasAtivas: [doPlano("2026-08-19")] }).ok === true,
+  "sábado com aula na semana continua disponível");
 
 /* ===================== ciclo de cobrança da mensalidade ===================== */
 console.log("\n— vencimento: o dia da matrícula, a partir do mês seguinte —");

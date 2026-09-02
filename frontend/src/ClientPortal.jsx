@@ -19,8 +19,7 @@ const portalKey = (c) => (c?.cpf || "").replace(/\D/g, "") || (c?.phone || "").r
 const diasEntre = (de, ate) =>
   Math.round((new Date(ate + "T12:00:00Z") - new Date(de + "T12:00:00Z")) / 86400000);
 
-// Segunda-feira da semana de uma data — a semana do teto do plano vai de
-// segunda a domingo, igual à do backend (segundaDaSemana em regrasAula.js).
+// Segunda-feira da semana de uma data — usada apenas no filtro visual da agenda.
 const segundaISO = (iso) => addDays(iso, -((new Date(iso + "T00:00").getDay() + 6) % 7));
 
 function statusText(b) {
@@ -196,7 +195,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   const ativos = bookings.filter((b) => b.status !== "cancelada");
   const prox = ativos.filter((b) => b.date >= t).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   /* Fim de cada recorte, sempre contando de HOJE para a frente:
-     semana = até o domingo desta semana (a mesma semana do teto do plano)
+     semana = até o domingo desta semana
      mês    = até o último dia do mês corrente */
   const fimDaSemana = addDays(segundaISO(t), 6);
   const fimDoMes = (() => {
@@ -223,8 +222,11 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   // Os horários que ela não pode marcar já vêm de fora da lista `available`; o
   // que sobra para a tela é explicar a janela da escala quando está fechada.
   const regras = data.regras || {};
-  // quem já fez a experimental e ainda não virou mensalista vê o convite de continuar
-  const podeConverter = cliente.plan !== "mensalista" && cliente.matriculaStatus !== "devolvida";
+  const temGradeRegular = ativos.some((b) => b.date >= t && b.paymentMethod === "Mensalista");
+  // Depois do Pix a aluna já é mensalista, mas ainda precisa escolher os 1 ou 2
+  // padrões que serão reservados por 12 meses.
+  const precisaMontarGrade = cliente.plan === "mensalista" && !!cliente.weeklyFreq && !temGradeRegular;
+  const podeConverter = (cliente.plan !== "mensalista" && cliente.matriculaStatus !== "devolvida") || precisaMontarGrade;
 
   // Mensagem de retorno ao liberar a aula: diz se virou crédito de reposição ou não.
   const avisoLiberacao = (r, base) => {
@@ -304,11 +306,13 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
         <ProximaAulaCard booking={prox[0]} meta={meta} />
 
         <div className="pt-actions">
-          <button className="pt-big" onClick={() => { setModo("normal"); irParaAgenda(); }}>📅<span>Marcar nova aula</span></button>
+          {cliente.plan !== "mensalista" && (
+            <button className="pt-big" onClick={() => { setModo("normal"); irParaAgenda(); }}>📅<span>Marcar nova aula</span></button>
+          )}
           <a className="pt-big pt-big-wa" href={waLink(WA_ESCOLA, `Olá! Sou ${(data.client && data.client.name) || ""} e gostaria de falar sobre as minhas aulas. 💚`)} target="_blank" rel="noreferrer"><WaIcon size={26} /><span>Falar com a escola</span></a>
         </div>
 
-        {podeConverter && <ContinuarCard cliente={cliente} meta={meta} onContinuar={() => setScreen("enroll")} />}
+        {podeConverter && <ContinuarCard cliente={cliente} meta={meta} montarGrade={precisaMontarGrade} onContinuar={() => setScreen("enroll")} />}
 
         <MensalidadeCard
           invoices={data.invoices}
@@ -339,6 +343,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
           unit={data.client && data.client.unit}
           meta={meta}
           regras={regras}
+          podeMarcarNormal={cliente.plan !== "mensalista"}
           busy={busy}
           modo={modo}
           saldo={(data.makeup && data.makeup.saldo) || 0}
@@ -474,7 +479,7 @@ function PaymentScreen({ booking, meta, onBack, flash }) {
 /* Calendário do portal: consulta e marcação no mesmo lugar.
    Cada dia mostra se ela tem aula e se sobrou vaga; ao tocar no dia, aparecem
    as aulas dela e os horários livres para marcar. */
-function MiniAgenda({ bookings, available, unit, meta, regras, busy, modo, saldo, onBook, onSairModo }) {
+function MiniAgenda({ bookings, available, unit, meta, regras, podeMarcarNormal, busy, modo, saldo, onBook, onSairModo }) {
   const t = todayISO();
   const [off, setOff] = useState(0);
   const [dia, setDia] = useState(null);
@@ -482,8 +487,7 @@ function MiniAgenda({ bookings, available, unit, meta, regras, busy, modo, saldo
   const extrando = modo === "extra";
   // Mensalista escala: só marca a próxima aula NO DIA da aula dela. Sábado e os
   // horários a partir das 18h nem chegam aqui — o backend já não os manda.
-  // Reposição e aula extra não passam pela janela nem pelo teto: são aulas fora
-  // do plano, e prendê-las nessas regras seria cobrar duas vezes pela mesma vaga.
+  // Reposição e aula extra são sempre escolhas unitárias, fora da grade de 12 meses.
   const foraDoPlano = repondo || extrando;
   const janela = (regras && regras.janela) || { aberta: true, motivo: "" };
   const janelaFechada = !foraDoPlano && regras && regras.tipo === "escala" && !janela.aberta;
@@ -491,24 +495,7 @@ function MiniAgenda({ bookings, available, unit, meta, regras, busy, modo, saldo
   const aulasPorDia = {};
   bookings.forEach((b) => { (aulasPorDia[b.date] = aulasPorDia[b.date] || []).push(b); });
 
-  /* Teto do plano (1x ou 2x por semana), contado semana a semana. Só as aulas do
-     plano ocupam vaga — o backend marca essas com paymentMethod "Mensalista". */
-  const limiteSemanal = foraDoPlano ? 0 : Number(regras?.teto?.limite) || 0;
-  const porSemana = {};
-  if (limiteSemanal) {
-    bookings.forEach((b) => {
-      if (b.paymentMethod !== "Mensalista") return;
-      const k = segundaISO(b.date);
-      porSemana[k] = (porSemana[k] || 0) + 1;
-    });
-  }
-  // "" quando pode marcar; senão o texto do porquê não
-  const motivoSemana = (date) => {
-    if (!limiteSemanal) return "";
-    const usadas = porSemana[segundaISO(date)] || 0;
-    if (usadas < limiteSemanal) return "";
-    return `Seu plano é de ${limiteSemanal} aula${limiteSemanal > 1 ? "s" : ""} por semana e esta semana já está completa.`;
-  };
+  const gradeJaReservada = !foraDoPlano && !podeMarcarNormal;
   const vagasPorDia = {};
   (available || []).forEach((s) => { (vagasPorDia[s.date] = vagasPorDia[s.date] || []).push(s); });
   Object.values(vagasPorDia).forEach((a) => a.sort((x, y) => x.time.localeCompare(y.time)));
@@ -554,8 +541,13 @@ function MiniAgenda({ bookings, available, unit, meta, regras, busy, modo, saldo
   const label = base.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
   const minhasDoDia = dia ? aulasPorDia[dia] || [] : [];
   const vagasDoDia = dia && dia >= t ? vagasPorDia[dia] || [] : [];
-  // Por que este dia não pode receber marcação — janela da escala ou teto da semana
-  const bloqueioDoDia = dia ? (janelaFechada ? janela.motivo : motivoSemana(dia)) : "";
+  const bloqueioDoDia = dia
+    ? janelaFechada
+      ? janela.motivo
+      : gradeJaReservada
+        ? "Sua grade regular já está reservada por 12 meses. Cancelamentos, reposições e aulas extras são feitos uma aula por vez."
+        : ""
+    : "";
 
   return (
     <div className="mini-agenda" id="pt-agenda">
@@ -585,9 +577,9 @@ function MiniAgenda({ bookings, available, unit, meta, regras, busy, modo, saldo
         </div>
       )}
 
-      {!foraDoPlano && limiteSemanal > 0 && (
+      {gradeJaReservada && (
         <div className="mini-dica">
-          Seu plano é de <b>{limiteSemanal} aula{limiteSemanal > 1 ? "s" : ""} por semana</b>. As semanas que já estão completas aparecem sem horário para marcar.
+          Sua grade regular foi reservada por <b>12 meses</b>. Para alterar uma data, cancele somente aquela aula e use a reposição individual.
         </div>
       )}
 
@@ -644,20 +636,22 @@ function MiniAgenda({ bookings, available, unit, meta, regras, busy, modo, saldo
 }
 
 /* Convite para continuar no curso, mostrado a quem fez a experimental. */
-function ContinuarCard({ cliente, meta, onContinuar }) {
+function ContinuarCard({ cliente, meta, montarGrade = false, onContinuar }) {
   const jaPagou = cliente.matriculaStatus === "paga";
   return (
     <div className="pt-repo" style={{ borderLeftColor: "var(--terracota)" }}>
       <div className="pt-repo-top">
         <div>
-          <div className="pt-repo-t">🧵 Continuar com a gente</div>
+          <div className="pt-repo-t">🧵 {montarGrade ? "Montar minha grade" : "Continuar com a gente"}</div>
           <div className="pt-sub2">
-            Gostou da aula experimental? Escolha o seu plano, pague a primeira mensalidade e já agende a sua 1ª aula oficial.
+            {montarGrade
+              ? `Escolha ${cliente.weeklyFreq} horário${cliente.weeklyFreq > 1 ? "s" : ""} semanal${cliente.weeklyFreq > 1 ? "is" : ""}. As aulas serão reservadas automaticamente por 12 meses.`
+              : "Gostou da aula experimental? Escolha o seu plano, pague a primeira mensalidade e monte a sua grade de 12 meses."}
           </div>
           {jaPagou && <div className="pt-sub2" style={{ marginTop: ".4rem" }}>✅ A sua primeira mensalidade já está paga — não cobramos de novo.</div>}
         </div>
       </div>
-      <button className="pt-btn" style={{ marginTop: ".8rem" }} onClick={onContinuar}>Quero continuar</button>
+      <button className="pt-btn" style={{ marginTop: ".8rem" }} onClick={onContinuar}>{montarGrade ? "Escolher meus horários" : "Quero continuar"}</button>
     </div>
   );
 }
@@ -665,8 +659,9 @@ function ContinuarCard({ cliente, meta, onContinuar }) {
 /* Escolha do plano → 1ª aula oficial → 1ª mensalidade. É o fluxo do tablet da sala. */
 function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone }) {
   const meta = data.meta || {};
-  const [freq, setFreq] = useState(null);       // 1 ou 2 aulas por semana
-  const [slot, setSlot] = useState(null);       // 1ª aula oficial
+  const gradeDoPlanoPago = data.client?.plan === "mensalista" && !!data.client?.weeklyFreq;
+  const [freq, setFreq] = useState(gradeDoPlanoPago ? Number(data.client.weeklyFreq) : null);
+  const [slotsEscolhidos, setSlotsEscolhidos] = useState([]); // 1 ou 2 padrões semanais
   const [resultado, setResultado] = useState(null);
   const t = todayISO();
 
@@ -685,16 +680,20 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
   const days = Object.keys(byDay).sort();
 
   const confirmar = async () => {
+    if (slotsEscolhidos.length !== freq) return flash(`Escolha ${freq} horário${freq > 1 ? "s" : ""} semanal${freq > 1 ? "is" : ""}.`);
+    const resumo = slotsEscolhidos
+      .map((s) => `• ${fmtDateLong(s.date)} às ${s.time}, em ${s.unit}`)
+      .join("\n");
     if (!(await confirmModal({
       title: "Confirmar matrícula",
       message: `Plano de ${freq}x por semana — ${money(planos.find((p) => p.freq === freq).valor)} por mês.\n\n` +
-        `1ª aula oficial: ${fmtDateLong(slot.date)} às ${slot.time}, em ${slot.unit}.\n\n` +
-        `A partir daí você recebe o boleto todo mês.`,
+        `Sua grade semanal:\n${resumo}\n\n` +
+        `Esses horários serão reservados automaticamente por 12 meses. Feriados sem aula serão pulados.`,
       confirmLabel: "Confirmar",
     }))) return;
     setBusy(true);
     try {
-      const r = await api.portal.enroll(phone, { weeklyFreq: freq, slotId: slot.id });
+      const r = await api.portal.enroll(phone, { weeklyFreq: freq, slotIds: slotsEscolhidos.map((s) => s.id) });
       setResultado(r);
     } catch (e) { flash(e.message || "Não consegui concluir."); }
     finally { setBusy(false); }
@@ -713,9 +712,10 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
           <div className="pt-pay-val">{money(resultado.valorMensal)}/mês</div>
         </div>
       </div>
-      {resultado.booking && (
+      {resultado.grade?.total > 0 && (
         <div className="pt-fc-resume">
-          Sua 1ª aula oficial: 📍 <b>{resultado.booking.unit}</b> · {fmtDateLong(resultado.booking.date)} · <b>{faixaHorario(resultado.booking.time, meta.duracaoAulaMin)}</b>
+          📅 <b>{resultado.grade.total} aulas regulares reservadas</b> para os próximos 12 meses.
+          {resultado.grade.feriados?.length ? <> {resultado.grade.feriados.length} data(s) de feriado ficaram sem aula.</> : null}
         </div>
       )}
       <div className="pt-pay">
@@ -741,25 +741,37 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
 
   return (<>
     <button className="pt-link" onClick={onBack}>← Voltar</button>
-    <h2 className="pt-h2">Escolha o seu plano</h2>
-    <div className="pt-unit-pick">
-      {planos.map((p) => (
-        <button key={p.freq} className={`pt-unit-card ${freq === p.freq ? "on" : ""}`} onClick={() => setFreq(p.freq)}>
-          <div className="ic">🧶</div><b>{p.titulo}</b>
-          <span>{p.detalhe}</span>
-          <span className="pt-plano-val">{money(p.valor)}/mês</span>
-        </button>
-      ))}
-    </div>
+    <h2 className="pt-h2">{gradeDoPlanoPago ? "Escolha os horários da sua grade" : "Escolha o seu plano"}</h2>
+    {gradeDoPlanoPago ? (
+      <div className="pt-fc-resume">Seu plano já está confirmado: <b>{freq}x por semana</b> · {money(planos.find((p) => p.freq === freq).valor)}/mês.</div>
+    ) : (
+      <div className="pt-unit-pick">
+        {planos.map((p) => (
+          <button key={p.freq} className={`pt-unit-card ${freq === p.freq ? "on" : ""}`} onClick={() => { setFreq(p.freq); setSlotsEscolhidos([]); }}>
+            <div className="ic">🧶</div><b>{p.titulo}</b>
+            <span>{p.detalhe}</span>
+            <span className="pt-plano-val">{money(p.valor)}/mês</span>
+          </button>
+        ))}
+      </div>
+    )}
 
     {freq && (<>
-      <h2 className="pt-h2">Agende a sua 1ª aula oficial</h2>
-      <p className="pt-sub2" style={{ marginBottom: "1rem" }}>Escolha o horário. Aulas de {Math.floor((meta.duracaoAulaMin ?? 120) / 60)} horas.</p>
+      <h2 className="pt-h2">Monte a sua grade semanal</h2>
+      <p className="pt-sub2" style={{ marginBottom: "1rem" }}>
+        Escolha {freq} horário{freq > 1 ? "s" : ""}. A grade será repetida automaticamente por <b>12 meses</b>.
+      </p>
       {days.length ? days.map((d) => (
         <div className="pt-day" key={d}>
           <div className="pt-day-h">{fmtDateLong(d)}</div>
           {byDay[d].map((s) => (
-            <button key={s.id} className={`pt-slot ${slot?.id === s.id ? "on" : ""}`} onClick={() => setSlot(s)}>
+            <button key={s.id} className={`pt-slot ${slotsEscolhidos.some((x) => x.id === s.id) ? "on" : ""}`} onClick={() => {
+              setSlotsEscolhidos((atuais) => {
+                if (atuais.some((x) => x.id === s.id)) return atuais.filter((x) => x.id !== s.id);
+                if (atuais.length >= freq) return [...atuais.slice(1), s];
+                return [...atuais, s];
+              });
+            }}>
               <div><b>{faixaHorario(s.time, meta.duracaoAulaMin)}</b><span> · {s.unit}</span></div>
               <span className="pt-vagas">{s.free} vaga{s.free === 1 ? "" : "s"}</span>
             </button>
@@ -768,9 +780,9 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
       )) : <div className="pt-empty">Não há horários livres no momento.<br />Chame a gente no WhatsApp. 💚</div>}
     </>)}
 
-    {freq && slot && (
+    {freq && slotsEscolhidos.length === freq && (
       <button className="pt-btn" onClick={confirmar} disabled={busy}>
-        {busy ? "Confirmando…" : `Confirmar plano ${freq}x e 1ª aula →`}
+        {busy ? "Confirmando…" : `Confirmar plano ${freq}x e grade de 12 meses →`}
       </button>
     )}
   </>);

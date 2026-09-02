@@ -1,12 +1,12 @@
 // Teste do calendário de feriados (backend/src/feriados.js)
 //
 // Em feriado a escola não abre. As datas fixas qualquer um confere de cabeça; o
-// que precisa de teste são as MÓVEIS — Carnaval, Sexta-feira Santa e Corpus
+// que precisa de teste são as MÓVEIS — Sexta-feira da Paixão e Corpus
 // Christi andam com a Páscoa, e uma conta errada aqui fecha a escola no dia
 // errado (ou a mantém aberta num feriado). Os valores abaixo são as datas reais
 // desses anos, conferidas fora do sistema.
 import {
-  domingoDePascoa, feriadosNacionais, calendarioFeriados,
+  domingoDePascoa, feriadosNacionais, feriadosMunicipais, calendarioFeriados,
   anosDoCalendario, feriadoDe, ehFeriado,
 } from "./src/feriados.js";
 
@@ -18,17 +18,19 @@ const PASCOA = { 2024: "2024-03-31", 2025: "2025-04-20", 2026: "2026-04-05", 202
 for (const [ano, esperado] of Object.entries(PASCOA))
   ok(domingoDePascoa(Number(ano)) === esperado, `Páscoa de ${ano} = ${esperado}`);
 
-console.log("\n— móveis de 2026 —");
+console.log("\n— nacionais de 2026 —");
 const c26 = feriadosNacionais(2026);
-ok(c26["2026-02-17"] === "Carnaval", "Carnaval 2026 = 17/02");
-ok(c26["2026-04-03"] === "Sexta-feira Santa", "Sexta-feira Santa 2026 = 03/04");
-ok(c26["2026-06-04"] === "Corpus Christi", "Corpus Christi 2026 = 04/06");
+ok(!c26["2026-02-17"], "Carnaval não é feriado nacional");
+ok(!c26["2026-06-04"], "Corpus Christi não é feriado nacional");
 
-console.log("\n— móveis de 2025 (ano diferente, datas diferentes) —");
-const c25 = feriadosNacionais(2025);
-ok(c25["2025-03-04"] === "Carnaval", "Carnaval 2025 = 04/03");
-ok(c25["2025-04-18"] === "Sexta-feira Santa", "Sexta-feira Santa 2025 = 18/04");
-ok(c25["2025-06-19"] === "Corpus Christi", "Corpus Christi 2025 = 19/06");
+console.log("\n— municipais por unidade —");
+const ipa26 = feriadosMunicipais(2026, "Ipatinga");
+const tim26 = feriadosMunicipais(2026, "Timóteo");
+ok(ipa26["2026-04-03"] === "Sexta-feira da Paixão", "Ipatinga: Sexta-feira da Paixão");
+ok(ipa26["2026-06-04"] === "Corpus Christi", "Ipatinga: Corpus Christi");
+ok(ipa26["2026-04-29"] === "Emancipação de Ipatinga", "Ipatinga: 29 de abril");
+ok(tim26["2026-04-29"] === "Aniversário de Timóteo", "Timóteo: 29 de abril");
+ok(tim26["2026-08-15"] === "Assunção de Nossa Senhora", "Timóteo: 15 de agosto");
 
 console.log("\n— fixos —");
 ok(c26["2026-12-25"] === "Natal", "Natal");
@@ -59,9 +61,9 @@ ok(Object.keys(cal).every((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)), "entrada invál
 console.log("\n— cobertura de anos —");
 const anos = anosDoCalendario("2026-12-30");
 ok(anos.includes(2027) && anos.includes(2026), "inclui o ano seguinte");
-const cal2 = calendarioFeriados(anosDoCalendario("2026-12-30"), []);
+const cal2 = calendarioFeriados(anosDoCalendario("2026-12-30"), [], "Ipatinga");
 ok(ehFeriado(cal2, "2027-01-01") === true, "1º de janeiro do ano que vem já é feriado");
-ok(ehFeriado(cal2, "2027-02-09") === true, "Carnaval de 2027 (móvel) também");
+ok(ehFeriado(cal2, "2027-03-26") === true, "Sexta-feira da Paixão de 2027 também");
 
 console.log(falhas ? `\n${falhas} FALHA(S)` : "\nTodos os casos passaram.");
 process.exit(falhas ? 1 : 0);

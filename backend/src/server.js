@@ -28,13 +28,10 @@ import {
   hhmm,
   janelaEscala,
   liberouATempo as liberouATempoPuro,
-  mesmaSemana,
   REPO_MAX_MES,
   REPO_HORAS_MIN,
   REPO_MANHA_ATE,
-  segundaDaSemana,
   somarComp,
-  tetoSemanal,
   tipoMensalista,
 } from "./regrasAula.js";
 import {
@@ -194,6 +191,14 @@ function addDays(iso, n) {
   d.setDate(d.getDate() + n);
   return d.toISOString().slice(0, 10);
 }
+function addMonthsISO(iso, n) {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return iso;
+  const y = Number(m[1]), mo = Number(m[2]) - 1, day = Number(m[3]);
+  const first = new Date(Date.UTC(y, mo + n, 1));
+  const lastDay = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(day, lastDay))).toISOString().slice(0, 10);
+}
 const onlyDigits = (s) => (s || "").replace(/\D/g, "");
 /* Etiquetas válidas: nenhuma. A única que existia ("Lead") saiu do sistema em
    22/08/2026 — quem entra pelo site já marca a experimental, então "cadastrou e
@@ -253,9 +258,9 @@ const comEncargos = (inv) => {
 
 /* ---------- regras de marcação do mensalista (ver src/regrasAula.js) ---------- */
 
-/* Aulas ativas da aluna a partir de `desde`. Alimenta duas regras: a janela da
-   escala (precisa das aulas de hoje em diante) e o teto semanal (precisa da
-   semana INTEIRA da data escolhida, cuja segunda pode já ter passado). */
+/* Aulas ativas da aluna. Alimentam apenas a janela da mensalista em escala.
+   A frequência 1x/2x define a grade inicial; não existe mais teto semanal que
+   transforme feriado sem aula em consumo fictício do plano. */
 async function aulasAtivasDe(client, desde = todayISO()) {
   return prisma.booking.findMany({
     where: { clientName: client.name, status: { not: "cancelada" }, date: { gte: desde } },
@@ -267,27 +272,22 @@ async function aulasAtivasDe(client, desde = todayISO()) {
 /* Aplica as regras antes de criar a aula. Lança { code: 409 } quando barra.
    `forcar` existe só para o painel: a Inêz vê o aviso na tela e decide passar
    por cima (ela é a dona da agenda). O portal da aluna nunca manda `forcar`. */
-async function exigirRegras(client, alvo, { forcar = false, ignorarJanela = false, ignorarTeto = false } = {}) {
+async function exigirRegras(client, alvo, { forcar = false, ignorarJanela = false } = {}) {
   /* Feriado vem ANTES do `forcar`, e de propósito: as outras regras deste
      módulo são do plano da aluna, e a Inêz pode passar por cima delas porque a
      agenda é dela. Feriado não é regra de plano — é o dia em que a escola não
      abre. Não há aula para forçar. */
-  const nomeFeriado = feriadoNoDia(alvo?.date);
+  const nomeFeriado = feriadoNoDia(alvo?.date, alvo?.unit);
   if (nomeFeriado)
     throw Object.assign(new Error(recusaFeriado(nomeFeriado, alvo?.date)), { code: 409, codigo: "feriado" });
   if (forcar) return { ok: true, codigo: "", motivo: "" };
   const hoje = todayISO();
   const precisaJanela = !ignorarJanela && tipoMensalista(client) === "escala";
-  const precisaTeto = !ignorarTeto && !!Number(client?.weeklyFreq);
-  // O teto olha a semana do alvo, que pode ter começado antes de hoje.
-  const desde = precisaTeto
-    ? [hoje, segundaDaSemana(alvo?.date)].sort()[0]
-    : hoje;
   const r = checarRegras(client, alvo, {
     hoje,
-    aulasAtivas: precisaJanela || precisaTeto ? await aulasAtivasDe(client, desde) : [],
+    aulasAtivas: precisaJanela ? await aulasAtivasDe(client, hoje) : [],
     ignorarJanela,
-    ignorarTeto,
+    ignorarTeto: true,
   });
   if (!r.ok) throw Object.assign(new Error(r.motivo), { code: 409, codigo: r.codigo });
   return r;
@@ -754,18 +754,35 @@ async function loadSettings() {
    recarregado sempre que a Inêz mexe na lista, e o calendário cobre o ano
    passado, o atual e os dois seguintes: a replicação de 52 semanas atravessa a
    virada do ano. */
-let FERIADOS = {};
+let FERIADOS = {}; // nacionais + manuais globais (compatibilidade)
+let FERIADOS_POR_UNIDADE = {};
+let FERIADOS_BASE_POR_UNIDADE = {};
+let ABERTURAS_FERIADO = [];
 async function loadFeriados() {
-  const manuais = await prisma.holiday.findMany({ orderBy: { date: "asc" } });
-  FERIADOS = calendarioFeriados(anosDoCalendario(todayISO()), manuais);
-  return FERIADOS;
+  const [manuais, aberturas] = await Promise.all([
+    prisma.holiday.findMany({ orderBy: { date: "asc" } }),
+    prisma.holidayOverride.findMany({ where: { hasClasses: true }, orderBy: { date: "asc" } }),
+  ]);
+  const anos = anosDoCalendario(todayISO());
+  const unidades = SETTINGS.units?.length ? SETTINGS.units : UNITS;
+  FERIADOS = calendarioFeriados(anos, manuais);
+  FERIADOS_POR_UNIDADE = {};
+  FERIADOS_BASE_POR_UNIDADE = {};
+  ABERTURAS_FERIADO = aberturas;
+  for (const unidade of unidades) {
+    const cal = calendarioFeriados(anos, manuais, unidade);
+    FERIADOS_BASE_POR_UNIDADE[unidade] = { ...cal };
+    for (const a of aberturas) if (a.unit === unidade) delete cal[a.date];
+    FERIADOS_POR_UNIDADE[unidade] = cal;
+  }
+  return FERIADOS_POR_UNIDADE;
 }
 // "Natal" | "" — o nome do feriado naquele dia
-const feriadoNoDia = (date) => feriadoDe(FERIADOS, date);
+const feriadoNoDia = (date, unit) => feriadoDe(unit ? FERIADOS_POR_UNIDADE[unit] : FERIADOS, date);
 /* Recusa pronta para as rotas: devolve true quando já respondeu 409.
    Uso: `if (barrarFeriado(res, date)) return;` */
-function barrarFeriado(res, date) {
-  const nome = feriadoNoDia(date);
+function barrarFeriado(res, date, unit) {
+  const nome = feriadoNoDia(date, unit);
   if (!nome) return false;
   res.status(409).json({ error: recusaFeriado(nome, date), feriado: nome, date });
   return true;
@@ -864,7 +881,15 @@ app.get(
     res.json({
       /* `feriados` é o calendário já resolvido ({ 'YYYY-MM-DD': nome }): a tela
          não recalcula Páscoa nem junta lista manual, só consulta o dia. */
-      meta: { ...SETTINGS, multaAtraso: MULTA_ATRASO_REAIS, jurosDia: JUROS_DIA_PERCENTUAL, feriados: FERIADOS },
+      meta: {
+        ...SETTINGS,
+        multaAtraso: MULTA_ATRASO_REAIS,
+        jurosDia: JUROS_DIA_PERCENTUAL,
+        feriados: FERIADOS,
+        feriadosPorUnidade: FERIADOS_POR_UNIDADE,
+        feriadosBasePorUnidade: FERIADOS_BASE_POR_UNIDADE,
+        aberturasFeriado: ABERTURAS_FERIADO.map(({ date, unit }) => ({ date, unit })),
+      },
       clients: clients.map(({ pin, ...c }) => ({ ...c, tags: parseTags(c.tags), hasPin: !!pin })),
       slots,
       bookings,
@@ -918,7 +943,7 @@ app.post(
          uma data só isso vira recusa; num cadastro de várias semanas o dia é
          pulado e volta em `feriados`, para a tela dizer quais ficaram de fora —
          pular em silêncio é como a regra do sábado sumiu da vista em agosto. */
-      const nomeFeriado = feriadoNoDia(d);
+      const nomeFeriado = feriadoNoDia(d, unit);
       if (nomeFeriado) { feriados.push({ date: d, nome: nomeFeriado }); continue; }
       const doDia = await prisma.slot.findMany({ where: { date: d, unit } });
       if (doDia.some((s) => s.time === time)) continue; // duplicado exato: ignora em silêncio
@@ -981,11 +1006,15 @@ app.post(
     const ativas = comAlunas
       ? await prisma.booking.findMany({ where: { slotId: id, status: { not: "cancelada" } } })
       : [];
-    const naoReplicavel = (b) => ehReposicao(b) || ehPagamentoDeMatricula(b.paymentMethod);
+    const naoReplicavel = (b) => ehReposicao(b) || b.paymentMethod === PGTO_EXTRA || ehPagamentoDeMatricula(b.paymentMethod);
     const origem = ativas.filter((b) => !naoReplicavel(b));
     const naoReplicadas = ativas.filter(naoReplicavel).map((b) => ({
       clientName: b.clientName,
-      motivo: ehReposicao(b) ? "reposição não é replicada (aula única)" : "aula experimental não é replicada",
+      motivo: ehReposicao(b)
+        ? "reposição não é replicada (aula única)"
+        : b.paymentMethod === PGTO_EXTRA
+          ? "aula extra não é replicada (aula única)"
+          : "aula experimental não é replicada",
     }));
     const nomes = [...new Set(origem.map((b) => b.clientName))];
     const fichas = nomes.length ? await prisma.client.findMany({ where: { name: { in: nomes } } }) : [];
@@ -1003,7 +1032,7 @@ app.post(
       /* Feriado: a semana é pulada inteira — nem o horário, nem as alunas. Entra
          em `pulos` com o nome do feriado, para a Inêz ver por que aquela semana
          não veio e remarcar a turma noutro dia se quiser. */
-      const nomeFeriado = feriadoNoDia(date);
+      const nomeFeriado = feriadoNoDia(date, base.unit);
       if (nomeFeriado) {
         pulos.push({ date, clientName: "", motivo: `feriado (${nomeFeriado}) — a escola não abre` });
         continue;
@@ -1038,11 +1067,11 @@ app.post(
           continue;
         }
         // a janela da escala não se aplica: quem marca aqui é a Inêz, em lote
-        const r = checarRegras(ficha, { date, time: alvo.time }, {
+        const r = checarRegras(ficha, { date, time: alvo.time, unit: alvo.unit }, {
           hoje,
           aulasAtivas: agenda,
           ignorarJanela: true,
-          ignorarTeto: (b.paymentMethod || "") !== PGTO_PLANO,
+          ignorarTeto: true,
         });
         if (!r.ok) { pulos.push({ date, clientName: b.clientName, motivo: r.motivo }); continue; }
 
@@ -1087,6 +1116,136 @@ app.post(
     });
   })
 );
+
+/* ---------- REPLICAÇÃO ÚNICA DA AGENDA ----------
+   Um endpoint para os quatro alcances do botão da ADMIN: turma, dia, semana e
+   mês. Turma/dia/semana avançam semanalmente; mês preserva o ordinal do dia da
+   semana (ex.: 2ª terça do mês vira a 2ª terça do mês seguinte).
+
+   Só aulas REGULARES de mensalistas acompanham a turma. Reposição, extra,
+   experimental e avulsa são sempre unitárias. */
+function inicioDaSemanaISO(date) {
+  const d = new Date(date + "T00:00Z");
+  return addDays(date, -((d.getUTCDay() + 6) % 7));
+}
+function mesmaPosicaoNoMes(date, meses) {
+  const d = new Date(date + "T00:00Z");
+  const dow = d.getUTCDay();
+  const ordinal = Math.ceil(d.getUTCDate() / 7);
+  const alvoMes = addMonthsISO(date.slice(0, 7) + "-01", meses);
+  const primeiro = new Date(alvoMes + "T00:00Z");
+  const dia = 1 + ((dow - primeiro.getUTCDay() + 7) % 7) + (ordinal - 1) * 7;
+  const ultimo = new Date(Date.UTC(primeiro.getUTCFullYear(), primeiro.getUTCMonth() + 1, 0)).getUTCDate();
+  return dia <= ultimo ? `${alvoMes.slice(0, 8)}${String(dia).padStart(2, "0")}` : null;
+}
+
+app.post("/api/agenda/replicate", wrap(async (req, res) => {
+  const scope = ["class", "day", "week", "month"].includes(req.body?.scope) ? req.body.scope : "class";
+  const repetitions = Math.min(scope === "month" ? 24 : 52, Math.max(1, parseInt(req.body?.repetitions, 10) || 1));
+  const sourceDate = String(req.body?.date || "").slice(0, 10);
+  const unit = String(req.body?.unit || "");
+  const slotId = Number(req.body?.slotId);
+  const withStudents = req.body?.withStudents !== false;
+  const filtroUnidade = unit && unit !== "Todas" ? { unit } : {};
+
+  let fontes = [];
+  if (scope === "class") {
+    if (!Number.isInteger(slotId)) return res.status(400).json({ error: "Escolha a turma que será replicada." });
+    const slot = await prisma.slot.findUnique({ where: { id: slotId } });
+    if (slot) fontes = [slot];
+  } else if (!/^\d{4}-\d{2}-\d{2}$/.test(sourceDate)) {
+    return res.status(400).json({ error: "Informe a data-base da replicação." });
+  } else if (scope === "day") {
+    fontes = await prisma.slot.findMany({ where: { date: sourceDate, ...filtroUnidade }, orderBy: { time: "asc" } });
+  } else if (scope === "week") {
+    const ini = inicioDaSemanaISO(sourceDate);
+    fontes = await prisma.slot.findMany({
+      where: { date: { gte: ini, lte: addDays(ini, 6) }, ...filtroUnidade },
+      orderBy: [{ date: "asc" }, { time: "asc" }],
+    });
+  } else {
+    fontes = await prisma.slot.findMany({
+      where: { date: { startsWith: sourceDate.slice(0, 7) }, ...filtroUnidade },
+      orderBy: [{ date: "asc" }, { time: "asc" }],
+    });
+  }
+  if (!fontes.length) return res.status(404).json({ error: "Não há horários no período escolhido para replicar." });
+
+  const seriesSlot = new Map();
+  const seriesBooking = new Map();
+  const resultado = { scope, repetitions, fontes: fontes.length, slots: 0, aulas: 0, pulos: [], feriados: [] };
+
+  for (let n = 1; n <= repetitions; n++) {
+    for (const fonte of fontes) {
+      const date = scope === "month" ? mesmaPosicaoNoMes(fonte.date, n) : addDays(fonte.date, n * 7);
+      if (!date) {
+        resultado.pulos.push({ date: "", unit: fonte.unit, motivo: "esta ocorrência não existe no mês de destino" });
+        continue;
+      }
+      const nomeFeriado = feriadoNoDia(date, fonte.unit);
+      if (nomeFeriado) {
+        resultado.feriados.push({ date, unit: fonte.unit, nome: nomeFeriado });
+        continue;
+      }
+      const doDia = await prisma.slot.findMany({ where: { date, unit: fonte.unit } });
+      let alvo = doDia.find((s) => hhmm(s.time) === hhmm(fonte.time));
+      if (!alvo) {
+        const choque = doDia.find((s) => haChoque(hhmm(s.time), hhmm(fonte.time)));
+        if (choque) {
+          resultado.pulos.push({ date, unit: fonte.unit, motivo: `conflito com ${hhmm(choque.time)}` });
+          continue;
+        }
+        let sid = fonte.seriesId || seriesSlot.get(fonte.id);
+        if (!sid) { sid = crypto.randomUUID(); seriesSlot.set(fonte.id, sid); }
+        alvo = await prisma.slot.create({
+          data: {
+            date,
+            time: hhmm(fonte.time),
+            unit: fonte.unit,
+            prof: fonte.prof || null,
+            capacity: fonte.capacity || SETTINGS.capacidadePadrao,
+            seriesId: sid,
+          },
+        });
+        resultado.slots++;
+      }
+      if (!withStudents) continue;
+      const reservas = await prisma.booking.findMany({
+        where: { slotId: fonte.id, status: { not: "cancelada" }, paymentMethod: PGTO_PLANO },
+      });
+      for (const b of reservas) {
+        const dup = await prisma.booking.findFirst({
+          where: { slotId: alvo.id, clientName: b.clientName, status: { not: "cancelada" } },
+        });
+        if (dup) continue;
+        if ((await occupancy(alvo.id)) >= (alvo.capacity || 1)) {
+          resultado.pulos.push({ date, unit: fonte.unit, clientName: b.clientName, motivo: "turma lotada" });
+          continue;
+        }
+        const chaveSerie = `${b.seriesId || b.id}|${b.clientName}`;
+        if (!seriesBooking.has(chaveSerie)) seriesBooking.set(chaveSerie, b.seriesId || crypto.randomUUID());
+        await prisma.booking.create({
+          data: {
+            clientName: b.clientName,
+            phone: b.phone || "",
+            unit: alvo.unit,
+            date: alvo.date,
+            time: alvo.time,
+            prof: alvo.prof || profFor(alvo.unit),
+            slotId: alvo.id,
+            seriesId: seriesBooking.get(chaveSerie),
+            status: "confirmada",
+            value: 0,
+            paid: false,
+            paymentMethod: PGTO_PLANO,
+          },
+        });
+        resultado.aulas++;
+      }
+    }
+  }
+  res.json(resultado);
+}));
 
 app.patch(
   "/api/slots/:id",
@@ -1187,7 +1346,7 @@ app.get(
        feriado continua no banco, mas some das telas de escolha. Melhor não
        oferecer do que recusar depois de a aluna escolher. */
     const available = slots
-      .filter((s) => s.date >= t && !feriadoNoDia(s.date) && (!unit || s.unit === unit) && (occ[s.id] || 0) < s.capacity)
+      .filter((s) => s.date >= t && !feriadoNoDia(s.date, s.unit) && (!unit || s.unit === unit) && (occ[s.id] || 0) < s.capacity)
       .map((s) => ({ id: s.id, date: s.date, time: s.time, unit: s.unit, prof: s.prof || profFor(s.unit), vagas: s.capacity - (occ[s.id] || 0) }))
       .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
     /* A tela pública da aluna nova lê os preços daqui. Ela caía nos valores
@@ -1259,6 +1418,12 @@ app.post(
     const pulos = { lotada: 0, jaMarcada: 0, teto: 0 };
     const painel = doPainel(req);
 
+    /* Fora do painel esta rota só existe para a aula experimental. A aluna já
+       matriculada usa exclusivamente o portal: grade inicial de 12 meses,
+       reposição ou extra, sempre pelos fluxos próprios. */
+    if (!painel && !b.firstClass)
+      return res.status(403).json({ error: "Marcações comuns são feitas pela ADMIN. Use o portal para reposição ou aula extra. 💚" });
+
     /* LOTE É DO PAINEL — NUNCA DA ALUNA.
        Marcar várias datas de uma vez é operação de quem monta a agenda. Pelo
        portal e pelo WhatsApp a marcação é sempre UMA aula, numa turma que já
@@ -1290,12 +1455,12 @@ app.post(
     }
 
     // Feriado numa marcação de data única: recusa, com o motivo escrito.
-    if (!replicando && barrarFeriado(res, datas[0])) return;
+    if (!replicando && barrarFeriado(res, datas[0], unit)) return;
 
     const feriadosPulados = [];
     for (let i = 0; i < datas.length; i++) {
       const date = datas[i];
-      const nomeFeriado = feriadoNoDia(date);
+      const nomeFeriado = feriadoNoDia(date, unit);
       if (nomeFeriado) { feriadosPulados.push({ date, nome: nomeFeriado }); continue; }
       let slot = (b.slotId && !replicando)
         ? await prisma.slot.findUnique({ where: { id: Number(b.slotId) } })
@@ -1413,32 +1578,16 @@ app.patch(
     for (const k of ["status", "attendance", "date", "time", "paymentMethod", "paymentDate"])
       if (req.body[k] !== undefined) data[k] = req.body[k];
     // Mudar a aula PARA um feriado é a mesma coisa que marcar num feriado.
-    if (data.date !== undefined && data.date !== cur.date && barrarFeriado(res, data.date)) return;
+    if (data.date !== undefined && data.date !== cur.date && barrarFeriado(res, data.date, data.unit || cur.unit)) return;
     if (req.body.value !== undefined) data.value = Number(req.body.value) || cur.value;
     if (req.body.paid !== undefined) data.paid = !!req.body.paid;
     // mover a reserva para outro horário (usado no fluxo da 1ª aula)
     if (req.body.slotId !== undefined && Number(req.body.slotId) !== cur.slotId) {
       const ns = await prisma.slot.findUnique({ where: { id: Number(req.body.slotId) } });
       if (!ns) return res.status(404).json({ error: "Horário não encontrado" });
-      if (barrarFeriado(res, ns.date)) return;
+      if (barrarFeriado(res, ns.date, ns.unit)) return;
       const occ = await occupancy(ns.id);
       if (occ >= ns.capacity) return res.status(409).json({ error: "Turma lotada." });
-      /* Mover a aula é marcar de novo: se ela é do plano e muda de SEMANA, o
-         teto da semana de destino tem que ser medido. Sem isto, arrastar a aula
-         para uma semana já cheia era a porta dos fundos do limite de 1x/2x. */
-      if (cur.paymentMethod === PGTO_PLANO && !mesmaSemana(cur.date, ns.date)) {
-        const ficha = await prisma.client.findFirst({ where: { name: cur.clientName } });
-        if (ficha) {
-          try {
-            await exigirRegras(ficha, { date: ns.date, time: ns.time }, {
-              forcar: doPainel(req) && !!req.body.forcar,
-              ignorarJanela: doPainel(req),
-            });
-          } catch (e) {
-            return res.status(e.code || 409).json({ error: e.message, codigo: e.codigo });
-          }
-        }
-      }
       data.slotId = ns.id; data.date = ns.date; data.time = ns.time; data.unit = ns.unit; data.prof = ns.prof;
     }
     // presente → conclui a aula
@@ -2560,7 +2709,7 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
   const available = slots
     .filter((s) => (occ[s.id] || 0) < (s.capacity || 1))
     // Feriado: a escola não abre, então o dia não é oferecido para marcar.
-    .filter((s) => !feriadoNoDia(s.date))
+    .filter((s) => !feriadoNoDia(s.date, s.unit))
     // Restringe à unidade da aluna, se cadastrada — Inêz pode alterar pelo painel admin
     .filter((s) => !client.unit || s.unit === client.unit)
     /* Toda turma livre da unidade dela aparece. Havia aqui um filtro por data
@@ -2576,9 +2725,6 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
   const janela = tipo === "escala"
     ? janelaEscala(ativasFuturas, t)
     : { aberta: true, proxima: null, motivo: "" };
-  // Teto da semana corrente, para a tela mostrar "1 de 2 aulas desta semana".
-  // A conta por semana escolhida é refeita no MiniAgenda, com estes mesmos dados.
-  const teto = tetoSemanal(client, t, bookings.filter((b) => b.status !== "cancelada"));
   const extra = (await passeExtraDisponivel(client.id)) || (await passeExtraPendente(client.id));
   res.json({
     client: safeClient(client),
@@ -2590,7 +2736,6 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
     regras: {
       tipo,                                  // "fixo" | "escala" | null
       janela,                                // { aberta, proxima, motivo }
-      teto,                                  // { limite, marcadas, restantes } da semana de hoje
     },
     // Aula extra comprada: null, ou { status, valor, pixCode, ... }
     extra: extra ? resumoPasse(extra) : null,
@@ -2705,7 +2850,7 @@ const resumoPasse = (p) => ({
 app.post("/api/portal/:key/enroll", wrap(async (req, res) => {
   const client = await clientByPortalKey(req.params.key);
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
-  try { res.json(await converterEmMensalista(client, req.body || {})); }
+  try { res.json(await converterEmMensalista(client, { ...(req.body || {}), exigirGrade: true })); }
   catch (e) { res.status(e.code || 500).json({ error: e.message }); }
 }));
 
@@ -2729,6 +2874,10 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
       return res.status(e.code || 500).json({ error: e.message });
     }
   }
+  if (client.plan === "mensalista")
+    return res.status(403).json({
+      error: "Sua grade regular já é reservada automaticamente por 12 meses. Para alterar uma data, cancele aquela aula e use a reposição individual. 💚",
+    });
   const slot = await prisma.slot.findUnique({ where: { id: Number(req.body.slotId) } });
   if (!slot) return res.status(404).json({ error: "Horário não encontrado." });
   const dup = await prisma.booking.findFirst({ where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } } });
@@ -2826,39 +2975,118 @@ app.post("/api/portal/:key/absence/:bookingId", wrap(async (req, res) => {
    - Fez e não gostou → a mensalidade é devolvida por inteiro (status
      "devolvida") e a matrícula é desfeita. */
 
+/* Cria a grade regular da aluna por 12 meses. Cada horário escolhido vira um
+   padrão semanal independente. Feriado fechado é pulado e não gera Booking;
+   reposição, cancelamento e extra continuam fora desta série. */
+async function criarGradeInicial12Meses(client, slotsBase) {
+  const criadas = [], slotsCriados = [], feriados = [], pulos = [];
+  for (const base of slotsBase) {
+    let slotSeriesId = base.seriesId;
+    if (!slotSeriesId) {
+      slotSeriesId = crypto.randomUUID();
+      await prisma.slot.update({ where: { id: base.id }, data: { seriesId: slotSeriesId } });
+    }
+    const bookingSeriesId = crypto.randomUUID();
+    const fim = addMonthsISO(base.date, 12); // exclusivo: exatamente 12 meses
+    for (let date = base.date; date < fim; date = addDays(date, 7)) {
+      const nomeFeriado = feriadoNoDia(date, base.unit);
+      if (nomeFeriado) {
+        feriados.push({ date, unit: base.unit, nome: nomeFeriado });
+        continue;
+      }
+      const doDia = await prisma.slot.findMany({ where: { date, unit: base.unit } });
+      let alvo = doDia.find((s) => hhmm(s.time) === hhmm(base.time));
+      if (!alvo) {
+        const choque = doDia.find((s) => haChoque(hhmm(s.time), hhmm(base.time)));
+        if (choque) {
+          pulos.push({ date, unit: base.unit, motivo: `conflito com ${hhmm(choque.time)}` });
+          continue;
+        }
+        alvo = await prisma.slot.create({
+          data: {
+            date,
+            time: hhmm(base.time),
+            unit: base.unit,
+            prof: base.prof || null,
+            capacity: base.capacity || SETTINGS.capacidadePadrao,
+            seriesId: slotSeriesId,
+          },
+        });
+        slotsCriados.push(alvo);
+      }
+      const duplicada = await prisma.booking.findFirst({
+        where: { slotId: alvo.id, clientName: client.name, status: { not: "cancelada" } },
+      });
+      if (duplicada) continue;
+      if ((await occupancy(alvo.id)) >= (alvo.capacity || 1)) {
+        pulos.push({ date, unit: base.unit, motivo: "turma lotada" });
+        continue;
+      }
+      criadas.push(await prisma.booking.create({
+        data: {
+          clientName: client.name,
+          phone: client.phone || "",
+          unit: alvo.unit,
+          date: alvo.date,
+          time: alvo.time,
+          prof: alvo.prof || profFor(alvo.unit),
+          slotId: alvo.id,
+          seriesId: bookingSeriesId,
+          status: "confirmada",
+          value: 0,
+          paid: false,
+          paymentMethod: PGTO_PLANO,
+        },
+      }));
+    }
+  }
+  return {
+    booking: criadas[0] || null,
+    bookings: criadas,
+    total: criadas.length,
+    slotsCriados: slotsCriados.length,
+    feriados,
+    pulos,
+    meses: 12,
+  };
+}
+
 // Converte a aluna em mensalista: define o plano, registra/gera as mensalidades
-// e (se veio slotId) agenda a 1ª aula oficial. Lança { code } em caso de erro.
+// e, quando ela escolhe a grade, replica os padrões por 12 meses. Lança { code }.
 // `mensalidadePaga` chega quando o pagamento da experimental JÁ é a mensalidade
 // do mês corrente — é o caminho da tela pública da aluna nova.
-async function converterEmMensalista(client, { weeklyFreq, slotId, billingDay, mensalistaTipo, forcar, mensalidadePaga }) {
-  const freq = Number(weeklyFreq) === 2 ? 2 : 1;
+async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, billingDay, mensalistaTipo, mensalidadePaga, exigirGrade = false }) {
+  const jaMensalista = client.plan === "mensalista" && !!client.weeklyFreq;
+  const freq = jaMensalista ? (Number(client.weeklyFreq) === 2 ? 2 : 1) : (Number(weeklyFreq) === 2 ? 2 : 1);
   const tipo = mensalistaTipo === "escala" ? "escala" : "fixo";
-  if (client.plan === "mensalista" && client.weeklyFreq)
+  if (jaMensalista && !exigirGrade)
     throw Object.assign(new Error("Esta aluna já é mensalista."), { code: 409 });
-
-  // 1ª aula oficial (opcional aqui — pode ser agendada depois)
-  let booking = null;
-  if (slotId) {
-    const slot = await prisma.slot.findUnique({ where: { id: Number(slotId) } });
-    if (!slot) throw Object.assign(new Error("Horário não encontrado."), { code: 404 });
-    if (slot.date < todayISO()) throw Object.assign(new Error("Escolha uma aula futura."), { code: 400 });
-    if ((await occupancy(slot.id)) >= (slot.capacity || 1))
-      throw Object.assign(new Error("Turma lotada — escolha outro horário."), { code: 409 });
-    // A 1ª aula oficial já entra nas regras do plano que ela está escolhendo.
-    // A janela da escala não vale: é justamente a aula que abre o ciclo dela.
-    await exigirRegras({ ...client, plan: "mensalista", mensalistaTipo: tipo }, slot, {
-      forcar: !!forcar,
-      ignorarJanela: true,
+  if (jaMensalista && exigirGrade) {
+    const jaTemGrade = await prisma.booking.count({
+      where: { clientName: client.name, date: { gte: todayISO() }, status: { not: "cancelada" }, paymentMethod: PGTO_PLANO },
     });
-    booking = await prisma.booking.create({
-      data: {
-        clientName: client.name, phone: client.phone || "", unit: slot.unit,
-        date: slot.date, time: slot.time, prof: slot.prof || profFor(slot.unit),
-        slotId: slot.id, status: "confirmada", value: 0, paid: true, paymentMethod: "Mensalista",
-        paymentDate: todayISO(),
-      },
-    });
+    if (jaTemGrade)
+      throw Object.assign(new Error("Sua grade regular já está configurada. Para mudar uma aula específica, cancele somente aquela data. 💚"), { code: 409 });
   }
+
+  const ids = [...new Set((Array.isArray(slotIds) ? slotIds : slotId ? [slotId] : []).map(Number).filter(Number.isInteger))];
+  if ((exigirGrade || ids.length) && ids.length !== freq)
+    throw Object.assign(new Error(`Escolha ${freq} horário${freq > 1 ? "s" : ""} semanal${freq > 1 ? "is" : ""} para montar a grade de 12 meses.`), { code: 400 });
+  const slotsBase = ids.length ? await prisma.slot.findMany({ where: { id: { in: ids } } }) : [];
+  if (slotsBase.length !== ids.length) throw Object.assign(new Error("Um dos horários escolhidos não existe mais."), { code: 404 });
+  const padroes = new Set(slotsBase.map((s) => `${s.unit}|${new Date(s.date + "T00:00Z").getUTCDay()}|${hhmm(s.time)}`));
+  if (padroes.size !== slotsBase.length)
+    throw Object.assign(new Error("Escolha dias ou horários semanais diferentes para a grade."), { code: 400 });
+  for (const slot of slotsBase) {
+    if (slot.date < todayISO()) throw Object.assign(new Error("Escolha somente aulas futuras."), { code: 400 });
+    if (feriadoNoDia(slot.date, slot.unit)) throw Object.assign(new Error(recusaFeriado(feriadoNoDia(slot.date, slot.unit), slot.date)), { code: 409 });
+    if ((await occupancy(slot.id)) >= (slot.capacity || 1))
+      throw Object.assign(new Error(`A turma de ${slot.date} às ${slot.time} acabou de lotar.`), { code: 409 });
+  }
+  const grade = slotsBase.length ? await criarGradeInicial12Meses(client, slotsBase) : {
+    booking: null, bookings: [], total: 0, slotsCriados: 0, feriados: [], pulos: [], meses: 12,
+  };
+  const booking = grade.booking;
 
   /* Dia do vencimento: o dia em que ela se matriculou vira o dia dela, todo mês.
      Quem se matricula dia 19 paga todo dia 19. Se a Inêz já tiver definido um
@@ -2876,7 +3104,7 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, billingDay, m
       plan: "mensalista",
       status: "ativo",
       weeklyFreq: freq,
-      mensalistaTipo: tipo,
+      mensalistaTipo: jaMensalista ? client.mensalistaTipo : tipo,
       firstClass: false, // deixou de ser aluna nova/experimental
       monthlyValue: null, // passa a seguir a tabela do plano
       billingDay: dia,
@@ -2921,6 +3149,7 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, billingDay, m
   return {
     client: safeClient(atualizado),
     booking,
+    grade,
     invoice,
     // mensalidade do mês corrente, já quitada no ato da matrícula (ou null)
     mensalidadeDoMes,
@@ -3153,36 +3382,18 @@ app.post("/api/clients/:id/batch-book", wrap(async (req, res) => {
   const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
   if (!client) return res.status(404).json({ error: "Aluno não encontrado" });
   const { unit, time } = req.body || {};
-  const forcar = !!req.body?.forcar;
   const dates = Array.isArray(req.body?.dates) ? req.body.dates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)) : [];
   if (!unit || !time || !dates.length) return res.status(400).json({ error: "Informe unidade, horário e ao menos uma data." });
 
   const alvos = [...new Set(dates)].sort();
 
-  /* Teto semanal do plano (1x ou 2x). Como o lote cria várias aulas de uma vez,
-     a conta precisa ser incremental: partimos do que ela já tem em cada semana
-     e vamos somando o que este lote acrescenta. Sem isso, marcar 8 datas de uma
-     vez passaria pelo teto todo, porque nenhuma delas existia ainda. */
-  const limiteSemana = forcar ? 0 : Number(client.weeklyFreq) || 0;
-  const naSemana = new Map(); // segunda 'YYYY-MM-DD' → nº de aulas do plano
-  if (limiteSemana) {
-    const desde = segundaDaSemana(alvos[0]);
-    for (const b of await aulasAtivasDe(client, desde)) {
-      if (b.paymentMethod !== PGTO_PLANO) continue; // reposição/extra não ocupam vaga
-      const k = segundaDaSemana(b.date);
-      naSemana.set(k, (naSemana.get(k) || 0) + 1);
-    }
-  }
-
   // Marcação replicada: as aulas criadas na mesma leva ganham um seriesId em
   // comum, para a exclusão poder oferecer "excluir também as demais".
   const seriesId = new Set(dates).size > 1 ? crypto.randomUUID() : null;
-  const agendadas = [], pulos = { semTurma: 0, cheia: 0, jaAgendado: 0, teto: 0, feriado: 0 };
+  const agendadas = [], pulos = { semTurma: 0, cheia: 0, jaAgendado: 0, feriado: 0 };
   for (const date of alvos) {
-    // Feriado: a escola não abre. Pulado mesmo com `forcar` — não é regra de plano.
-    if (feriadoNoDia(date)) { pulos.feriado++; continue; }
-    const semana = segundaDaSemana(date);
-    if (limiteSemana && (naSemana.get(semana) || 0) >= limiteSemana) { pulos.teto++; continue; }
+    // Feriado fechado: não cria aula e, portanto, não conta como aula do plano.
+    if (feriadoNoDia(date, unit)) { pulos.feriado++; continue; }
     const slot = await prisma.slot.findFirst({ where: { date, time, unit } });
     if (!slot) { pulos.semTurma++; continue; }
     // já agendado nesta turma?
@@ -3197,7 +3408,6 @@ app.post("/api/clients/:id/batch-book", wrap(async (req, res) => {
       },
     });
     agendadas.push(b);
-    if (limiteSemana) naSemana.set(semana, (naSemana.get(semana) || 0) + 1);
   }
   res.json({ agendadas: agendadas.length, pulos });
 }));
@@ -3344,7 +3554,7 @@ async function waAvailableSlots(unit) {
   return slots
     .map((s) => ({ ...s, time: hhmm(s.time) || String(s.time || "").slice(0, 5) }))
     // feriado não é oferecido no WhatsApp: a escola não abre naquele dia
-    .filter((s) => !feriadoNoDia(s.date))
+    .filter((s) => !feriadoNoDia(s.date, s.unit))
     .filter((s) => slotAindaDaTempo(s, t, corte))
     .map((s) => {
       const capacidade = s.capacity || 1;
@@ -4233,7 +4443,7 @@ app.post(
     const id = Number(req.params.id);
     const w = await prisma.waitlist.findUnique({ where: { id }, include: { slot: true } });
     if (!w) return res.status(404).json({ error: "Entrada não encontrada" });
-    if (barrarFeriado(res, w.slot.date)) return;
+    if (barrarFeriado(res, w.slot.date, w.slot.unit)) return;
     const occ = await occupancy(w.slotId);
     if (occ >= w.slot.capacity) return res.status(409).json({ error: "Turma ainda está lotada." });
     const booking = await prisma.booking.create({
@@ -4273,7 +4483,7 @@ app.get(
     allBookings.filter((b) => b.status !== "cancelada").forEach((b) => { occ[b.slotId] = (occ[b.slotId] || 0) + 1; });
     const available = slots
       // feriado não é oferecido: a escola não abre naquele dia
-      .filter((s) => s.date >= t && !feriadoNoDia(s.date) && (occ[s.id] || 0) < s.capacity)
+      .filter((s) => s.date >= t && !feriadoNoDia(s.date, s.unit) && (occ[s.id] || 0) < s.capacity)
       .map((s) => ({ id: s.id, date: s.date, time: s.time, unit: s.unit, prof: s.prof || profFor(s.unit), vagas: s.capacity - (occ[s.id] || 0) }))
       .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
     res.json({
@@ -4295,7 +4505,7 @@ app.post(
     const phone = onlyDigits(rawPhone);
     const slot = await prisma.slot.findUnique({ where: { id: Number(req.body.slotId) } });
     if (!slot) return res.status(404).json({ error: "Horário não encontrado." });
-    if (barrarFeriado(res, slot.date)) return;
+    if (barrarFeriado(res, slot.date, slot.unit)) return;
     if ((await occupancy(slot.id)) >= slot.capacity) return res.status(409).json({ error: "Esta turma acabou de lotar. Escolha outro horário." });
     const cli = (await prisma.client.findMany()).find((c) => onlyDigits(c.phone) === phone);
     const clientName = (cli && cli.name) || padronizarNome(req.body.name);
@@ -4337,9 +4547,52 @@ app.post(
    O calendário (`feriados`) é o que vale na porta da escola: nacionais
    calculados + o que a Inêz cadastrou. `manuais` é só o que ela digitou, que é
    o que a tela de Configurações deixa editar. */
+/* Estado e chave do feriado no próprio dia da agenda. O nome vem do calendário
+   automático; a chave só decide se aquela UNIDADE terá aulas. */
+app.get("/api/feriados-dia", wrap(async (req, res) => {
+  const date = String(req.query?.date || "").slice(0, 10);
+  const unit = String(req.query?.unit || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !unit)
+    return res.status(400).json({ error: "Informe data e unidade." });
+  const nome = feriadoDe(FERIADOS_BASE_POR_UNIDADE[unit], date);
+  const hasClasses = !nome || !feriadoNoDia(date, unit);
+  res.json({ date, unit, nome, hasClasses, isHoliday: !!nome });
+}));
+
+app.post("/api/feriados-dia", wrap(async (req, res) => {
+  const date = String(req.body?.date || "").slice(0, 10);
+  const unit = String(req.body?.unit || "");
+  const hasClasses = !!req.body?.hasClasses;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !unit)
+    return res.status(400).json({ error: "Informe data e unidade." });
+  const nome = feriadoDe(FERIADOS_BASE_POR_UNIDADE[unit], date);
+  if (!nome) return res.status(409).json({ error: "Esta data não é feriado nesta unidade." });
+  if (hasClasses) {
+    await prisma.holidayOverride.upsert({
+      where: { date_unit: { date, unit } },
+      update: { hasClasses: true },
+      create: { date, unit, hasClasses: true },
+    });
+  } else {
+    await prisma.holidayOverride.deleteMany({ where: { date, unit } });
+  }
+  await loadFeriados();
+  const aulas = hasClasses ? [] : await prisma.booking.findMany({
+    where: { date, unit, status: { not: "cancelada" } },
+    orderBy: [{ time: "asc" }, { clientName: "asc" }],
+  });
+  res.json({ date, unit, nome, hasClasses, aulas });
+}));
+
 app.get("/api/feriados", wrap(async (_req, res) => {
   const manuais = await prisma.holiday.findMany({ orderBy: { date: "asc" } });
-  res.json({ feriados: FERIADOS, manuais });
+  res.json({
+    feriados: FERIADOS,
+    feriadosPorUnidade: FERIADOS_POR_UNIDADE,
+    feriadosBasePorUnidade: FERIADOS_BASE_POR_UNIDADE,
+    aberturas: ABERTURAS_FERIADO,
+    manuais,
+  });
 }));
 
 /* Aulas ATIVAS marcadas numa data — quem seria atingida se o dia virar feriado.
@@ -4394,9 +4647,13 @@ app.get("/api/feriados/:date/aulas", wrap(async (req, res) => {
    Aula extra e experimental não geram crédito: não são aula do plano. */
 app.post("/api/feriados/:date/cancelar-aulas", wrap(async (req, res) => {
   const date = String(req.params.date || "").slice(0, 10);
-  const nome = feriadoNoDia(date);
+  const unit = String(req.body?.unit || "");
+  const nome = feriadoNoDia(date, unit);
   if (!nome) return res.status(409).json({ error: "Este dia não está marcado como feriado." });
-  const aulas = await aulasDoDia(date);
+  const aulas = await prisma.booking.findMany({
+    where: { date, ...(unit ? { unit } : {}), status: { not: "cancelada" } },
+    orderBy: [{ time: "asc" }, { clientName: "asc" }],
+  });
   const canceladas = [], creditadas = [];
   for (const b of aulas) {
     await prisma.booking.update({
@@ -4664,6 +4921,16 @@ const TABELAS_ESPERADAS = [
       \`remove\` BOOLEAN NOT NULL DEFAULT false,
       \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       UNIQUE INDEX \`Holiday_date_key\`(\`date\`),
+      PRIMARY KEY (\`id\`)
+    ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
+  ["HolidayOverride", `CREATE TABLE IF NOT EXISTS \`HolidayOverride\` (
+      \`id\` INTEGER NOT NULL AUTO_INCREMENT,
+      \`date\` VARCHAR(10) NOT NULL,
+      \`unit\` VARCHAR(100) NOT NULL,
+      \`hasClasses\` BOOLEAN NOT NULL DEFAULT true,
+      \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      UNIQUE INDEX \`HolidayOverride_date_unit_key\`(\`date\`, \`unit\`),
+      INDEX \`HolidayOverride_date_idx\`(\`date\`),
       PRIMARY KEY (\`id\`)
     ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
 ];
