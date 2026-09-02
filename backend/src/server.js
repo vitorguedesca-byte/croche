@@ -1858,12 +1858,13 @@ async function registrarMatriculaPaga(booking) {
     where: { id: c.id },
     data: { matriculaStatus: "paga", matriculaAt: pagoEm },
   });
-  if (!atualizado.weeklyFreq || atualizado.plan === "mensalista") return null;
+  if (!atualizado.weeklyFreq || (atualizado.plan === "mensalista" && atualizado.matriculaStatus === "convertida")) return null;
   try {
     const r = await converterEmMensalista(atualizado, {
       weeklyFreq: atualizado.weeklyFreq,
       mensalistaTipo: atualizado.mensalistaTipo,
       billingDay: diaDoMes(pagoEm),
+      slotId: booking.slotId,
       /* O que vira mensalidade do mês corrente é o PAGAMENTO MENOS A TAXA DE
          MATRÍCULA. `booking.value` é o que ela pagou (mensalidade + taxa); a
          fatura do mês tem que nascer com o valor da mensalidade, senão o
@@ -1871,7 +1872,7 @@ async function registrarMatriculaPaga(booking) {
          devolução de quem desistir sairia errada junto. */
       mensalidadePaga: { valor: mensalidadeDaReserva(booking), pagoEm, txid: booking.txid },
     });
-    console.log(`[matricula] ${atualizado.name} matriculada no plano ${atualizado.weeklyFreq}x (${atualizado.mensalistaTipo}).`);
+    console.log(`[matricula] ${atualizado.name} matriculada no plano ${atualizado.weeklyFreq}x (${atualizado.mensalistaTipo}). Aulas criadas na grade: ${r?.grade?.total || 0}.`);
     return r;
   } catch (e) {
     // A mensalidade já está paga e registrada; se a matrícula falhar (Sicredi fora
@@ -3316,22 +3317,31 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
   const freq = jaMensalista ? (Number(client.weeklyFreq) === 2 ? 2 : 1) : (Number(weeklyFreq) === 2 ? 2 : 1);
   const tipo = mensalistaTipo === "escala" ? "escala" : "fixo";
   const tipoEfetivo = jaMensalista ? (client.mensalistaTipo === "escala" ? "escala" : "fixo") : tipo;
-  if (jaMensalista && !exigirGrade)
-    throw Object.assign(new Error("Esta aluna já é mensalista."), { code: 409 });
+  const jaTemGrade = jaMensalista ? await prisma.booking.count({
+    where: { clientName: client.name, date: { gte: todayISO() }, status: { not: "cancelada" }, paymentMethod: PGTO_PLANO },
+  }) : 0;
+  if (jaMensalista && jaTemGrade > 0 && !exigirGrade)
+    throw Object.assign(new Error("Esta aluna já é mensalista e já possui grade regular de aulas."), { code: 409 });
   if (jaMensalista && exigirGrade) {
     if (tipoEfetivo === "escala")
       throw Object.assign(new Error("Mensalista de escala não possui grade replicada: cada aula é marcada individualmente. 💚"), { code: 409 });
-    const jaTemGrade = await prisma.booking.count({
-      where: { clientName: client.name, date: { gte: todayISO() }, status: { not: "cancelada" }, paymentMethod: PGTO_PLANO },
-    });
     if (jaTemGrade)
       throw Object.assign(new Error("Sua grade regular já está configurada. Para mudar uma aula específica, cancele somente aquela data. 💚"), { code: 409 });
   }
 
   const ids = [...new Set((Array.isArray(slotIds) ? slotIds : slotId ? [slotId] : []).map(Number).filter(Number.isInteger))];
+  // Se não foi passado slotId e a aluna é de turma fixa, busca da 1ª aula agendada / reserva da matrícula
+  if (!ids.length && tipoEfetivo === "fixo") {
+    const b = await prisma.booking.findFirst({
+      where: { clientName: client.name, status: { not: "cancelada" } },
+      orderBy: { date: "asc" },
+    });
+    if (b?.slotId) ids.push(b.slotId);
+  }
+
   if (tipoEfetivo === "escala" && ids.length)
     throw Object.assign(new Error("Mensalista de escala não pode receber horários replicados. Marque cada aula individualmente."), { code: 400 });
-  if (tipoEfetivo === "fixo" && (exigirGrade || ids.length) && ids.length !== freq)
+  if (tipoEfetivo === "fixo" && exigirGrade && ids.length !== freq)
     throw Object.assign(new Error(`Escolha ${freq} horário${freq > 1 ? "s" : ""} semanal${freq > 1 ? "is" : ""} para montar a grade de 12 meses.`), { code: 400 });
   const slotsBase = ids.length ? await prisma.slot.findMany({ where: { id: { in: ids } } }) : [];
   if (slotsBase.length !== ids.length) throw Object.assign(new Error("Um dos horários escolhidos não existe mais."), { code: 404 });
@@ -3341,8 +3351,12 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
   for (const slot of slotsBase) {
     if (slot.date < todayISO()) throw Object.assign(new Error("Escolha somente aulas futuras."), { code: 400 });
     if (feriadoNoDia(slot.date, slot.unit)) throw Object.assign(new Error(recusaFeriado(feriadoNoDia(slot.date, slot.unit), slot.date)), { code: 409 });
-    if ((await occupancy(slot.id)) >= (slot.capacity || 1))
-      throw Object.assign(new Error(`A turma de ${slot.date} às ${slot.time} acabou de lotar.`), { code: 409 });
+    if ((await occupancy(slot.id)) >= (slot.capacity || 1)) {
+      const sit = await situacaoNaTurma(slot.id, client.name);
+      if (sit?.tipo !== "ativa") {
+        throw Object.assign(new Error(`A turma de ${slot.date} às ${slot.time} acabou de lotar.`), { code: 409 });
+      }
+    }
   }
   const grade = tipoEfetivo === "fixo" && slotsBase.length ? await criarGradeInicial12Meses(client, slotsBase) : {
     booking: null, bookings: [], total: 0, slotsCriados: 0, feriados: [], pulos: [], meses: 0, individual: tipoEfetivo === "escala",
