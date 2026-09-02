@@ -7,11 +7,6 @@ export const CAPACITY_PADRAO = 4;
 export const TAG_OPTIONS = [];
 
 export const STATUS = {
-  // "Aguardando pagamento" saiu em 28/08/2026: a aula não é mais paga uma a uma,
-  // quem paga é a mensalidade. O que falta aqui é a confirmação da presença.
-  aguardando: { label: "Aguardando confirmação", badge: "b-warn", dot: "var(--warn)" },
-  confirmada: { label: "Confirmada", badge: "b-ok", dot: "var(--ok)" },
-  concluida: { label: "Concluída", badge: "b-info", dot: "var(--info)" },
   cancelada: { label: "Cancelada", badge: "b-danger", dot: "var(--danger)" },
 };
 

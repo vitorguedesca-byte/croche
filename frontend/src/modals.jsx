@@ -592,8 +592,9 @@ export function ManageBooking({ booking, onBack }) {
           </span></div>
         );
       })()}
-      {/* Só leitura: o status anda sozinho pelo pagamento e a presença se marca na turma. */}
-      <div className="info-line"><b>Situação</b><span><StatusBadge status={booking.status} /></span></div>
+      {booking.status === "cancelada" && (
+        <div className="info-line"><b>Situação</b><span><StatusBadge status={booking.status} /></span></div>
+      )}
       <div className="info-line"><b>Presença</b><span>
         {booking.attendance === "presente" ? "✓ Presente" : booking.attendance === "falta" ? "✕ Faltou" : "○ Não marcada"}
       </span></div>

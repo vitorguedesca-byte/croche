@@ -23,11 +23,10 @@ const diasEntre = (de, ate) =>
 const segundaISO = (iso) => addDays(iso, -((new Date(iso + "T00:00").getDay() + 6) % 7));
 
 function statusText(b) {
-  // Sem valor próprio não há o que pagar pela aula — ela só espera confirmação.
-  if (b.status === "aguardando") return b.value > 0 ? "Aguardando pagamento" : "Aguardando confirmação";
-  if (b.status === "confirmada") return "Confirmada ✓";
-  if (b.status === "concluida") return "Concluída";
-  return b.status;
+  if (b.status === "cancelada") return "Cancelada";
+  if (b.attendance === "presente") return "Presente ✓";
+  if (b.attendance === "falta") return "Faltou";
+  return "Agendada";
 }
 
 function PortalShell({ children }) {

@@ -279,12 +279,11 @@ export function Select({
 }
 
 export function StatusBadge({ status }) {
-  const s = STATUS[status];
-  if (!s) return null;
+  if (status !== "cancelada") return null;
   return (
-    <span className={`badge ${s.badge}`}>
-      <span className="dot" style={{ background: s.dot }} />
-      {s.label}
+    <span className="badge b-danger">
+      <span className="dot" style={{ background: "var(--danger)" }} />
+      Cancelada
     </span>
   );
 }

@@ -142,10 +142,10 @@ export function Dashboard({ go }) {
     </div>
 
     <div className="grid stats" style={{ marginBottom: "1rem" }}>
-      <div className="card stat click" onClick={() => go("agenda")}><div className="lbl">📅 Aulas hoje</div><div className="val">{hoje.length}</div><div className="foot">{confHoje} confirmada(s)</div></div>
+      <div className="card stat click" onClick={() => go("agenda")}><div className="lbl">📅 Aulas hoje</div><div className="val">{hoje.length}</div><div className="foot">{hoje.length ? `${hoje.length} agendada(s)` : "nenhuma"}</div></div>
       <div className="card stat click" onClick={() => go("agenda")}><div className="lbl">📆 Nesta semana</div><div className="val">{aulasSemana}</div><div className="foot">{fmtDate(wk)} – {fmtDate(wkEnd)}</div></div>
       <div className="card stat click" onClick={() => go("agenda")}><div className="lbl">🗓 Aulas agendadas</div><div className="val terra">{futuras}</div><div className="foot">de hoje em diante</div></div>
-      <div className="card stat click" onClick={() => go("marcacoes")}><div className="lbl">✅ Concluídas no mês</div><div className="val">{concluidasMes}</div><div className="foot">aulas realizadas</div></div>
+      <div className="card stat click" onClick={() => go("marcacoes")}><div className="lbl">✅ Aulas realizadas</div><div className="val">{concluidasMes}</div><div className="foot">presenças no mês</div></div>
     </div>
 
     <div className="people-strip">
@@ -160,10 +160,18 @@ export function Dashboard({ go }) {
     <div className="panel">
       <div className="panel-h"><h2>🧶 Aulas de hoje</h2><button className="btn sec sm" onClick={() => go("agenda")}>Agenda</button></div>
       {hoje.length ? (
-        <table><thead><tr><th>Hora</th><th>Aluno</th><th>Unidade</th><th>Status</th></tr></thead><tbody>
+        <table><thead><tr><th>Hora</th><th>Aluno</th><th>Unidade</th><th>Presença</th></tr></thead><tbody>
           {hoje.map((b) => (
             <tr key={b.id} onClick={() => open(<ManageBooking booking={b} />)} className="row-click">
-              <td data-l="Hora"><b>{b.time}</b></td><td data-l="Aluno">{b.clientName}</td><td data-l="Unidade"><span className="chip">{b.unit}</span></td><td data-l="Status"><StatusBadge status={b.status} /></td>
+              <td data-l="Hora"><b>{b.time}</b></td>
+              <td data-l="Aluno">{b.clientName}</td>
+              <td data-l="Unidade"><span className="chip">{b.unit}</span></td>
+              <td data-l="Presença">
+                {b.status === "cancelada" ? <span className="badge b-danger">Cancelada</span>
+                  : b.attendance === "presente" ? <span className="badge b-ok">✓ Presente</span>
+                  : b.attendance === "falta" ? <span className="badge b-danger">✕ Falta</span>
+                  : <span className="cli-sub">—</span>}
+              </td>
             </tr>
           ))}
         </tbody></table>
@@ -173,10 +181,10 @@ export function Dashboard({ go }) {
     <div className="panel">
       <div className="panel-h"><h2>📅 Próximas aulas</h2><button className="btn sec sm" onClick={() => go("agenda")}>Abrir agenda</button></div>
       {prox.length ? (
-        <table><thead><tr><th>Dia</th><th>Hora</th><th>Aluno</th><th>Unidade</th><th>Status</th></tr></thead><tbody>
+        <table><thead><tr><th>Dia</th><th>Hora</th><th>Aluno</th><th>Unidade</th></tr></thead><tbody>
           {prox.map((b) => (
             <tr key={b.id} onClick={() => open(<ManageBooking booking={b} />)} className="row-click">
-              <td data-l="Dia">{fmtDateLong(b.date)}</td><td data-l="Hora"><b>{b.time}</b></td><td data-l="Aluno">{b.clientName}</td><td data-l="Unidade"><span className="chip">{b.unit}</span></td><td data-l="Status"><StatusBadge status={b.status} /></td>
+              <td data-l="Dia">{fmtDateLong(b.date)}</td><td data-l="Hora"><b>{b.time}</b></td><td data-l="Aluno">{b.clientName}</td><td data-l="Unidade"><span className="chip">{b.unit}</span></td>
             </tr>
           ))}
         </tbody></table>
@@ -508,7 +516,7 @@ export function Marcacoes() {
   const [semana, setSemana] = useState(() => weekStart(todayISO()));
   const semanaFim = addDays(semana, 6);
   const semanaAtual = weekStart(todayISO());
-  const segs = [["todas", "Todas"], ["aguardando", "Aguardando"], ["confirmada", "Confirmadas"], ["concluida", "Concluídas"], ["cancelada", "Canceladas"]];
+  const segs = [["todas", "Todas"], ["ativas", "Ativas"], ["cancelada", "Canceladas"]];
   const comp = compAtual();
 
   const isNovo = (b) => isNewLead(data, b);
@@ -531,7 +539,8 @@ export function Marcacoes() {
      procurando uma pessoa, não conferindo a semana, e não faz sentido esconder
      a marcação dela porque caiu em outro período. */
   if (tab === "novos" && !search) list = list.filter((b) => b.date >= semana && b.date <= semanaFim);
-  if (filter !== "todas") list = list.filter((b) => b.status === filter);
+  if (filter === "ativas") list = list.filter((b) => b.status !== "cancelada");
+  else if (filter === "cancelada") list = list.filter((b) => b.status === "cancelada");
   if (mensF !== "todas") list = list.filter((b) => sitDe(b).estado === mensF);
   if (search) list = list.filter((b) => b.clientName.toLowerCase().includes(search.toLowerCase()));
 
