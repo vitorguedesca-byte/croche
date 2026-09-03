@@ -497,13 +497,17 @@ export const SIT_MENSALIDADE = {
 };
 
 // A ficha da aluna por trás de uma marcação (a reserva guarda nome e telefone,
-// não o id). Casa pelo telefone quando existe; o nome é o desempate.
+// A ficha da aluna por trás de uma marcação (a reserva guarda nome e telefone,
+// não o id). Casa primeiro pelo nome exato da aluna; o telefone é apenas desempate
+// ou fallback caso o nome não seja encontrado diretamente.
 export function clientOfBooking(data, booking) {
+  if (!booking || !data?.clients) return null;
+  const porNome = data.clients.find((c) => c.name === booking.clientName);
+  if (porNome) return porNome;
   const tel = (booking.phone || "").replace(/\D/g, "");
-  const porTel = tel.length >= 8
-    ? data.clients.find((c) => (c.phone || "").replace(/\D/g, "").endsWith(tel.slice(-8)))
+  return tel.length >= 8
+    ? data.clients.find((c) => (c.phone || "").replace(/\D/g, "").endsWith(tel.slice(-8))) || null
     : null;
-  return porTel || data.clients.find((c) => c.name === booking.clientName) || null;
 }
 
 /* Marcadores que aparecem ANTES do nome da aluna no cartão da agenda.
