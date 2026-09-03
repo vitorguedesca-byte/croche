@@ -1077,7 +1077,7 @@ app.post(
     const fichas = nomesAtivos.length ? await prisma.client.findMany({ where: { name: { in: nomesAtivos } } }) : [];
     const fichaDe = (nome) => fichas.find((c) => c.name === nome) || null;
     const naoReplicavel = (b) => ehReposicao(b) || b.paymentMethod === PGTO_EXTRA ||
-      ehPagamentoDeMatricula(b.paymentMethod) || tipoMensalista(fichaDe(b.clientName)) === "escala";
+      ehPagamentoDeMatricula(b.paymentMethod) || !podeReplicarMensalista(fichaDe(b.clientName));
     const origem = ativas.filter((b) => !naoReplicavel(b));
     const naoReplicadas = ativas.filter(naoReplicavel).map((b) => ({
       clientName: b.clientName,
@@ -1087,7 +1087,9 @@ app.post(
           ? "aula extra não é replicada (aula única)"
           : ehPagamentoDeMatricula(b.paymentMethod)
             ? "aula experimental não é replicada"
-            : "mensalista de escala marca cada aula individualmente",
+            : !podeReplicarMensalista(fichaDe(b.clientName))
+              ? "mensalista de escala marca cada aula individualmente"
+              : "não replicável",
     }));
     const nomes = [...new Set(origem.map((b) => b.clientName))];
     // aulas já marcadas de todas elas (para o teto semanal enxergar o que vamos criando)
@@ -3232,6 +3234,10 @@ app.post("/api/portal/:key/absence/:bookingId", wrap(async (req, res) => {
    padrão semanal independente. Feriado fechado é pulado e não gera Booking;
    reposição, cancelamento e extra continuam fora desta série. */
 async function criarGradeInicial12Meses(client, slotsBase) {
+  if (!podeReplicarMensalista(client)) {
+    console.warn(`[grade] ${client?.name} é mensalista de escala ou não-mensalista — grade recorrente não se aplica.`);
+    return { criadas: [], slotsCriados: [], feriados: [], pulos: [], total: 0 };
+  }
   const criadas = [], slotsCriados = [], feriados = [], pulos = [];
   for (const base of slotsBase) {
     let slotSeriesId = base.seriesId;
@@ -3494,6 +3500,10 @@ async function trocarPlanoMensalista(client, { weeklyFreq, mensalistaTipo, billi
         : {}),
     },
   });
+
+  if (tipoNovo === "escala" && tipoAntigo !== "escala") {
+    await limparGradeRecorrenteAoVirarEscala(atualizado);
+  }
 
   console.log(`[plano] ${client.name}: ${freqAntiga}x → ${freqNova}x (${tipoAntigo} → ${tipoNovo}), valendo de ${desde}.`);
 
@@ -4685,9 +4695,36 @@ app.patch(
     if (data.status === "cancelado" && antes && antes.status !== "cancelado") {
       encerrado = await encerrarAluna(client);
     }
+    if (data.mensalistaTipo === "escala" && antes && antes.mensalistaTipo !== "escala") {
+      await limparGradeRecorrenteAoVirarEscala(client);
+    }
     res.json({ ...client, encerrado });
   })
 );
+
+/* Quando a aluna vira "escala", ela não participa mais de grade fixa replicada.
+   As aulas da semana corrente são preservadas (para ela não perder a aula que já
+   iria frequentar), e todas as aulas futuras recorrentes das semanas seguintes
+   são removidas do banco, liberando as vagas na turma. */
+async function limparGradeRecorrenteAoVirarEscala(client) {
+  const hoje = todayISO();
+  const d = new Date(hoje + "T00:00Z");
+  const fimSemana = addDays(hoje, 6 - ((d.getUTCDay() + 6) % 7));
+
+  const removidas = await prisma.booking.deleteMany({
+    where: {
+      clientName: client.name,
+      date: { gt: fimSemana },
+      status: { not: "cancelada" },
+      paymentMethod: PGTO_PLANO,
+    },
+  });
+
+  if (removidas.count > 0) {
+    console.log(`[escala] ${client.name} virou escala: ${removidas.count} aula(s) futuras recorrentes removidas (após ${fimSemana}).`);
+  }
+  return removidas.count;
+}
 
 /* Derruba o que estava marcado para a frente quando a aluna sai do curso.
    Devolve a conta do que foi cancelado, para a tela poder dizer em números. */
