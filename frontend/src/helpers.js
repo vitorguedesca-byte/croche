@@ -207,14 +207,25 @@ export const clientActiveCount = (data, c) =>
   bookingsActive(data).filter((b) => b.clientName === c.name).length;
 
 export function classifyClient(data, c) {
-  if (c.status === "lead") return "lead";
   const bks = (data.bookings || []).filter((b) => b.clientName === c.name);
+  const activeBks = bks.filter((b) => b.status !== "cancelada");
+  const hasMultipleBookings = activeBks.length > 1;
+  const hasAttendance = bks.some((b) => b.attendance === "presente");
   const hasPaidBooking = bks.some((b) => b.paid || b.status === "concluida" || (b.status === "confirmada" && b.paymentMethod));
   const isMatriculada = c.matriculaStatus === "paga" || c.matriculaStatus === "convertida" || c.plan === "mensalista";
 
+  // Se a aluna tem múltiplas aulas ativas montadas na grade ou já esteve presente em aula,
+  // ela é uma aluna com rotina na escola — não deve ser tratada como lead de remarketing.
+  if (hasMultipleBookings || hasAttendance) {
+    return c.firstClass ? "novato" : "cliente";
+  }
+
+  // Se o cadastro foi explicitamente marcado como lead e não tem aulas ativas:
+  if (c.status === "lead" && activeBks.length === 0) return "lead";
+
   // Se não concluiu pagamento e não é mensalista matriculada:
   if (!hasPaidBooking && !isMatriculada) {
-    const hasActiveHold = bks.some((b) => b.status === "aguardando" && b.holdUntil && new Date(b.holdUntil).getTime() > Date.now());
+    const hasActiveHold = activeBks.some((b) => b.status === "aguardando" && b.holdUntil && new Date(b.holdUntil).getTime() > Date.now());
     if (!hasActiveHold) return "lead";
   }
   return c.firstClass ? "novato" : "cliente";

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "./api.js";
-import { todayISO, addDays, fmtDate, fmtDateLong, money, capitalize, fimDaAula, validarCPF, formatarCPF } from "./helpers.js";
+import { todayISO, addDays, fmtDate, fmtDateLong, money, capitalize, fimDaAula, validarCPF, formatarCPF, waLink } from "./helpers.js";
 
 const DOW = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
 
@@ -230,20 +230,45 @@ export default function FirstClassBooking({ onBack, fromSite }) {
     catch { flash("Copie o código acima."); }
   };
 
-  // "JÁ PAGUEI": confirma a 1ª mensalidade e encerra — a vaga da 1ª aula fica reservada
-  const jaPaguei = async () => {
-    setBusy(true);
+  // Consulta a API Pix do Sicredi para checar se o pagamento foi confirmado
+  const verificarPagamento = async (silencioso = false) => {
+    if (!booking?.id) return;
+    if (!silencioso) setBusy(true);
     try {
-      // O servidor confirma o pagamento E matricula a aluna no plano escolhido,
-      // devolvendo em `matricula` o valor mensal e o próximo vencimento.
-      /* Sem `value`: quem sabe o valor é o servidor (mensalidade + taxa, já
-         gravado na reserva). Mandar daqui já apagou a taxa uma vez. */
       const r = await api.payBooking(booking.id, {});
-      setInscricao(r?.matricula || null);
-      setStep("done");
-    } catch (e) { flash(e.message || "Erro ao confirmar."); }
-    finally { setBusy(false); }
+      if (r?.pago || r?.paid) {
+        setInscricao(r?.matricula || null);
+        setStep("done");
+        flash("Pagamento aprovado pelo banco! Sua vaga está garantida. 🎉");
+      }
+    } catch (e) {
+      if (!silencioso) {
+        flash(e.message || "Pagamento Pix ainda não identificado. Aguarde alguns instantes e tente novamente.");
+      }
+    } finally {
+      if (!silencioso) setBusy(false);
+    }
   };
+
+  // Polling suave a cada 5s enquanto o Pix estiver na tela para reconhecer o pagamento automático
+  useEffect(() => {
+    if (step !== "plan" || !pix || !booking?.id) return;
+    let vivo = true;
+    const t = setInterval(async () => {
+      if (!vivo) return;
+      try {
+        const r = await api.payBooking(booking.id, {});
+        if (vivo && (r?.pago || r?.paid)) {
+          setInscricao(r?.matricula || null);
+          setStep("done");
+          flash("Pagamento aprovado pelo banco! Sua vaga está garantida. 🎉");
+        }
+      } catch {
+        // Silencioso durante a espera
+      }
+    }, 5000);
+    return () => { vivo = false; clearInterval(t); };
+  }, [step, pix, booking?.id]);
 
   const restart = () => {
     setStep("unit"); setUnit(null); setSlot(null);
@@ -365,8 +390,19 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                   ? <>Este Pix é a mensalidade deste mês ({money(mensalidade)}) mais a taxa de matrícula ({money(taxa)}). A <b>próxima</b> vence no mês que vem, no mesmo dia de hoje — e é só {money(mensalidade)}.</>
                   : <>Este Pix é a mensalidade deste mês. A <b>próxima</b> só vence no mês que vem, no mesmo dia de hoje.</>}
               </div>
-              <button className="pt-btn" onClick={jaPaguei} disabled={busy}>{busy ? "Confirmando…" : "✅ JÁ PAGUEI — continuar"}</button>
-              <p className="pt-hint">Assim que o pagamento for aprovado, sua vaga na primeira aula está garantida. 💚</p>
+              <button className="pt-btn" onClick={() => verificarPagamento(false)} disabled={busy}>
+                {busy ? "Consultando banco… ⏳" : "🔍 Já fiz o Pix — verificar pagamento"}
+              </button>
+              <a
+                className="pt-btn pt-btn-wa"
+                style={{ marginTop: ".6rem" }}
+                href={waLink("31984966403", `Olá! Fiz o Pix da matrícula da minha primeira aula de ${fmtDate(slot?.date || "")} às ${slot?.time || ""} (${slot?.unit || ""}), no valor de ${money(total)}. Segue o comprovante 👇`)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                📲 Enviar comprovante no WhatsApp
+              </a>
+              <p className="pt-hint">A baixa é automática: assim que o Pix for confirmado pelo banco, sua vaga fica garantida. Você também pode clicar no botão acima a qualquer momento para verificar. 💚</p>
             </>)}
           </div>
         )}

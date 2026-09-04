@@ -2009,33 +2009,61 @@ app.post(
     const id = Number(req.params.id);
     const cur = await prisma.booking.findUnique({ where: { id } });
     if (!cur) return res.status(404).json({ error: "Marcação não encontrada" });
-    // "Já paguei" da tela pública: só vale para a reserva da matrícula dela.
-    if (soMatriculaPelaPortaPublica(req, res, cur)) return;
+
+    // Chamada vinda de fora do painel admin (aluna na tela de matrícula ou portal):
+    // NUNCA dar baixa cega ou manual! É obrigatório consultar a API Pix do Sicredi.
+    if (!doPainel(req)) {
+      if (soMatriculaPelaPortaPublica(req, res, cur)) return;
+
+      // Se já foi compensado e confirmado anteriormente:
+      if (cur.paid) {
+        const c = await prisma.client.findFirst({ where: { name: cur.clientName } });
+        return res.json({ ...cur, matricula: c, pago: true });
+      }
+
+      const txid = cur.txid || txidBooking(cur.id);
+      if (!sicrediConfigured() || !txid) {
+        return res.status(400).json({
+          error: "A confirmação automática via Pix não está disponível para esta reserva. Por favor, envie o comprovante no WhatsApp da escola para liberarmos a sua vaga. 💚",
+          pago: false,
+        });
+      }
+
+      let confirmado = false;
+      try {
+        confirmado = await confirmarPagamentoPorTxid(txid);
+      } catch (e) {
+        console.warn(`[pay] consulta ao Sicredi falhou para booking ${id}: ${e.message}`);
+      }
+
+      if (!confirmado) {
+        return res.status(400).json({
+          error: "Pagamento Pix ainda não identificado pelo banco. Se você acabou de transferir, aguarde alguns instantes e tente novamente. 💚",
+          pago: false,
+        });
+      }
+
+      const updated = await prisma.booking.findUnique({ where: { id } });
+      const c = await prisma.client.findFirst({ where: { name: updated?.clientName } });
+      return res.json({ ...updated, matricula: c, pago: true });
+    }
+
+    // Baixa manual executada pelo painel administrativo (Inêz / atendente logada):
     const booking = await prisma.booking.update({
       where: { id },
       data: {
         paid: true,
         status: "confirmada",
-        // a 1ª aula mantém a marca da matrícula para o dinheiro não virar aula
         paymentMethod: ehPagamentoDeMatricula(cur?.paymentMethod) ? cur.paymentMethod : (req.body.paymentMethod || "Pix"),
         paymentDate: req.body.paymentDate || todayISO(),
-        /* O valor da MATRÍCULA é do servidor, não do cliente: ele é a soma da
-           mensalidade com a taxa, calculada quando a reserva nasceu. A tela da
-           aluna nova mandava aqui só a mensalidade no "já paguei" — aceitar isso
-           apagaria a taxa da reserva e faria a fatura do mês nascer com R$ 20 a
-           menos. Nas demais reservas o valor informado continua valendo. */
         ...(req.body.value !== undefined && !ehPagamentoDeMatricula(cur?.paymentMethod)
           ? { value: Number(req.body.value) }
           : {}),
       },
     });
-    // Pagou a 1ª mensalidade com plano escolhido? Sai daqui já matriculada — a
-    // tela da aluna nova usa `matricula` para mostrar o plano e o próximo vencimento.
     const matricula = await registrarMatriculaPaga(booking);
-    // Baixa dada pelo painel também confirma para a aluna: do lado dela é o
-    // mesmo evento, e ela precisa das regras antes da primeira aula.
     await avisarMatriculaConfirmada(booking);
-    res.json({ ...booking, matricula });
+    res.json({ ...booking, matricula, pago: true });
   })
 );
 
@@ -3268,6 +3296,93 @@ app.post("/api/portal/:key/extra/cancelar", wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* Consulta e confirma (se de fato pago no Sicredi) a reserva de aula de uma aluna.
+   Nunca dá baixa manual: pergunta ao Sicredi se o Pix foi pago. */
+app.post("/api/portal/:key/booking/:id/check-pay", wrap(async (req, res) => {
+  const client = await clientByPortalKey(req.params.key);
+  if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const id = Number(req.params.id);
+  const booking = Number.isInteger(id) ? await prisma.booking.findUnique({ where: { id } }) : null;
+  if (!booking || booking.clientName !== client.name) {
+    return res.status(404).json({ error: "Marcação não encontrada." });
+  }
+  if (booking.paid) return res.json({ ok: true, pago: true, booking });
+
+  const txid = booking.txid || txidBooking(booking.id);
+  if (!sicrediConfigured() || !txid) {
+    return res.status(400).json({
+      ok: false,
+      pago: false,
+      error: "A confirmação automática via Pix não está disponível para esta reserva. Envie o comprovante no WhatsApp da escola. 💚",
+    });
+  }
+
+  let confirmado = false;
+  try {
+    confirmado = await confirmarPagamentoPorTxid(txid);
+  } catch (e) {
+    console.warn(`[portal check-pay] consulta ao Sicredi falhou para booking ${id}: ${e.message}`);
+  }
+
+  if (!confirmado) {
+    return res.status(400).json({
+      ok: false,
+      pago: false,
+      error: "Pagamento Pix ainda não identificado pelo banco. Se você acabou de pagar, aguarde alguns instantes e tente novamente. 💚",
+    });
+  }
+
+  const updated = await prisma.booking.findUnique({ where: { id } });
+  return res.json({ ok: true, pago: true, booking: updated });
+}));
+
+/* Consulta e confirma (se de fato pago no Sicredi) a mensalidade de uma aluna.
+   Nunca dá baixa manual: pergunta ao Sicredi se o Pix foi pago. */
+app.post("/api/portal/:key/invoice/:id/check-pay", wrap(async (req, res) => {
+  const client = await clientByPortalKey(req.params.key);
+  if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const id = Number(req.params.id);
+  const inv = Number.isInteger(id) ? await prisma.invoice.findUnique({ where: { id } }) : null;
+  if (!inv || inv.clientId !== client.id) {
+    return res.status(404).json({ error: "Mensalidade não encontrada." });
+  }
+  if (inv.status === "pago") return res.json({ ok: true, pago: true, invoice: comEncargos(inv) });
+
+  if (!inv.txid) {
+    return res.status(400).json({
+      ok: false,
+      pago: false,
+      error: "Esta mensalidade não possui código Pix emitido. Gere o Pix antes de verificar. 💚",
+    });
+  }
+
+  if (!sicrediConfigured()) {
+    return res.status(400).json({
+      ok: false,
+      pago: false,
+      error: "A confirmação automática via Pix não está disponível no momento. Envie o comprovante no WhatsApp da escola. 💚",
+    });
+  }
+
+  let confirmado = false;
+  try {
+    confirmado = await confirmarPagamentoPorTxid(inv.txid);
+  } catch (e) {
+    console.warn(`[portal check-pay] consulta ao Sicredi falhou para invoice ${id}: ${e.message}`);
+  }
+
+  if (!confirmado) {
+    return res.status(400).json({
+      ok: false,
+      pago: false,
+      error: "Pagamento Pix ainda não identificado pelo banco. Se você acabou de pagar, aguarde alguns instantes e tente novamente. 💚",
+    });
+  }
+
+  const updated = await prisma.invoice.findUnique({ where: { id } });
+  return res.json({ ok: true, pago: true, invoice: comEncargos(updated) });
+}));
+
 // O que a tela precisa saber do passe (sem expor o resto da linha)
 const resumoPasse = (p) => ({
   id: p.id,
@@ -3514,12 +3629,18 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
 
   const ids = [...new Set((Array.isArray(slotIds) ? slotIds : slotId ? [slotId] : []).map(Number).filter(Number.isInteger))];
   // Se não foi passado slotId e a aluna é de turma fixa, busca da 1ª aula agendada / reserva da matrícula
-  if (!ids.length && tipoEfetivo === "fixo") {
-    const b = await prisma.booking.findFirst({
+  // APENAS se for aluna nova na 1ª aula e a aula for futura (não tenta replicar aulas passadas de alunas antigas)
+  if (!ids.length && tipoEfetivo === "fixo" && client.firstClass) {
+    const totalAulas = await prisma.booking.count({
       where: { clientName: client.name, status: { not: "cancelada" } },
-      orderBy: { date: "asc" },
     });
-    if (b?.slotId) ids.push(b.slotId);
+    if (totalAulas <= 1) {
+      const b = await prisma.booking.findFirst({
+        where: { clientName: client.name, status: { not: "cancelada" }, date: { gte: todayISO() } },
+        orderBy: { date: "asc" },
+      });
+      if (b?.slotId) ids.push(b.slotId);
+    }
   }
 
   if (tipoEfetivo === "escala" && ids.length)
@@ -4130,13 +4251,13 @@ async function expirarReservaWa(booking) {
     where: { id: booking.id },
     data: { status: "cancelada", holdUntil: null, absenceReason: "Reserva não paga no prazo — vaga liberada" },
   });
-  // Se a pessoa só tinha essa reserva e nunca pagou matrícula nem mensalidade, classifica como lead
+  // Se a pessoa só tinha essa reserva e não tem nenhuma outra aula ativa nem paga, classifica como lead
   const cli = await prisma.client.findFirst({ where: { name: booking.clientName } });
   if (cli && cli.matriculaStatus !== "paga" && cli.matriculaStatus !== "convertida" && cli.plan !== "mensalista") {
-    const temOutraPaga = await prisma.booking.count({
-      where: { clientName: cli.name, status: { not: "cancelada" }, paid: true },
+    const temOutraAtiva = await prisma.booking.count({
+      where: { clientName: cli.name, status: { not: "cancelada" }, id: { not: booking.id } },
     });
-    if (temOutraPaga === 0) {
+    if (temOutraAtiva === 0) {
       await prisma.client.update({
         where: { id: cli.id },
         data: { status: "lead", firstClass: false },

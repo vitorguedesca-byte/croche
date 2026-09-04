@@ -310,7 +310,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
         <EnrollScreen data={data} phone={phone} busy={busy} setBusy={setBusy} flash={flash} kiosk={kiosk}
           onBack={() => setScreen("home")} onDone={async () => { setScreen("home"); await load(phone); }} />
       ) : screen === "pay" && payBooking ? (
-        <PaymentScreen booking={payBooking} meta={data.meta || {}} onBack={() => setScreen("home")} flash={flash} />
+        <PaymentScreen booking={payBooking} phone={phone} meta={data.meta || {}} onBack={() => setScreen("home")} onPago={async () => { setScreen("home"); await load(phone); }} flash={flash} />
       ) : (<>
         <ProximaAulaCard booking={prox[0]} meta={meta} />
 
@@ -439,11 +439,51 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   );
 }
 
-function PaymentScreen({ booking, meta, onBack, flash }) {
+function PaymentScreen({ booking, phone, meta, onBack, onPago, flash }) {
+  const [verificando, setVerificando] = useState(false);
+
   const copyPix = async () => {
     try { await navigator.clipboard.writeText(meta.pixKey); flash("Chave Pix copiada! 📋"); }
     catch { flash("Não consegui copiar. Anote a chave."); }
   };
+
+  const verificarPix = async (silencioso = false) => {
+    if (!booking?.id) return;
+    if (!silencioso) setVerificando(true);
+    try {
+      const r = await api.portal.checkBookingPay(phone, booking.id);
+      if (r?.pago) {
+        flash("Pagamento aprovado pelo banco! Sua vaga está confirmada. 💚");
+        onPago && onPago();
+      }
+    } catch (e) {
+      if (!silencioso) {
+        flash(e.message || "Pagamento ainda não identificado no banco. Se já pagou, aguarde alguns instantes e tente novamente.");
+      }
+    } finally {
+      if (!silencioso) setVerificando(false);
+    }
+  };
+
+  // Polling suave enquanto o Pix estiver na tela
+  useEffect(() => {
+    if (!booking?.id || !booking.pixCode) return;
+    let vivo = true;
+    const t = setInterval(async () => {
+      if (!vivo) return;
+      try {
+        const r = await api.portal.checkBookingPay(phone, booking.id);
+        if (vivo && r?.pago) {
+          flash("Pagamento aprovado pelo banco! Sua vaga está confirmada. 💚");
+          onPago && onPago();
+        }
+      } catch {
+        // silencioso
+      }
+    }, 5000);
+    return () => { vivo = false; clearInterval(t); };
+  }, [booking?.id, booking?.pixCode, phone]);
+
   return (<>
     <button className="pt-link" onClick={onBack}>← Voltar para minhas aulas</button>
     <h2 className="pt-h2">Pagar reserva</h2>
@@ -464,7 +504,10 @@ function PaymentScreen({ booking, meta, onBack, flash }) {
           <div className="pt-pix-code">{booking.pixCode}</div>
           <button className="pt-pix-copy" onClick={() => navigator.clipboard?.writeText(booking.pixCode)}>📋 Copiar código Pix</button>
         </details>
-        <a className="pt-btn pt-btn-wa" href={waLink(WA_ESCOLA, `Olá! Fiz o Pix da reserva da minha aula de ${fmtDate(booking.date)} às ${booking.time} (${booking.unit}), no valor de ${money(booking.value)}. Segue o comprovante 👇`)} target="_blank" rel="noreferrer">📲 Já paguei — enviar comprovante</a>
+        <button className="pt-btn" onClick={() => verificarPix(false)} disabled={verificando} style={{ marginTop: ".8rem" }}>
+          {verificando ? "Consultando banco… ⏳" : "🔍 Já fiz o Pix — verificar pagamento"}
+        </button>
+        <a className="pt-btn pt-btn-wa" style={{ marginTop: ".5rem" }} href={waLink(WA_ESCOLA, `Olá! Fiz o Pix da reserva da minha aula de ${fmtDate(booking.date)} às ${booking.time} (${booking.unit}), no valor de ${money(booking.value)}. Segue o comprovante 👇`)} target="_blank" rel="noreferrer">📲 Enviar comprovante no WhatsApp</a>
       </>) : meta.pixKey ? (<>
         <div className="pt-pix">
           <div className="pt-pix-row"><span>Chave Pix</span><b>{meta.pixKey}</b></div>
@@ -481,7 +524,7 @@ function PaymentScreen({ booking, meta, onBack, flash }) {
       <a className="pt-btn" href={waLink(WA_ESCOLA, `Olá! Quero pagar no cartão a reserva da minha aula de ${fmtDate(booking.date)} às ${booking.time} (${booking.unit}), no valor de ${money(booking.value)}.`)} target="_blank" rel="noreferrer"><WaIcon /> Quero o link de pagamento no cartão</a>
     </div>
 
-    <div className="pt-pay-note">🔒 Sua vaga é confirmada assim que o pagamento cair.</div>
+    <div className="pt-pay-note">🔒 Sua vaga é confirmada assim que o pagamento cair no banco.</div>
   </>);
 }
 
@@ -849,6 +892,7 @@ function ProximaAulaCard({ booking, meta }) {
 function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago }) {
   const [pixNovo, setPixNovo] = useState({}); // { [invoiceId]: pixCode } reemitidos nesta tela
   const [gerando, setGerando] = useState(false);
+  const [verificando, setVerificando] = useState(false);
   const [erro, setErro] = useState("");
   const [verHistorico, setVerHistorico] = useState(false);
 
@@ -860,6 +904,24 @@ function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago 
     .sort((a, b) => a.competencia.localeCompare(b.competencia));
   const atual = abertas[0];
   const pagas = lista.filter((i) => i.status === "pago");
+
+  const verificarPix = async (silencioso = false) => {
+    if (!atual?.id) return;
+    if (!silencioso) setVerificando(true);
+    try {
+      const r = await api.portal.checkInvoicePay(phone, atual.id);
+      if (r?.pago) {
+        flash("Pagamento da mensalidade confirmado pelo banco! 💚");
+        onPago && onPago();
+      }
+    } catch (e) {
+      if (!silencioso) {
+        flash(e.message || "Pagamento Pix ainda não identificado pelo banco. Aguarde alguns instantes e tente novamente.");
+      }
+    } finally {
+      if (!silencioso) setVerificando(false);
+    }
+  };
 
   // Mensalidade antiga não tem pixExpiresOn: nela a validade era o vencimento.
   const validoAte = (i) => i.pixExpiresOn || i.dueDate;
@@ -981,9 +1043,12 @@ function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago 
             catch { flash("Não consegui copiar. Use o QR Code."); }
           }}>📋 Copiar código Pix</button>
         </details>
-        <p className="pt-hint">A baixa é automática: assim que o Pix cair, esta tela mostra “pago”. 💚</p>
+        <p className="pt-hint">A baixa é automática: assim que o Pix for confirmado pelo banco, esta tela mostra “pago”. 💚</p>
+        <button className="pt-btn" onClick={() => verificarPix(false)} disabled={verificando} style={{ marginBottom: ".6rem" }}>
+          {verificando ? "Consultando banco… ⏳" : "🔍 Já fiz o Pix — verificar pagamento"}
+        </button>
         <a className="pt-btn pt-btn-wa" href={waLink(WA_ESCOLA, msgComprovante)} target="_blank" rel="noreferrer">
-          <WaIcon size={20} /> Já paguei — enviar comprovante
+          <WaIcon size={20} /> Enviar comprovante no WhatsApp
         </a>
       </>) : (<>
         {/* O Sicredi expira a cobrança no fim do dia do vencimento, então quem
