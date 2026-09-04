@@ -1812,6 +1812,7 @@ app.post(
         }
       }
 
+      const statusInicial = doPlano ? "confirmada" : "aguardando";
       const booking = await prisma.booking.create({
         data: {
           clientName: b.clientName,
@@ -1823,10 +1824,14 @@ app.post(
           slotId: slot.id,
           // aula do plano já está paga pela mensalidade — nasce confirmada,
           // como no agendamento em lote e na replicação da turma
-          status: doPlano ? "confirmada" : "aguardando",
+          status: statusInicial,
           value: ehMatricula ? valorPrimeiroPagamento(freqEscolhida) : (Number(b.value) || 0),
           taxaMatricula: taxa || null,
           paymentMethod: ehMatricula ? MARCA_MATRICULA : doPlano ? PGTO_PLANO : null,
+          // Reservas pendentes de pagamento (portal, site, 1ª aula) recebem hold de 10 min
+          holdUntil: (!painel && statusInicial === "aguardando") || (ehMatricula && statusInicial === "aguardando")
+            ? new Date(Date.now() + HOLD_MIN * 60_000)
+            : null,
         },
       });
       criadas.push(booking);
@@ -3662,9 +3667,11 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
       }
     }
   }
-  const grade = tipoEfetivo === "fixo" && slotsBase.length ? await criarGradeInicial12Meses(client, slotsBase) : {
-    booking: null, bookings: [], total: 0, slotsCriados: 0, feriados: [], pulos: [], meses: 0, individual: tipoEfetivo === "escala",
-  };
+  const grade = tipoEfetivo === "fixo" && slotsBase.length
+    ? await criarGradeInicial12Meses({ ...client, plan: "mensalista", mensalistaTipo: tipoEfetivo }, slotsBase)
+    : {
+        booking: null, bookings: [], total: 0, slotsCriados: 0, feriados: [], pulos: [], meses: 0, individual: tipoEfetivo === "escala",
+      };
   const booking = grade.booking;
 
   /* Dia do vencimento: o dia em que ela se matriculou vira o dia dela, todo mês.
@@ -4237,7 +4244,7 @@ async function createWaBooking(client, slot, { weeklyFreq }) {
       matriculaStatus: "pendente",
       trialDate: slot.date,
       weeklyFreq: freq,
-      mensalistaTipo: "fixo",
+      mensalistaTipo: "escala",
       unit: client.unit || slot.unit,
     },
   });
