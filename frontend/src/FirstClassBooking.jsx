@@ -147,12 +147,12 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const [meta, setMeta] = useState({ units: [], pixKey: "", pixName: "" });
   const [available, setAvailable] = useState([]);
   const [loading, setLoading] = useState(true);
-  // A 1ª aula OFICIAL não é marcada aqui: pela regra do curso, ela é agendada
-  // no fim da aula experimental (portal da sala ou com a Inêz), junto com a
-  // escolha do plano e o pagamento da 1ª mensalidade.
+  // Esta tela marca a PRIMEIRA aula da aluna e a matricula no mesmo passo:
+  // ela escolhe unidade, horário e plano e paga a 1ª mensalidade. As aulas
+  // seguintes ela marca sozinha pela área do aluno.
   const [step, setStep] = useState("unit"); // unit | cal1 | pay | done
   const [unit, setUnit] = useState(null);
-  const [slot, setSlot] = useState(null); // horário da aula experimental
+  const [slot, setSlot] = useState(null); // horário da primeira aula
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -163,7 +163,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
      O que ela paga nesta tela é a 1ª MENSALIDADE do plano mais a TAXA DE
      MATRÍCULA, cobrada uma vez só. Pagou, sai matriculada, e a próxima
      mensalidade cai no mês seguinte, no mesmo dia — já sem a taxa. */
-  const [tipo, setTipo] = useState("fixo");
+  const [tipo, setTipo] = useState("escala");
   const [freq, setFreq] = useState(1);
 
   const [booking, setBooking] = useState(null);
@@ -173,9 +173,9 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const [toast, setToast] = useState("");
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 3800); };
 
-  /* A aula experimental em si é gratuita: o que se paga aqui é a 1ª mensalidade
-     do plano escolhido MAIS a taxa de matrícula, cobrada uma vez só. É esse
-     pagamento que matricula a aluna.
+  /* O que se paga aqui é a 1ª mensalidade do plano escolhido MAIS a taxa de
+     matrícula, cobrada uma vez só. É esse pagamento que matricula a aluna e
+     garante a vaga da primeira aula.
 
      `total` é o que o Pix cobra — quem calcula de verdade é o servidor (ver
      `valorPrimeiroPagamento` em server.js). Esta conta aqui é a mesma, feita
@@ -230,7 +230,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
     catch { flash("Copie o código acima."); }
   };
 
-  // "JÁ PAGUEI": confirma a 1ª mensalidade e encerra — a vaga da experimental fica reservada
+  // "JÁ PAGUEI": confirma a 1ª mensalidade e encerra — a vaga da 1ª aula fica reservada
   const jaPaguei = async () => {
     setBusy(true);
     try {
@@ -248,7 +248,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const restart = () => {
     setStep("unit"); setUnit(null); setSlot(null);
     setName(""); setPhone(""); setCpf(""); setEmail(""); setBirthday("");
-    setTipo("fixo"); setFreq(1); setBooking(null); setInscricao(null); setPix(null);
+    setTipo("escala"); setFreq(1); setBooking(null); setInscricao(null); setPix(null);
     loadAvail();
   };
 
@@ -258,7 +258,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
         {toast && <div className="pt-toast">{toast}</div>}
         <div className="pt-fc-head">
           <img src="/logo-1.PNG" className="pt-logo" alt="Fios que Curam" />
-          <h1>Sua aula experimental</h1>
+          <h1>Sua matrícula</h1>
           {step !== "done" && (
             <div className="pt-steps">
               <span className={`pt-step ${stepNum >= 1 ? "on" : ""}`}>1 · Unidade</span>
@@ -300,19 +300,19 @@ export default function FirstClassBooking({ onBack, fromSite }) {
 
             <div className="pt-matricula">
               {taxa > 0 ? (<>
-                <p>A <b>aula experimental é gratuita</b> 💚 Para reservar a sua vaga, você escolhe o plano abaixo e paga a <b>primeira mensalidade</b> mais a <b>taxa de matrícula de {money(taxa)}</b> — cobrada uma vez só, na entrada.</p>
-                <p>💬 Fez a aula e não quis continuar? <b>Devolvemos a mensalidade integralmente</b>, depois da aula. A taxa de matrícula não é devolvida.</p>
-                <p>🧵 Quis continuar? Você já está matriculada, e a <b>próxima mensalidade</b> só vence no mês que vem — daí em diante, só a mensalidade.</p>
+                <p>💚 Para garantir a sua vaga, escolha o plano abaixo e pague a <b>primeira mensalidade</b> mais a <b>taxa de matrícula de {money(taxa)}</b> — cobrada uma vez só, na entrada.</p>
+                <p>🧵 Pagou, está matriculada: a <b>próxima mensalidade</b> só vence no mês que vem — daí em diante, só a mensalidade.</p>
+                <p>💬 Mudou de ideia? <b>Devolvemos a taxa de matrícula de {money(taxa)}</b>. A mensalidade não é devolvida.</p>
               </>) : (<>
-                <p>A <b>aula experimental é gratuita</b> 💚 Para reservar a sua vaga, você escolhe o plano abaixo e paga a <b>primeira mensalidade</b>. Não cobramos taxa de matrícula.</p>
-                <p>💬 Fez a aula e não quis continuar? <b>Devolvemos a mensalidade integralmente</b>, depois da aula — e nada mais é cobrado.</p>
-                <p>🧵 Quis continuar? Você já está matriculada, e a <b>próxima mensalidade</b> só vence no mês que vem.</p>
+                <p>💚 Para garantir a sua vaga, escolha o plano abaixo e pague a <b>primeira mensalidade</b>. Não cobramos taxa de matrícula.</p>
+                <p>🧵 Pagou, está matriculada: a <b>próxima mensalidade</b> só vence no mês que vem.</p>
+                <p>💬 A mensalidade paga não é devolvida.</p>
               </>)}
             </div>
             <div className="pt-atencao">
               <span className="t">⚠️ Atenção</span>
-              A aula experimental é <b>uma só</b>: se você faltar, ela não é remarcada — mas a sua mensalidade continua valendo,
-              e a <b>primeira aula oficial</b> você marca normalmente pela área do aluno. Até lá! 💛
+              Se você faltar, essa aula <b>não é remarcada</b> automaticamente — mas a sua mensalidade continua valendo,
+              e as <b>próximas aulas</b> você marca normalmente pela área do aluno. Até lá! 💛
             </div>
 
             {!pix ? (<>
@@ -366,7 +366,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                   : <>Este Pix é a mensalidade deste mês. A <b>próxima</b> só vence no mês que vem, no mesmo dia de hoje.</>}
               </div>
               <button className="pt-btn" onClick={jaPaguei} disabled={busy}>{busy ? "Confirmando…" : "✅ JÁ PAGUEI — continuar"}</button>
-              <p className="pt-hint">Assim que o pagamento for aprovado, sua vaga na aula experimental está garantida. 💚</p>
+              <p className="pt-hint">Assim que o pagamento for aprovado, sua vaga na primeira aula está garantida. 💚</p>
             </>)}
           </div>
         )}
@@ -380,7 +380,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
               📍 <b>{slot.unit}</b><br />🗓 {capitalize(fmtDateLong(slot.date))}<br />
               ⏰ <b>{slot.time}{meta.duracaoAulaMin ? ` às ${fimDaAula(slot.time, meta.duracaoAulaMin)}` : ""}</b>
             </div>
-            <p className="pt-hint">Sua aula experimental está reservada e você já está cadastrada 💛</p>
+            <p className="pt-hint">Sua primeira aula está reservada e você já está matriculada 💛</p>
             <div className="pt-matricula" style={{ textAlign: "left" }}>
               <p><b>Seu plano</b></p>
               <p>🧵 <b>{tipo === "escala" ? "Escala" : "Fixo"} · {freq}x por semana</b> — {money(inscricao?.valorMensal ?? mensalidade)}/mês.</p>
@@ -388,12 +388,12 @@ export default function FirstClassBooking({ onBack, fromSite }) {
               {inscricao?.primeiroVencimento
                 ? <p>🗓 A próxima vence em <b>{fmtDate(inscricao.primeiroVencimento)}</b>, e todo mês nesse mesmo dia.</p>
                 : <p>🗓 A próxima vence no mês que vem, no mesmo dia de hoje — e todo mês nesse dia.</p>}
-              <p>📅 Depois da experimental, você marca as suas aulas pela <b>área do aluno</b>, entrando com o seu CPF.</p>
+              <p>📅 As próximas aulas você marca pela <b>área do aluno</b>, entrando com o seu CPF.</p>
               {/* Repete aqui o que ela leu antes de pagar. A hora de descobrir
                   o que não volta não pode ser a hora de pedir de volta. */}
               {taxa > 0
-                ? <p>💬 Se preferir não seguir, é só avisar depois da aula: devolvemos os {money(inscricao?.valorMensal ?? mensalidade)} da mensalidade integralmente e cancelamos a cobrança. A taxa de matrícula de {money(taxa)} não é devolvida.</p>
-                : <p>💬 Se preferir não seguir, é só avisar depois da aula: devolvemos os {money(inscricao?.valorMensal ?? mensalidade)} integralmente e cancelamos a mensalidade — você não paga nada.</p>}
+                ? <p>💬 Se preferir não seguir, é só avisar: devolvemos a taxa de matrícula de {money(taxa)} e cancelamos as próximas cobranças. A mensalidade já paga não é devolvida.</p>
+                : <p>💬 Se preferir não seguir, é só avisar: cancelamos as próximas cobranças. A mensalidade já paga não é devolvida.</p>}
             </div>
             <button className="pt-link" onClick={restart}>Marcar outra aula</button>
           </div>

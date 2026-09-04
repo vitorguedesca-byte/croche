@@ -69,6 +69,7 @@ export const api = {
   // mode: falsy = só este · "series" = mesmos da série · "match" = todos os
   // futuros equivalentes (mesma unidade/hora/dia da semana), pega-tudo
   deleteSlot: (id, mode) => req("DELETE", `/api/slots/${id}${mode === "match" ? "?match=1" : mode ? "?series=1" : ""}`),
+  deleteDay: (data) => req("POST", "/api/slots/delete-day", data),
 
   createBooking: (data) => req("POST", "/api/bookings", data),
   updateBooking: (id, data) => req("PATCH", `/api/bookings/${id}`, data),
@@ -99,6 +100,7 @@ export const api = {
   // acerta por fora). `manual: false` só para conciliação, sem essa consequência.
   payInvoice: (id, opts = {}) => req("POST", `/api/invoices/${id}/pay`, opts),
   cancelInvoice: (id) => req("POST", `/api/invoices/${id}/cancel`),
+  updateInvoice: (id, data) => req("PATCH", `/api/invoices/${id}`, data),
 
   /* Alterar o valor da mensalidade. `data.escopo` diz o alcance:
      recorrente (para sempre) | mes_atual | proximo_mes | competencias (meses

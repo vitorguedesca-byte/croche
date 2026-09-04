@@ -84,7 +84,7 @@ function avisarReplicacao(r, semanas) {
     tom = "info";
   }
   if (r.naoReplicadas?.length) {
-    partes.push(`${r.naoReplicadas.length} reserva(s) fora da cópia (reposição / experimental)`);
+    partes.push(`${r.naoReplicadas.length} reserva(s) fora da cópia (reposição / matrícula)`);
     tom = "info";
   }
   toast(`Replicado por ${semanas} semana(s). ${partes.join(". ")}.`, tom);
@@ -188,9 +188,43 @@ export function DayModal({ date, unit = "Todas", somenteLeitura = false }) {
       {!todas && <div className="day-sub">📍 Unidade: <b>{unit}</b></div>}
     </>
   );
+  const excluirDia = async () => {
+    const dow = new Date(date + "T00:00").getDay();
+    const diaSemana = capitalize(new Date(date + "T00:00").toLocaleDateString("pt-BR", { weekday: "long" }));
+    const futurosMesmoDow = (data.slots || []).filter(
+      (s) => s.date >= todayISO() && (todas || s.unit === unit) && new Date(s.date + "T00:00").getDay() === dow
+    );
+    const datasDistintas = [...new Set(futurosMesmoDow.map((s) => s.date))];
+    const temMais = datasDistintas.length > 1;
+
+    const msg = temMais
+      ? `Há ${datasDistintas.length} ${diaSemana}s futuras cadastradas na agenda (${todas ? "todas as unidades" : unit}).\n\n` +
+        `Deseja excluir apenas os ${slots.length} horário(s) deste dia selecionado (${fmtDate(date)}) ou excluir em lote todas as ${datasDistintas.length} ${diaSemana}s futuras?`
+      : `Excluir todos os ${slots.length} horário(s) do dia ${fmtDate(date)}?`;
+
+    const ans = await confirmModal({
+      title: `Excluir dia — ${title}`,
+      message: msg,
+      confirmLabel: temMais ? `Excluir em lote (${datasDistintas.length} dias)` : "Excluir este dia",
+      altLabel: temMais ? "Só este dia" : undefined,
+      cancelLabel: "Cancelar",
+      tone: "danger",
+    });
+    if (!ans) return;
+    const batch = ans !== "alt" && temMais;
+    const r = await run(api.deleteDay({ date, unit: todas ? undefined : unit, batch }));
+    toast(`✅ ${r?.deleted ?? 0} horário(s) excluído(s).`);
+    close();
+  };
+
   return (
     <Modal title={title} subheader={feriadosDoDia.length || !todas ? sub : undefined} footer={<>
       <button className="btn ghost" onClick={close}>Fechar</button>
+      {!somenteLeitura && slots.length > 0 && (
+        <button className="btn ghost" style={{ color: "var(--danger)" }} onClick={excluirDia} title="Excluir horários deste dia (individual ou em lote)">
+          🗑 Excluir dia
+        </button>
+      )}
       {!somenteLeitura && slots.length > 0 && (
         <button className="btn sec" onClick={() => open(<ReplicateTurmaForm date={date} unit={unit} />)}>🗓 Replicação</button>
       )}
@@ -332,35 +366,31 @@ export function SlotDetail({ slotId }) {
       );
   };
   const del = async () => {
-    // Exclusão em lote "pega-tudo": além dos criados juntos (mesma série),
-    // considera TODOS os horários futuros equivalentes — mesma unidade, hora e
-    // dia da semana — mesmo que tenham sido criados em levas separadas.
     const sibs = irmasNaAgenda(data, slot);
+    const diaSemana = capitalize(new Date(slot.date + "T00:00").toLocaleDateString("pt-BR", { weekday: "long" }));
     if (!sibs.length) {
-      const msg = occ > 0
-        ? `Este horário tem ${occ} reserva(s). Excluir o horário também remove essas reservas. Continuar?`
-        : "Excluir este horário da agenda?";
-      if (!(await confirmModal({ title: "Excluir horário", message: msg, confirmLabel: "Excluir", tone: "danger" }))) return;
+      const msg = `Excluir a turma de ${diaSemana}, ${fmtDate(slot.date)} às ${slot.time} em ${slot.unit}?` +
+        (occ > 0 ? `\n\nEsta turma tem ${occ} reserva(s) que também serão removidas.` : "");
+      if (!(await confirmModal({ title: "Excluir turma / horário", message: msg, confirmLabel: "Excluir turma", tone: "danger" }))) return;
       await run(api.deleteSlot(slotId));
       close();
       return;
     }
     const allRes = occ + sibs.reduce((n, s) => n + slotBookings(data, s.id).length, 0);
-    const diaSemana = capitalize(new Date(slot.date + "T00:00").toLocaleDateString("pt-BR", { weekday: "long" }));
     const ultimo = sibs.reduce((m, s) => (s.date > m ? s.date : m), slot.date);
     const ans = await confirmModal({
-      title: "Excluir horário em lote",
-      message: `Há mais ${sibs.length} horário(s) de ${diaSemana} às ${slot.time} em ${slot.unit} na agenda daqui em diante (até ${fmtDate(ultimo)}).` +
-        (occ > 0 ? `\n\nEste horário tem ${occ} reserva(s).` : "") +
-        (allRes > 0 ? `\nExcluindo todos, ${allRes} reserva(s) ao todo serão removidas.` : "") +
-        `\n\nQuer excluir só este horário ou todos?`,
-      confirmLabel: `Excluir todos (${sibs.length + 1})`,
-      altLabel: "Só este",
+      title: "Excluir turma / horário",
+      message: `Há mais ${sibs.length} turma(s) de ${diaSemana} às ${slot.time} em ${slot.unit} nas próximas semanas (até ${fmtDate(ultimo)}).\n\n` +
+        (allRes > 0 ? `Ao todo, ${allRes} reserva(s) de alunas serão removidas.\n\n` : "") +
+        `Deseja excluir apenas esta turma selecionada (${fmtDate(slot.date)}) ou excluir em lote todas as ${sibs.length + 1} turmas futuras?`,
+      confirmLabel: `Excluir em lote (${sibs.length + 1} turmas)`,
+      altLabel: "Só este registro",
+      cancelLabel: "Cancelar",
       tone: "danger",
     });
     if (!ans) return;
     const r = await run(api.deleteSlot(slotId, ans === "alt" ? null : "match"));
-    if (ans !== "alt") toast(`${r?.deleted ?? sibs.length + 1} horário(s) excluído(s).`);
+    toast(`✅ ${r?.deleted ?? (ans === "alt" ? 1 : sibs.length + 1)} turma(s) excluída(s).`);
     close();
   };
 
@@ -484,7 +514,7 @@ export function ManageBooking({ booking, onBack }) {
   const [pix, setPix] = useState(booking.pixCode || "");
   const [genBusy, setGenBusy] = useState(false);
   const slotExists = !!slotById(data, booking.slotId);
-  /* Duas reservas — e só essas duas — carregam dinheiro próprio: a experimental
+  /* Duas reservas — e só essas duas — carregam dinheiro próprio: a de matrícula
      (é a 1ª mensalidade da aluna) e a aula extra, que é compra avulsa. Toda
      aula comum já está paga dentro da mensalidade do mês; cobrar por ela era o
      R$ 20 fantasma que saiu do sistema em 30/08/2026. */
@@ -513,32 +543,42 @@ export function ManageBooking({ booking, onBack }) {
     } catch { /* erro já reportado pelo run */ }
   };
   const del = async () => {
-    // aulas marcadas juntas (replicação) compartilham seriesId; "demais" = as de hoje em diante
     const t = todayISO();
-    const sibs = booking.seriesId
-      ? (data.bookings || []).filter((b) => b.seriesId === booking.seriesId && b.id !== booking.id && b.date >= t)
-      : [];
+    const dow = new Date(booking.date + "T00:00").getDay();
+    const diaSemana = capitalize(new Date(booking.date + "T00:00").toLocaleDateString("pt-BR", { weekday: "long" }));
+    const sibs = (data.bookings || []).filter(
+      (b) =>
+        b.clientName === booking.clientName &&
+        b.id !== booking.id &&
+        b.unit === booking.unit &&
+        b.time === booking.time &&
+        b.date >= t &&
+        ((booking.seriesId && b.seriesId === booking.seriesId) || new Date(b.date + "T00:00").getDay() === dow)
+    );
     if (!sibs.length) {
-      const msg = `Tirar ${booking.clientName} da turma de ${fmtDate(booking.date)} às ${booking.time}?` +
+      const msg = `Tirar ${booking.clientName} da aula de ${diaSemana}, ${fmtDate(booking.date)} às ${booking.time}?` +
         (booking.paid ? "\n\nAtenção: esta aula consta como paga." : "") +
         "\n\nA vaga volta a ficar livre na turma. Não gera crédito de reposição.";
-      if (!(await confirmModal({ title: "Excluir aluno(a)", message: msg, confirmLabel: "Excluir", tone: "danger" }))) return;
+      if (!(await confirmModal({ title: "Excluir aluno(a) da turma", message: msg, confirmLabel: "Excluir da turma", tone: "danger" }))) return;
       await run(api.deleteBooking(booking.id));
+      toast(`✅ ${booking.clientName} removida desta turma.`);
       close();
       return;
     }
     const pagas = (booking.paid ? 1 : 0) + sibs.filter((b) => b.paid).length;
     const ans = await confirmModal({
-      title: "Excluir aluno(a) — turma replicada",
-      message: `Esta aula veio de uma replicação: ${booking.clientName} tem mais ${sibs.length} aula(s) da mesma marcação daqui em diante.` +
+      title: "Excluir aluno(a) da turma",
+      message: `${booking.clientName} tem mais ${sibs.length} aula(s) agendada(s) nas próximas semanas neste mesmo dia e horário (${diaSemana}s às ${booking.time} em ${booking.unit}).` +
         (pagas > 0 ? `\n\nAtenção: ${pagas} dessas aula(s) consta(m) como paga(s).` : "") +
-        `\n\nQuer tirá-la só desta aula ou de todas da marcação?`,
-      confirmLabel: `Excluir todas (${sibs.length + 1})`,
-      altLabel: "Só esta",
+        `\n\nDeseja excluir a aluna apenas deste registro selecionado (${fmtDate(booking.date)}) ou excluir em lote de todas as ${sibs.length + 1} aulas semanais futuras?`,
+      confirmLabel: `Excluir em lote (${sibs.length + 1} aulas)`,
+      altLabel: "Só este registro",
+      cancelLabel: "Cancelar",
       tone: "danger",
     });
     if (!ans) return;
-    await run(api.deleteBooking(booking.id, ans !== "alt"));
+    const r = await run(api.deleteBooking(booking.id, ans !== "alt"));
+    toast(`✅ ${r?.deleted ?? (ans === "alt" ? 1 : sibs.length + 1)} aula(s) de ${booking.clientName} excluída(s).`);
     close();
   };
   const genInvoice = async () => {
@@ -560,7 +600,7 @@ export function ManageBooking({ booking, onBack }) {
       <div style={{ flex: 1 }} />
       <button className="btn wa" onClick={() => openWa(booking.phone, `Olá ${booking.clientName}! 💚`)}><WaIcon /> WhatsApp</button>
       {/* Confirmar pagamento só existe quando a reserva TEM dinheiro próprio:
-          a experimental (1ª mensalidade) e a aula extra. Nas demais, quem se
+          a de matrícula (1ª mensalidade) e a aula extra. Nas demais, quem se
           paga é a mensalidade do mês — não a aula. */}
       {cobraNaReserva && !booking.paid && <button className="btn terra" onClick={() => open(<ConfirmPayment booking={booking} />)}>Confirmar pagamento</button>}
     </>}>
@@ -568,7 +608,7 @@ export function ManageBooking({ booking, onBack }) {
       <div className="info-line"><b>Telefone</b><span>{booking.phone || "—"}</span></div>
       <div className="info-line"><b>Unidade</b><span>{booking.unit}</span></div>
       <div className="info-line"><b>Aula</b><span>{fmtDateLong(booking.date)} · {faixaHorario(booking.time, data.meta?.duracaoAulaMin)}</span></div>
-      {/* A aula não tem preço próprio: só a reserva da experimental carrega
+      {/* A aula não tem preço próprio: só a reserva da matrícula carrega
           dinheiro (é a 1ª mensalidade da aluna). Nas demais, o que importa é
           como está a mensalidade do mês dela. */}
       {cobraNaReserva ? (<>
@@ -662,7 +702,7 @@ export function ConfirmPayment({ booking }) {
 export function PaymentRegister() {
   const { data, run } = useStore();
   const { close } = useModal();
-  // Só reservas com dinheiro próprio: experimental (1ª mensalidade) e aula extra.
+  // Só reservas com dinheiro próprio: matrícula (1ª mensalidade) e aula extra.
   const pend = data.bookings.filter((b) => b.status === "aguardando" &&
     (ehPagamentoDeMatricula(b.paymentMethod) || b.paymentMethod === "Avulsa"));
   const [id, setId] = useState(pend[0]?.id || "");
@@ -1928,6 +1968,48 @@ export async function baixarMensalidade(inv, run, nome = "") {
   }
 }
 
+/* ================== Alterar Vencimento da Mensalidade ================== */
+export function AlterarVencimentoModal({ invoice, clientName }) {
+  const { run } = useStore();
+  const { close } = useModal();
+  const [dueDate, setDueDate] = useState(invoice?.dueDate || todayISO());
+  const [busy, setBusy] = useState(false);
+
+  const save = async (e) => {
+    e?.preventDefault();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return toast("Informe uma data de vencimento válida (AAAA-MM-DD).", "error");
+    setBusy(true);
+    try {
+      await run(api.updateInvoice(invoice.id, { dueDate }));
+      toast("Data de vencimento atualizada com sucesso!", "success");
+      close();
+    } catch {
+      // erro exibido pelo run
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={`Alterar vencimento · ${compLabel(invoice.competencia)}`}
+      subheader={clientName ? <div className="cli-sub">Aluno(a): <b>{clientName}</b></div> : null}
+      footer={<>
+        <button className="btn ghost" onClick={close} disabled={busy}>Cancelar</button>
+        <button className="btn sec" onClick={save} disabled={busy}>{busy ? "Salvando…" : "Salvar vencimento"}</button>
+      </>}
+    >
+      <div className="field">
+        <label>Nova data de vencimento do boleto</label>
+        <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} required />
+        <div className="help" style={{ marginTop: ".45rem" }}>
+          Ao alterar a data para hoje ou uma data futura, o boleto sai do estado de atraso e os encargos (multa/juros) são recalculados automaticamente.
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 /* ====== Mensalidades do aluno (fechamento + pagamento) ======
    Mês a mês desde a primeira matrícula. Meses sem boleto aparecem como
    "não gerado" — o sistema não cria cobrança retroativa. */
@@ -2030,6 +2112,9 @@ function MensalidadesPanel({ client }) {
               </span>
               {inv && inv.status === "pendente" && (
                 <span className="hist-act">
+                  <button className="btn ghost sm" disabled={busy} title="Corrigir ou alterar a data de vencimento deste boleto" onClick={() => open(<AlterarVencimentoModal invoice={inv} clientName={client.name} />)}>
+                    ✏️ Vencimento
+                  </button>
                   {inv.semPix && (
                     <button className="btn sec sm" disabled={busy} onClick={() => gerarPix(inv)}>💠 Gerar Pix</button>
                   )}
@@ -2061,7 +2146,7 @@ function atividadesDoAluno(data, c) {
     add(k.originDate, "🔁", "Crédito de reposição gerado", `vale até ${fmtDate(k.expiresOn)}`);
     if (k.usedAt) add(k.usedAt, "✅", "Reposição marcada", "crédito usado");
   });
-  add(c.trialDate, "✨", "Aula experimental", "");
+  add(c.trialDate, "✨", "Primeira aula", "");
   add(c.matriculaAt, "🎟️", "Matriculada — 1ª mensalidade paga", "");
   add(c.matriculaRefundAt, "↩️", "Matrícula devolvida", "");
   return out.sort((a, b) => b.d.localeCompare(a.d)).slice(0, 14);
@@ -2284,7 +2369,7 @@ function MatriculaBlock({ client }) {
   if (client.matriculaStatus === "nao_aplica") return null;
   const [cls, txt] = MATRICULA_ROTULO[client.matriculaStatus] || ["b-muted", client.matriculaStatus];
   /* O que ela pagou para entrar: 1ª mensalidade + taxa de matrícula. A reserva
-     da experimental guarda as duas coisas (`value` é o total, `taxaMatricula` é
+     da matrícula guarda as duas coisas (`value` é o total, `taxaMatricula` é
      a parte da taxa), então os números aqui são os que ela pagou de fato — não
      os da tabela de hoje, que pode ter mudado desde então. */
   const reservaMatricula = (data.bookings || [])
@@ -2344,7 +2429,7 @@ function MatriculaBlock({ client }) {
       </div>
       <div className="cli-sub">
         {taxaPaga > 0 ? <>Mensalidade <b>{money(valorDevolucao)}</b> + taxa de matrícula <b>{money(taxaPaga)}</b>. </> : null}
-        {client.trialDate ? <>Aula experimental em <b>{fmtDate(client.trialDate)}</b>. </> : null}
+        {client.trialDate ? <>Primeira aula em <b>{fmtDate(client.trialDate)}</b>. </> : null}
         {client.matriculaAt ? <>1ª mensalidade paga em {fmtDate(client.matriculaAt)}. </> : null}
         {client.matriculaRefundAt ? <>Devolvida em {fmtDate(client.matriculaRefundAt)}.</> : null}
       </div>
@@ -2405,7 +2490,7 @@ export function EnrollForm({ client }) {
     </>}>
       <div className="help">
         Matricular gera a mensalidade e passa a emitir o Pix todo mês, com vencimento no dia {meta.vencimentoDia || 10}.
-        Se ela já pagou a 1ª mensalidade pela tela da aula experimental, o mês corrente entra como quitado.
+        Se ela já pagou a 1ª mensalidade pela tela de matrícula, o mês corrente entra como quitado.
       </div>
       <div className="field" style={{ marginTop: "1rem" }}>
         <label>Plano</label>

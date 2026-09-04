@@ -6,7 +6,7 @@ import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import {
   SlotCard, DayModal, ManageBooking, ClientProfile, SlotDetail, TurmaView, AlterarMensalidade, FeriadoAulas,
-  baixarMensalidade,
+  baixarMensalidade, AlterarVencimentoModal,
 } from "./modals.jsx";
 import {
   UNITS, STATUS, unitColor,
@@ -26,7 +26,7 @@ function Alerts({ open }) {
   const t = todayISO();
   const daysSince = (iso) => Math.floor((new Date(t + "T00:00") - new Date((iso || "").slice(0, 10) + "T00:00")) / 86400000);
 
-  /* Só a reserva da experimental entra aqui: o dinheiro dela é a 1ª mensalidade
+  /* Só a reserva da matrícula entra aqui: o dinheiro dela é a 1ª mensalidade
      da aluna. As demais aulas não têm preço próprio — já estão dentro do plano —
      e cobrar por elas era o R$ 20 fantasma que saiu do sistema em 30/08/2026. */
   const atrasados = data.bookings.filter((b) => b.status === "aguardando" &&
@@ -39,7 +39,7 @@ function Alerts({ open }) {
   const inativas = data.clients.filter((c) => { const l = lastByClient[c.name]; return l && daysSince(l) >= 30; })
     .sort((a, b) => daysSince(lastByClient[b.name]) - daysSince(lastByClient[a.name])).slice(0, 5);
 
-  /* Fez a experimental, a 1ª mensalidade está paga e ela não virou mensalista:
+  /* Fez a 1ª aula, a 1ª mensalidade está paga e ela não virou mensalista:
      ou você conclui a matrícula, ou devolve o valor. Normalmente isso só aparece
      quando a conversão automática falhou (Sicredi fora do ar, por exemplo).
      Só cobra atenção depois da aula ter acontecido. */
@@ -77,7 +77,7 @@ function Alerts({ open }) {
                   <div>
                     <b>{c.name}</b>
                     <div className="cli-sub">
-                      experimental {dias === 0 ? "hoje" : `há ${dias} dia${dias === 1 ? "" : "s"}`} · concluir a matrícula ou devolver a mensalidade
+                      1ª aula {dias === 0 ? "hoje" : `há ${dias} dia${dias === 1 ? "" : "s"}`} · concluir a matrícula ou devolver o valor
                     </div>
                   </div>
                   <span className={`badge ${dias >= 7 ? "b-danger" : "b-warn"}`}>{dias >= 7 ? "atrasado" : "decidir"}</span>
@@ -634,9 +634,8 @@ const initials = (n) => (n || "").trim().split(/\s+/).slice(0, 2).map((w) => w[0
 export function Clientes({ params }) {
   const { data, run } = useStore();
   const { open } = useModal();
-  // "lead" saiu do sistema; um link antigo apontando para lá cai em "cliente".
-  const [tab, setTab] = useState(params?.tab === "novato" ? "novato" : "cliente"); // cliente | novato
-  useEffect(() => { if (params?.tab) setTab(params.tab === "novato" ? "novato" : "cliente"); }, [params?.tab]);
+  const [tab, setTab] = useState(params?.tab === "novato" ? "novato" : params?.tab === "lead" ? "lead" : "cliente"); // cliente | novato | lead
+  useEffect(() => { if (params?.tab) setTab(params.tab === "novato" ? "novato" : params.tab === "lead" ? "lead" : "cliente"); }, [params?.tab]);
   const [search, setSearch] = useState("");
   const [unitF, setUnitF] = useState("Todas");
   const [planF, setPlanF] = useState("Todos");
@@ -646,16 +645,20 @@ export function Clientes({ params }) {
   const mesOf = (c) => clientMonthClasses(data, c.name, comp);
   const cntOf = (c) => mesOf(c).feitas;
 
-  const groups = { cliente: [], novato: [] };
-  data.clients.forEach((c) => groups[classifyClient(data, c)].push(c));
+  const groups = { cliente: [], novato: [], lead: [] };
+  data.clients.forEach((c) => {
+    const k = classifyClient(data, c);
+    (groups[k] || groups.cliente).push(c);
+  });
 
   const TABS = [
     ["cliente", "👩 Alunos", groups.cliente.length, "Alunos com cadastro e aulas ativas."],
-    ["novato", "✨ Novatos", groups.novato.length, "Na primeira aula — merecem atenção especial no acolhimento."],
+    ["novato", "✨ 1ª Aula (Pagas)", groups.novato.length, "Alunos com primeira aula/matrícula confirmada e paga."],
+    ["lead", "🎯 Leads (Remarketing)", groups.lead.length, "Contatos que iniciaram cadastro mas não concluíram o pagamento — ideal para remarketing."],
   ];
   const hint = (TABS.find((t) => t[0] === tab) || [])[3];
 
-  let list = groups[tab].filter((c) =>
+  let list = (groups[tab] || []).filter((c) =>
     (!search || c.name.toLowerCase().includes(search.toLowerCase()) || (c.phone || "").includes(search)) &&
     (unitF === "Todas" || c.unit === unitF) &&
     (planF === "Todos" || (planF === "Mensalistas" ? c.plan === "mensalista" : c.plan !== "mensalista"))
@@ -672,11 +675,13 @@ export function Clientes({ params }) {
     await run(api.deleteClient(c.id));
     toast("Cadastro excluído.");
   };
-  const waMsg = (c) => tab === "novato"
+  const waMsg = (c) => tab === "lead"
+    ? `Olá ${c.name}! Tudo bem? 💚 Vi que você demonstrou interesse nas nossas aulas de crochê da Fios que Curam. Ficou alguma dúvida sobre os horários ou valores? Posso te ajudar a garantir sua vaga!`
+    : tab === "novato"
     ? `Olá ${c.name}! Que alegria ter você na sua primeira aula de crochê 💚 Qualquer dúvida, é só chamar!`
     : `Olá ${c.name}! 💚`;
 
-  const emptyLabel = { cliente: "Nenhum aluno encontrado.", novato: "Nenhum aluno na primeira aula." }[tab];
+  const emptyLabel = { cliente: "Nenhum aluno encontrado.", novato: "Nenhum aluno na primeira aula.", lead: "Nenhum lead pendente de remarketing." }[tab];
 
   return (
     <div className="panel">
@@ -1079,7 +1084,21 @@ function PixDoMes() {
                       : <span className="cli-name">aluno #{i.clientId}</span>}
                     {i.cli?.unit ? <div className="cli-sub">{i.cli.unit}</div> : null}
                   </td>
-                  <td data-l="Vencimento">{fmtDate(i.dueDate)}{i.status === "pago" && i.paidAt ? <div className="cli-sub">pago em {fmtDate(String(i.paidAt).slice(0, 10))}</div> : null}</td>
+                  <td data-l="Vencimento">
+                    {i.status === "pendente" ? (
+                      <span
+                        className="row-click"
+                        style={{ cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}
+                        title="Clique para alterar a data de vencimento deste boleto"
+                        onClick={() => open(<AlterarVencimentoModal invoice={i} clientName={i.cli?.name} />)}
+                      >
+                        {fmtDate(i.dueDate)} ✏️
+                      </span>
+                    ) : (
+                      fmtDate(i.dueDate)
+                    )}
+                    {i.status === "pago" && i.paidAt ? <div className="cli-sub">pago em {fmtDate(String(i.paidAt).slice(0, 10))}</div> : null}
+                  </td>
                   <td data-l="Valor">
                     <b>{money(valorHoje(i))}</b>
                     {i.encargos?.atrasada && (

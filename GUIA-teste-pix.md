@@ -108,7 +108,7 @@ Essa mensagem é a forma mais rápida de diagnosticar. Use antes de qualquer out
 
 | Onde | O que tem |
 |---|---|
-| **Agendar aula experimental** | Ao final do agendamento, gera o Pix da 1ª mensalidade do plano escolhido. |
+| **Agendar a 1ª aula (matrícula)** | Ao final do agendamento, gera o Pix da 1ª mensalidade do plano escolhido. |
 
 ---
 
@@ -193,7 +193,7 @@ ninguém clicar em nada. No log do backend sai:
 
 ### Cenário F — Matrícula completa (ponta a ponta)
 
-1. No site, agendar uma aula experimental com um CPF novo.
+1. No site, agendar a primeira aula com um CPF novo.
 2. **Esperado:** Pix da 1ª mensalidade (valor do plano escolhido) no fim do agendamento.
 3. Pagar.
 4. Entrar no portal com aquele CPF → **Quero continuar** → escolher plano →

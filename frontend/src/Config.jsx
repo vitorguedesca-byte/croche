@@ -357,7 +357,7 @@ export default function Config() {
           <div className="field" />
         </div>
         <div className="help" style={{ marginTop: ".2rem" }}>
-          Na tela da aula experimental (e na conversa do WhatsApp) a aluna escolhe o plano e paga a{" "}
+          Na tela de matrícula (e na conversa do WhatsApp) a aluna escolhe o plano e paga a{" "}
           <b>1ª mensalidade</b>{Number(taxaMatricula) > 0 ? <> mais a <b>taxa de matrícula</b></> : null} — é esse pagamento
           que a matricula, e a próxima cobrança cai no mês seguinte, no mesmo dia
           {Number(taxaMatricula) > 0 ? <>, já <b>sem a taxa</b></> : null}.

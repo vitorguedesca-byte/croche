@@ -6,7 +6,7 @@ import { toast as toastErro, confirmModal } from "./toast.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
-import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel } from "./helpers.js";
+import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, compPorExtenso } from "./helpers.js";
 
 const CPF_KEY = "fqc_portal_cpf";
 // WhatsApp da escola: (31) 98496-6403 — sem o "55", que o waLink já acrescenta
@@ -377,7 +377,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
             <div className="pt-when"><b>{fmtDateLong(b.date)}</b><span>{b.time} · {b.unit}</span></div>
             <div className={`pt-status ${b.status}`}>{statusText(b)}</div>
             {/* A aula não se paga sozinha: ela já está dentro da mensalidade.
-                Só a experimental (1ª mensalidade) e a aula extra têm valor
+                Só a aula de matrícula (1ª mensalidade) e a aula extra têm valor
                 próprio — o resto era o R$ 20 fantasma, fora desde 30/08/2026. */}
             {b.status === "aguardando" && b.value > 0 && (
               <button className="pt-pay-cta" onClick={() => openPay(b)}>💳 Pagar reserva · {money(b.value)}</button>
@@ -550,12 +550,21 @@ function MiniAgenda({ bookings, available, unit, meta, regras, podeMarcarNormal,
   const label = base.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
   const minhasDoDia = dia ? aulasPorDia[dia] || [] : [];
   const vagasDoDia = dia && dia >= t ? vagasPorDia[dia] || [] : [];
+
+  const tetoEscala = regras && regras.tetoEscala;
+  const compDia = dia ? dia.slice(0, 7) : "";
+  const marcadasNoMes = dia ? bookings.filter((b) => b.status !== "cancelada" && (b.paymentMethod === "Mensalista" || !b.paymentMethod) && b.date.startsWith(compDia)).length : 0;
+  const limiteMes = tetoEscala?.limite || 4;
+  const tetoAtingido = !foraDoPlano && regras && regras.tipo === "escala" && marcadasNoMes >= limiteMes;
+
   const bloqueioDoDia = dia
     ? janelaFechada
       ? janela.motivo
-      : gradeJaReservada
-        ? "Sua grade regular já está reservada por 12 meses. Cancelamentos, reposições e aulas extras são feitos uma aula por vez."
-        : ""
+      : tetoAtingido
+        ? `Você já atingiu o limite de ${limiteMes} aulas do seu plano no mês de ${compPorExtenso(compDia)}. Para agendar mais aulas, adquira uma Aula Extra! 💚`
+        : gradeJaReservada
+          ? "Sua grade regular já está reservada por 12 meses. Cancelamentos, reposições e aulas extras são feitos uma aula por vez."
+          : ""
     : "";
 
   return (
@@ -565,6 +574,13 @@ function MiniAgenda({ bookings, available, unit, meta, regras, podeMarcarNormal,
         <b>Minha agenda{unit ? ` · ${unit}` : ""} — {label.charAt(0).toUpperCase() + label.slice(1)}</b>
         <button className="mini-nav" onClick={() => { setOff(off + 1); setDia(null); }} aria-label="Próximo mês">→</button>
       </div>
+
+      {regras && regras.tipo === "escala" && tetoEscala && (
+        <div className="mini-dica" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: ".5rem", marginBottom: ".5rem" }}>
+          <span>🗓️ <b>Plano Escala:</b> {tetoEscala.marcadas} de {tetoEscala.limite} aulas agendadas neste mês</span>
+          {tetoEscala.atingido && <span style={{ color: "var(--warn)", fontWeight: 600 }}>Limite do mês atingido</span>}
+        </div>
+      )}
 
       {repondo && (
         <div className="mini-repo-aviso">
@@ -644,7 +660,7 @@ function MiniAgenda({ bookings, available, unit, meta, regras, podeMarcarNormal,
   );
 }
 
-/* Convite para continuar no curso, mostrado a quem fez a experimental. */
+/* Convite para continuar no curso, mostrado a quem já fez a 1ª aula. */
 function ContinuarCard({ cliente, meta, montarGrade = false, onContinuar }) {
   const jaPagou = cliente.matriculaStatus === "paga";
   return (
@@ -655,7 +671,7 @@ function ContinuarCard({ cliente, meta, montarGrade = false, onContinuar }) {
           <div className="pt-sub2">
             {montarGrade
               ? `Escolha ${cliente.weeklyFreq} horário${cliente.weeklyFreq > 1 ? "s" : ""} semanal${cliente.weeklyFreq > 1 ? "is" : ""}. As aulas serão reservadas automaticamente por 12 meses.`
-              : "Gostou da aula experimental? Escolha o seu plano, pague a primeira mensalidade e monte a sua grade de 12 meses."}
+              : "Pronta para continuar? Escolha o seu plano, pague a primeira mensalidade e monte a sua grade de 12 meses."}
           </div>
           {jaPagou && <div className="pt-sub2" style={{ marginTop: ".4rem" }}>✅ A sua primeira mensalidade já está paga — não cobramos de novo.</div>}
         </div>

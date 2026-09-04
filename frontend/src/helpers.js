@@ -198,25 +198,36 @@ export function clientAttendance(data, name) {
   };
 }
 
-/* ---- classificação de pessoas: cliente | novato ----
-   A etiqueta "Lead" saiu do sistema em 22/08/2026: quem entra pelo site já
-   marca a experimental, então "cadastrou e não prosseguiu" deixou de ser um
-   estado real. Restaram dois: quem está na primeira aula e todo o resto. */
+/* ---- classificação de pessoas: cliente | novato | lead ----
+   • cliente: aluna regular (mensalista ou com aulas pagas).
+   • novato: aluna em primeira aula confirmada/paga.
+   • lead: contato que iniciou cadastro/reserva mas não concluiu pagamento (lead para remarketing). */
 // nº de marcações ativas (não canceladas) de uma pessoa
 export const clientActiveCount = (data, c) =>
   bookingsActive(data).filter((b) => b.clientName === c.name).length;
 
-// Novato: está na primeira aula (firstClass). Cliente: todo o resto.
 export function classifyClient(data, c) {
+  if (c.status === "lead") return "lead";
+  const bks = (data.bookings || []).filter((b) => b.clientName === c.name);
+  const hasPaidBooking = bks.some((b) => b.paid || b.status === "concluida" || (b.status === "confirmada" && b.paymentMethod));
+  const isMatriculada = c.matriculaStatus === "paga" || c.matriculaStatus === "convertida" || c.plan === "mensalista";
+
+  // Se não concluiu pagamento e não é mensalista matriculada:
+  if (!hasPaidBooking && !isMatriculada) {
+    const hasActiveHold = bks.some((b) => b.status === "aguardando" && b.holdUntil && new Date(b.holdUntil).getTime() > Date.now());
+    if (!hasActiveHold) return "lead";
+  }
   return c.firstClass ? "novato" : "cliente";
 }
 
 // Marcação "nova": pessoa ainda sem acesso (sem PIN) ou na primeira aula
 export function isNewLead(data, booking) {
+  if (booking.status === "cancelada") return false;
   const phone = (booking.phone || "").replace(/\D/g, "");
   const client = phone
     ? data.clients.find((c) => (c.phone || "").replace(/\D/g, "").endsWith(phone.slice(-8)))
     : null;
+  if (client && client.status === "lead") return false;
   if (client && client.firstClass) return true;
   return !client || !client.hasPin;
 }
@@ -244,13 +255,13 @@ export const ehFeriado = (data, date, unit) => !!feriadoDe(data, date, unit);
    O backend marca o tipo no paymentMethod ao criar a reserva:
    "Reposição" = consumiu crédito do MakeupCredit · "Avulsa" = aula extra paga. */
 // Esquema de cores da agenda por tipo de aula:
-//   AZUL = reposição · VERMELHO = 1ª aula (experimental) · VERDE = aula extra
+//   AZUL = reposição · VERMELHO = 1ª aula (matrícula) · VERDE = aula extra
 export const BOOKING_KINDS = {
   reposicao: { key: "reposicao", label: "Reposição", ic: "🔁", cls: "b-info",   color: "var(--info)" },
   primeira:  { key: "primeira",  label: "1ª aula",    ic: "🎟️", cls: "b-danger", color: "var(--danger)" },
   extra:     { key: "extra",     label: "Aula extra", ic: "✨", cls: "b-ok",     color: "var(--green-mid)" },
 };
-/* Marcas que o backend põe no paymentMethod da reserva da aula experimental —
+/* Marcas que o backend põe no paymentMethod da reserva da aula de matrícula —
    o dinheiro dela é a 1ª MENSALIDADE da aluna, não o preço de uma aula.
    "Matrícula" é o rótulo antigo, de quando existia a taxa de R$20 separada;
    segue reconhecido para as reservas que já estão no banco. Espelho de
@@ -266,7 +277,7 @@ export const bookingKind = (b) =>
 
 /* Tipo da aula com REFORÇO pela ficha da aluna.
    O paymentMethod só sai marcado quando a reserva nasce no fluxo público da
-   experimental. Quando a Inêz marca a aula pelo painel, a reserva nasce sem
+   de matrícula. Quando a Inêz marca a aula pelo painel, a reserva nasce sem
    marca nenhuma — mas a ficha continua dizendo `firstClass`, e para a agenda
    aquela ainda é a 1ª aula da pessoa. Só a marcação ATIVA mais antiga dela
    ganha o destaque: as seguintes já são aula normal de quem está começando. */
@@ -451,7 +462,7 @@ export function clientMonthClasses(data, name, comp = compAtual()) {
     futuras: doMes.filter((b) => b.date > hoje).length,
   };
 }
-// Data da primeira matrícula do aluno (matrícula → experimental → cadastro).
+// Data da primeira matrícula do aluno (matrícula → 1ª aula → cadastro).
 export const matriculaISO = (c) =>
   c.matriculaAt || c.trialDate || (c.createdAt ? String(c.createdAt).slice(0, 10) : null);
 // Competências da matrícula até `ate` (mais recente primeiro).
@@ -585,6 +596,39 @@ export function situacaoMensalidade(data, client, comp = compAtual()) {
 export const tipoMensalista = (c) =>
   !c || c.plan !== "mensalista" ? null : c.mensalistaTipo === "escala" ? "escala" : "fixo";
 export const TIPO_MENSALISTA_LABEL = { fixo: "Fixo", escala: "Escala" };
+
+export function compPorExtenso(comp) {
+  const m = String(comp || "").match(/^(\d{4})-(\d{2})$/);
+  if (!m) return comp;
+  const meses = [
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+  ];
+  return `${meses[+m[2] - 1]} de ${m[1]}`;
+}
+
+export function limiteMensalEscala(client, date) {
+  const freq = Number(client?.weeklyFreq) || 1;
+  if (freq === 2) return 8;
+  if (client?.monthlyValue && Number(client.monthlyValue) >= 200) return 8;
+  return 4; // padrão 1x (R$ 120,00) = 4 aulas por mês
+}
+
+export function tetoMensalEscala(client, date, todasAulasDaAluna) {
+  const comp = String(date || "").slice(0, 7);
+  const limite = limiteMensalEscala(client, date);
+  const marcadas = (todasAulasDaAluna || []).filter(
+    (b) => b && b.status !== "cancelada" && (b.paymentMethod === "Mensalista" || !b.paymentMethod) && String(b.date || "").startsWith(comp)
+  ).length;
+  return {
+    competencia: comp,
+    limite,
+    marcadas,
+    restantes: Math.max(0, limite - marcadas),
+    atingido: marcadas >= limite,
+  };
+}
+
 
 /**
  * Validação do algoritmo oficial do CPF (módulo 11 com 2 dígitos verificadores).

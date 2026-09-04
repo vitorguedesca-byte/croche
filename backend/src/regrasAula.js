@@ -32,7 +32,7 @@
    As colunas `podeSabado` e `podeNoite` continuam no banco (são históricas e
    não custam nada), mas não governam mais nada.
 
-   Alunas avulsas, aula experimental e quem está em `firstClass` não passam por
+   Alunas avulsas, a aula de matrícula e quem está em `firstClass` não passam por
    aqui — a regra é do plano de mensalista.
 
    Este módulo é PURO de propósito (não toca no banco): quem chama traz as aulas
@@ -60,7 +60,7 @@
    monta a grade de 12 meses de uma vez. Depois disso, nunca mais em lote.
 
    TRÊS AULAS NUNCA ENTRAM NO LOTE, em nenhum dos caminhos: a reposição
-   (PGTO_REPOSICAO), a aula extra (PGTO_EXTRA) e a aula da avulsa/experimental.
+   (PGTO_REPOSICAO), a aula extra (PGTO_EXTRA) e a aula da avulsa/matrícula.
    As três são ocorrências únicas — existem por causa de um crédito, de um
    pagamento à parte ou de uma visita, e não por causa de uma grade. Copiá-las
    inventaria aula que ninguém contratou. Quem replica tem que filtrar por
@@ -305,30 +305,76 @@ export function tetoSemanal(client, date, aulasAtivas) {
   return { limite, marcadas, restantes: limite ? Math.max(0, limite - marcadas) : null };
 }
 
+/* ---------- teto de aulas por mês para aluna de ESCALA ----------
+   Vitor, 03/09/2026:
+   • Aluna de escala no plano 1x (R$ 120,00): tem direito a 4 aulas no mês.
+   • Aluna de escala no plano 2x (R$ 200,00): tem direito a 8 aulas no mês.
+   Aulas canceladas, reposições (PGTO_REPOSICAO) e aulas extras (PGTO_EXTRA)
+   NÃO consomem essas aulas do plano mensal. */
+
+export function compPorExtenso(comp) {
+  const m = String(comp || "").match(/^(\d{4})-(\d{2})$/);
+  if (!m) return comp;
+  const meses = [
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+  ];
+  return `${meses[+m[2] - 1]} de ${m[1]}`;
+}
+
+export function limiteMensalEscala(client, date) {
+  const freq = freqNaData(client, date);
+  if (freq === 2) return 8;
+  if (client?.monthlyValue && Number(client.monthlyValue) >= 200) return 8;
+  return 4; // padrão 1x (R$ 120,00) = 4 aulas por mês
+}
+
+export function tetoMensalEscala(client, date, todasAulasDaAluna) {
+  const comp = String(date || "").slice(0, 7);
+  const limite = limiteMensalEscala(client, date);
+  const marcadas = (todasAulasDaAluna || []).filter(
+    (b) => contaNoTeto(b) && String(b.date || "").startsWith(comp)
+  ).length;
+  return {
+    competencia: comp,
+    limite,
+    marcadas,
+    restantes: Math.max(0, limite - marcadas),
+    atingido: marcadas >= limite,
+  };
+}
+
 /* Checagem única usada por todos os caminhos de marcação.
 
    client       — o registro do Client (precisa de plan, mensalistaTipo, weeklyFreq)
-   alvo         — { date, time } do horário escolhido (só `date` é olhado hoje;
-                  `time` segue no contrato porque quem chama já tem os dois e
-                  uma regra de horário pode voltar)
+   alvo         — { date, time } do horário escolhido
    ctx.hoje     — 'YYYY-MM-DD' pelo relógio de Brasília
    ctx.aulasAtivas — aulas não canceladas da aluna (a escala usa)
+   ctx.todasAulas  — histórico de aulas da aluna para cômputo do mês
    ctx.ignorarJanela — true em caminhos onde a janela da escala não faz sentido
+   ctx.ignorarTeto   — true para reposição e aula extra
 
    Devolve { ok:true } ou { ok:false, codigo, motivo }.
-   `codigo` é 'escala'. */
+   `codigo` é 'escala' | 'teto_mes'. */
 export function checarRegras(client, alvo, ctx = {}) {
   const tipo = tipoMensalista(client);
-  if (!tipo) return { ok: true, codigo: "", motivo: "" }; // avulsa/experimental seguem como antes
+  if (!tipo) return { ok: true, codigo: "", motivo: "" }; // avulsa/matrícula seguem como antes
 
-  /* A frequência 1x/2x define quantos padrões semanais a aluna escolhe na
-     matrícula. Esses padrões são replicados por 12 meses; não existe mais um
-     teto calculado semana a semana. Assim, feriado fechado não vira uma aula
-     fictícia e também não bloqueia nenhuma operação posterior. */
-
-  if (tipo === "escala" && !ctx.ignorarJanela) {
-    const j = janelaEscala(ctx.aulasAtivas, ctx.hoje);
-    if (!j.aberta) return { ok: false, codigo: "escala", motivo: j.motivo };
+  if (tipo === "escala") {
+    if (!ctx.ignorarJanela) {
+      const j = janelaEscala(ctx.aulasAtivas, ctx.hoje);
+      if (!j.aberta) return { ok: false, codigo: "escala", motivo: j.motivo };
+    }
+    if (!ctx.ignorarTeto && alvo?.date) {
+      const tm = tetoMensalEscala(client, alvo.date, ctx.todasAulas || ctx.aulasAtivas);
+      if (tm.atingido) {
+        return {
+          ok: false,
+          codigo: "teto_mes",
+          motivo: `Você já atingiu o limite de ${tm.limite} aulas do seu plano no mês de ${compPorExtenso(tm.competencia)}. Para agendar mais aulas, você pode adquirir uma Aula Extra no portal! 💚`,
+        };
+      }
+    }
   }
 
   return { ok: true, codigo: "", motivo: "" };

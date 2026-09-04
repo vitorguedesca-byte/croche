@@ -2,6 +2,7 @@
 import {
   checarRegras, janelaEscala, freqNaData, podeReplicarMensalista,
   segundaDaSemana, mesmaSemana, tetoSemanal, PGTO_PLANO,
+  limiteMensalEscala, tetoMensalEscala, compPorExtenso,
   somarComp, diaDoMes,
   encargosDaMensalidade, diasEntreISO, MULTA_ATRASO_REAIS, JUROS_DIA_PERCENTUAL,
   primeiroPagamento, mensalidadeDoPagamento,
@@ -82,6 +83,42 @@ ok(c(escala, { date: "2026-08-22", time: "09:00" }, { ignorarJanela: true }).ok 
 console.log("\n— janelaEscala: mensagem —");
 const j = janelaEscala([{ date: "2026-08-27", time: "14:00", status: "confirmada" }], HOJE);
 ok(j.aberta === false && /quinta, 27\/08/.test(j.motivo), `mensagem cita o dia da próxima aula: "${j.motivo}"`);
+
+console.log("\n— teto mensal da escala (120,00 = 4 aulas / 200,00 = 8 aulas) —");
+const escala120 = { plan: "mensalista", mensalistaTipo: "escala", weeklyFreq: 1, monthlyValue: 120 };
+const escala200 = { plan: "mensalista", mensalistaTipo: "escala", weeklyFreq: 2, monthlyValue: 200 };
+
+ok(limiteMensalEscala(escala120, "2026-08-10") === 4, "escala 120/1x: limite mensal de 4 aulas");
+ok(limiteMensalEscala(escala200, "2026-08-10") === 8, "escala 200/2x: limite mensal de 8 aulas");
+
+const aulas4 = [
+  { date: "2026-08-03", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+  { date: "2026-08-10", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+  { date: "2026-08-17", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+  { date: "2026-08-24", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+];
+
+ok(tetoMensalEscala(escala120, "2026-08-24", aulas4).atingido === true, "4 aulas em agosto atingem o limite de 1x");
+ok(tetoMensalEscala(escala120, "2026-08-24", aulas4).restantes === 0, "restantes é 0 após 4 aulas");
+ok(tetoMensalEscala(escala200, "2026-08-24", aulas4).atingido === false, "4 aulas em agosto NÃO atingem o limite de 2x (8 aulas)");
+ok(tetoMensalEscala(escala200, "2026-08-24", aulas4).restantes === 4, "2x ainda tem 4 aulas restantes");
+
+// checarRegras bloqueia 5ª aula no mesmo mês para escala 1x
+ok(c(escala120, { date: "2026-08-31", time: "09:00" }, {
+  aulasAtivas: [{ date: HOJE, time: "09:00", status: "confirmada" }],
+  todasAulas: aulas4,
+}).codigo === "teto_mes", "escala 1x: 5ª aula do mês é bloqueada pelo teto mensal");
+
+// reposição e extra não contam no teto mensal
+const aulasComRepo = [
+  { date: "2026-08-03", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+  { date: "2026-08-10", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+  { date: "2026-08-17", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+  { date: "2026-08-20", time: "09:00", status: "confirmada", paymentMethod: "Reposição" },
+  { date: "2026-08-22", time: "09:00", status: "confirmada", paymentMethod: "Avulsa" },
+];
+ok(tetoMensalEscala(escala120, "2026-08-24", aulasComRepo).atingido === false, "reposição e extra não consomem o teto mensal (3 do plano < 4)");
+ok(tetoMensalEscala(escala120, "2026-08-24", aulasComRepo).marcadas === 3, "apenas as 3 do plano são contabilizadas");
 
 /* ===================== teto de aulas por semana (plano 1x/2x) ===================== */
 // Semana de 24/08 (seg) a 30/08 (dom) de 2026

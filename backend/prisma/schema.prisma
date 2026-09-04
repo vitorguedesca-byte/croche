@@ -42,18 +42,19 @@ model Client {
   weeklyFreqDesde    String? @db.VarChar(7) // 'YYYY-MM' a partir da qual o novo vale
   monthlyValue Float?  // valor individual da mensalidade; null = usa o valor do plano
   billingDay   Int?    // dia de vencimento (1-28); null = usa o padrão
-  // ----- taxa de matrícula da aula experimental -----
-  // "nao_aplica" (nunca fez experimental) | "pendente" | "paga" | "convertida" | "devolvida"
+  // ----- taxa de matrícula (cobrada uma vez, na 1ª aula) -----
+  // "nao_aplica" (nunca se matriculou) | "pendente" | "paga" | "convertida" | "devolvida"
   matriculaStatus String  @default("nao_aplica") @db.VarChar(20)
   matriculaAt     String? @db.VarChar(10) // quando a taxa foi paga
   matriculaRefundAt String? @db.VarChar(10) // quando a taxa foi devolvida
-  trialDate       String? @db.VarChar(10) // data da aula experimental
+  trialDate       String? @db.VarChar(10) // data da 1ª aula (nome herdado do fluxo antigo)
   /* De onde veio a ficha. Interessa na tela: o cadastro feito pela conversa do
      WhatsApp é digitado pela própria aluna, sem ninguém conferindo do outro
      lado, então o painel mostra "Cadastro via WhatsApp" para a Inêz saber que
      aquele nome, e-mail e data de nascimento vieram de lá.
      null = cadastro antigo ou feito no painel. */
   origem   String? @db.VarChar(20) // "whatsapp" | "portal" | "site"
+  aniversarioMsgAt String? @db.VarChar(10) // 'YYYY-MM-DD' quando a última mensagem de parabéns foi enviada
   makeupCredits Int    @default(0) // LEGADO: não usado — o saldo real vem da tabela MakeupCredit
   createdAt DateTime @default(now())
   invoices  Invoice[]
@@ -197,7 +198,7 @@ model Booking {
   absenceReason String   @default("") @db.VarChar(500) // motivo informado pelo aluno
   value         Float    @default(80)
   /* Quanto de TAXA DE MATRÍCULA está dentro de `value`. Só a reserva da aula
-     experimental tem isto preenchido; null = reserva sem taxa (todas as antigas).
+     de matrícula tem isto preenchido; null = reserva sem taxa (todas as antigas).
 
      Existe porque `value` é o que a aluna PAGA (mensalidade + taxa) e a
      mensalidade do mês tem que entrar no financeiro pelo valor dela, sem a

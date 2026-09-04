@@ -248,3 +248,10 @@ export const textoAulaExtraPaga = ({ nome, valor }) =>
 🎟️ Aula extra${valor ? ` · ${valor}` : ""}
 
 Seu passe está liberado. É só entrar na área do aluno e escolher o dia e o horário da sua aula extra. 💚`;
+
+/* Felicitações de aniversário automáticas enviadas no dia do aniversário da aluna */
+export const textoAniversario = ({ nome }) =>
+`Feliz aniversário, ${String(nome || "").split(" ")[0]}! 🎉🎂💚
+
+Toda a equipe da Fios que Curam deseja um dia maravilhoso e muito abençoado pra você! Que este novo ciclo venha repleto de saúde, paz, muitas alegrias e lindos projetos de crochê. É um prazer enorme ter você com a gente! ✨🧶`;
+

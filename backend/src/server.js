@@ -27,6 +27,9 @@ import {
   encargosDaMensalidade,
   hhmm,
   janelaEscala,
+  tetoMensalEscala,
+  limiteMensalEscala,
+  compPorExtenso,
   liberouATempo as liberouATempoPuro,
   motivoSemCredito,
   REPO_MAX_MES,
@@ -59,6 +62,7 @@ import {
   textoMensalidadeEmAtraso,
   textoMensalidadePaga,
   textoAulaExtraPaga,
+  textoAniversario,
 } from "./textosEscola.js";
 import { sicrediConfigured, sicrediMissing, createCharge, getCharge, isPaidStatus, extractPix } from "./sicredi.js";
 import { waConfigured, waVerify, sendWaText, sendWaTextOrTemplate, sendWaButtons, sendWaList, parseIncoming, normalizePhone } from "./wa.js";
@@ -139,7 +143,7 @@ const isPublicApi = (req) => PUBLIC_API.some(([m, re]) => (!m || m === req.metho
 
 /* Esta chamada veio do PAINEL (alguém logado), e não da aluna?
    Várias rotas são compartilhadas: a mesma `POST /api/bookings` serve à tela
-   pública da experimental e à marcação replicada da Inêz. O que separa as duas
+   pública de matrícula e à marcação replicada da Inêz. O que separa as duas
    não é o corpo da requisição — que qualquer um monta na mão — é quem está
    assinando a chamada. Operação em LOTE, marcação forçada e criação de horário
    novo são do painel; pelo portal e pelo WhatsApp, uma aula de cada vez.
@@ -225,7 +229,7 @@ function validarCPF(cpf) {
   return true;
 }
 /* Etiquetas válidas: nenhuma. A única que existia ("Lead") saiu do sistema em
-   22/08/2026 — quem entra pelo site já marca a experimental, então "cadastrou e
+   22/08/2026 — quem entra pelo site já marca a 1ª aula, então "cadastrou e
    não prosseguiu" deixou de ser um estado real.
    A coluna `tags` continua no banco e o filtro abaixo simplesmente ignora o que
    houver lá: nada é apagado, e nada antigo volta a aparecer na tela. */
@@ -325,7 +329,7 @@ async function aulasAtivasDe(client, desde = todayISO()) {
 /* Aplica as regras antes de criar a aula. Lança { code: 409 } quando barra.
    `forcar` existe só para o painel: a Inêz vê o aviso na tela e decide passar
    por cima (ela é a dona da agenda). O portal da aluna nunca manda `forcar`. */
-async function exigirRegras(client, alvo, { forcar = false, ignorarJanela = false } = {}) {
+async function exigirRegras(client, alvo, { forcar = false, ignorarJanela = false, ignorarTeto = false } = {}) {
   /* Feriado vem ANTES do `forcar`, e de propósito: as outras regras deste
      módulo são do plano da aluna, e a Inêz pode passar por cima delas porque a
      agenda é dela. Feriado não é regra de plano — é o dia em que a escola não
@@ -335,12 +339,16 @@ async function exigirRegras(client, alvo, { forcar = false, ignorarJanela = fals
     throw Object.assign(new Error(recusaFeriado(nomeFeriado, alvo?.date)), { code: 409, codigo: "feriado" });
   if (forcar) return { ok: true, codigo: "", motivo: "" };
   const hoje = todayISO();
-  const precisaJanela = !ignorarJanela && tipoMensalista(client) === "escala";
+  const isEscala = tipoMensalista(client) === "escala";
+  const todasAulas = isEscala
+    ? await prisma.booking.findMany({ where: { clientName: client.name, status: { not: "cancelada" } } })
+    : [];
   const r = checarRegras(client, alvo, {
     hoje,
-    aulasAtivas: precisaJanela ? await aulasAtivasDe(client, hoje) : [],
+    aulasAtivas: todasAulas.filter((b) => b.date >= hoje),
+    todasAulas,
     ignorarJanela,
-    ignorarTeto: true,
+    ignorarTeto,
   });
   if (!r.ok) throw Object.assign(new Error(r.motivo), { code: 409, codigo: r.codigo });
   return r;
@@ -899,7 +907,7 @@ function cpfValido(cpf) {
   return dv(9) === Number(d[9]) && dv(10) === Number(d[10]);
 }
 
-/* Marca gravada no `paymentMethod` da reserva da aula experimental. Ela diz que
+/* Marca gravada no `paymentMethod` da reserva da aula de matrícula. Ela diz que
    aquele dinheiro é a 1ª MENSALIDADE da aluna — o que a matricula — e não o
    pagamento de uma aula avulsa. "Matrícula" é o rótulo antigo, de quando existia
    a taxa de R$20 separada; continua reconhecido para as reservas que já estão
@@ -1041,7 +1049,7 @@ app.post(
 
    O que NÃO é copiado, de propósito:
    • reposição — é aula paga com crédito; repetir consumiria créditos da aluna;
-   • matrícula (aula experimental) — é uma só na vida da aluna;
+   • matrícula (a 1ª aula) — é uma só na vida da aluna;
    • aluna com cadastro cancelado — saiu do curso.
    Regras do mensalista (teto da semana / janela da escala) continuam valendo:
    quem não pode entra na lista de "pulados", com o motivo.
@@ -1068,8 +1076,8 @@ app.post(
     }
 
     // quem vai junto: reservas ativas da turma de origem, menos as que por
-    // natureza não se repetem (reposição = crédito da aluna, matrícula = a
-    // experimental é uma só). Ficam de fora uma vez, não semana a semana.
+    // natureza não se repetem (reposição = crédito da aluna, matrícula = a 1ª
+    // aula é uma só). Ficam de fora uma vez, não semana a semana.
     const ativas = comAlunas
       ? await prisma.booking.findMany({ where: { slotId: id, status: { not: "cancelada" } } })
       : [];
@@ -1086,7 +1094,7 @@ app.post(
         : b.paymentMethod === PGTO_EXTRA
           ? "aula extra não é replicada (aula única)"
           : ehPagamentoDeMatricula(b.paymentMethod)
-            ? "aula experimental não é replicada"
+            ? "aula de matrícula não é replicada (aula única)"
             : !podeReplicarMensalista(fichaDe(b.clientName))
               ? "mensalista de escala marca cada aula individualmente"
               : "não replicável",
@@ -1194,7 +1202,7 @@ app.post(
       alunasPorSemana: origem.length,
       conflitos,
       pulos,
-      naoReplicadas, // reposição / experimental — informado uma vez só
+      naoReplicadas, // reposição / matrícula — informado uma vez só
     });
   })
 );
@@ -1205,7 +1213,7 @@ app.post(
    semana (ex.: 2ª terça do mês vira a 2ª terça do mês seguinte).
 
    Só aulas REGULARES de mensalistas FIXAS acompanham a turma. Mensalistas de
-   escala, reposição, extra, experimental e avulsa são sempre unitárias. */
+   escala, reposição, extra, matrícula e avulsa são sempre unitárias. */
 function inicioDaSemanaISO(date) {
   const d = new Date(date + "T00:00Z");
   return addDays(date, -((d.getUTCDay() + 6) % 7));
@@ -1523,26 +1531,67 @@ app.delete(
     const id = Number(req.params.id);
     const slot = await prisma.slot.findUnique({ where: { id } });
     if (!slot) return res.json({ ok: true, deleted: 0 });
-    // ?match=1: exclusão em lote "pega-tudo" — além dos da mesma série, exclui
-    // TODOS os horários futuros equivalentes (mesma unidade, hora e dia da
-    // semana), mesmo que tenham sido criados em levas separadas ou antes do
-    // seriesId existir. Horários passados ficam para preservar o histórico.
-    if (req.query.match === "1") {
-      const ids = new Set((await irmasDaTurma(slot)).map((s) => s.id));
-      ids.add(id); // inclui o próprio, mesmo que esteja no passado
-      const r = await prisma.slot.deleteMany({ where: { id: { in: [...ids] } } });
-      return res.json({ ok: true, deleted: r.count });
+
+    let idsToDelete = [id];
+    if (req.query.match === "1" || req.query.series === "1") {
+      const irmas = await irmasDaTurma(slot);
+      idsToDelete = [...new Set([id, ...irmas.map((s) => s.id)])];
     }
-    // ?series=1: exclui também os demais horários da mesma série (replicados),
-    // de hoje em diante — horários passados ficam para preservar o histórico.
-    if (req.query.series === "1" && slot.seriesId) {
-      const r = await prisma.slot.deleteMany({
-        where: { seriesId: slot.seriesId, OR: [{ id }, { date: { gte: todayISO() } }] },
+
+    // Devolve créditos de reposição se houver alguma aluna repondo nos horários excluídos
+    const repos = await prisma.booking.findMany({
+      where: { slotId: { in: idsToDelete }, paymentMethod: "Reposição" },
+      select: { id: true },
+    });
+    for (const r of repos) await devolverCredito(r.id);
+
+    const r = await prisma.slot.deleteMany({ where: { id: { in: idsToDelete } } });
+    res.json({ ok: true, deleted: r.count });
+  })
+);
+
+// Exclusão de dia: individual (só esta data) ou em lote (todas as semanas do mesmo dia da semana)
+app.post(
+  "/api/slots/delete-day",
+  wrap(async (req, res) => {
+    const { date, unit, batch } = req.body || {};
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: "Data inválida." });
+    }
+    const hoje = todayISO();
+    let slotWhere = {};
+    if (batch) {
+      const dow = new Date(date + "T00:00").getDay();
+      const futureSlots = await prisma.slot.findMany({
+        where: {
+          date: { gte: hoje },
+          ...(unit && unit !== "Todas" ? { unit } : {}),
+        },
       });
-      return res.json({ ok: true, deleted: r.count });
+      const matchingSlots = futureSlots.filter((s) => {
+        const sDow = new Date(s.date + "T00:00").getDay();
+        return sDow === dow;
+      });
+      slotWhere = { id: { in: matchingSlots.map((s) => s.id) } };
+    } else {
+      slotWhere = {
+        date,
+        ...(unit && unit !== "Todas" ? { unit } : {}),
+      };
     }
-    await prisma.slot.delete({ where: { id } });
-    res.json({ ok: true, deleted: 1 });
+
+    const slotsToDelete = await prisma.slot.findMany({ where: slotWhere, select: { id: true } });
+    const slotIds = slotsToDelete.map((s) => s.id);
+    if (!slotIds.length) return res.json({ ok: true, deleted: 0 });
+
+    const repos = await prisma.booking.findMany({
+      where: { slotId: { in: slotIds }, paymentMethod: "Reposição" },
+      select: { id: true },
+    });
+    for (const r of repos) await devolverCredito(r.id);
+
+    const delRes = await prisma.slot.deleteMany({ where: { id: { in: slotIds } } });
+    res.json({ ok: true, deleted: delRes.count });
   })
 );
 
@@ -1554,19 +1603,34 @@ app.get(
     const unit = req.query.unit;
     const [slots, bookings] = await Promise.all([
       prisma.slot.findMany(),
-      prisma.booking.findMany({ where: { status: { not: "cancelada" } } }),
+      prisma.booking.findMany(),
     ]);
     const occ = {};
-    bookings.forEach((b) => { occ[b.slotId] = (occ[b.slotId] || 0) + 1; });
+    const totalReservas = {};
+    bookings.forEach((b) => {
+      if (b.status !== "cancelada") {
+        occ[b.slotId] = (occ[b.slotId] || 0) + 1;
+      }
+      totalReservas[b.slotId] = (totalReservas[b.slotId] || 0) + 1;
+    });
     /* Feriado não aparece como opção: um horário criado antes de a data virar
-       feriado continua no banco, mas some das telas de escolha. Melhor não
-       oferecer do que recusar depois de a aluna escolher. */
+       feriado continua no banco, mas some das telas de escolha.
+       Regra 6: Vagas liberadas por falta/cancelamento só ficam livres para reposição,
+       aulas extras e alunas de escala. Alunos novos (1ª aula) não podem marcar nessas vagas.
+       Logo, para novos alunos, a turma precisa ter totalReservas < s.capacity. */
     const available = slots
-      .filter((s) => s.date >= t && !feriadoNoDia(s.date, s.unit) && (!unit || s.unit === unit) && (occ[s.id] || 0) < s.capacity)
-      .map((s) => ({ id: s.id, date: s.date, time: s.time, unit: s.unit, prof: s.prof || profFor(s.unit), vagas: s.capacity - (occ[s.id] || 0) }))
+      .filter((s) => s.date >= t && !feriadoNoDia(s.date, s.unit) && (!unit || s.unit === unit) && (occ[s.id] || 0) < s.capacity && (totalReservas[s.id] || 0) < s.capacity)
+      .map((s) => ({
+        id: s.id,
+        date: s.date,
+        time: s.time,
+        unit: s.unit,
+        prof: s.prof || profFor(s.unit),
+        vagas: s.capacity - (totalReservas[s.id] || 0),
+      }))
       .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-    /* A tela pública da aluna nova lê os preços daqui. Ela caía nos valores
-       chumbados do código (120/200) quando o meta não os trazia — e o Pix, que
+    /* A tela pública da aluna nova lê os preços daqui.
+       Antes ela caía nos valores chumbados do código (120/200) quando o meta não os trazia — e o Pix, que
        é montado no servidor, vinha com o valor certo: a tela dizia um número e
        o banco cobrava outro. Preço mostrado é preço prometido, então ele sai da
        mesma fonte que a cobrança. */
@@ -1609,12 +1673,14 @@ async function ensureClient(nomeBruto, phone, unit, tags, cpf, email, firstClass
   });
 }
 
-/* Já fez (ou tem marcada) a aula experimental?
-   A experimental é uma só na vida da aluna: `trialDate` e `matriculaStatus` são
-   a marca de que ela já passou por aqui. Quem faltou também entra nesta conta —
-   faltar não devolve o direito de remarcar a experimental (a aula OFICIAL ela
-   marca normalmente pelo portal, depois de se matricular). */
-const jaTeveExperimental = (c) => !!c && (!!c.trialDate || c.matriculaStatus !== "nao_aplica");
+/* Já passou pela matrícula (ou tem a 1ª aula marcada)?
+   A matrícula é uma só na vida da aluna: `trialDate` (data da 1ª aula) e
+   `matriculaStatus` são a marca de que ela já passou por aqui. Quem faltou
+   também entra nesta conta — faltar não devolve o direito de refazer a
+   matrícula (as aulas seguintes ela marca normalmente pelo portal).
+   Os nomes das colunas são herança do fluxo antigo de aula experimental; o
+   significado hoje é "primeira aula / matrícula". */
+const jaFezMatricula = (c) => !!c && (!!c.trialDate || c.matriculaStatus !== "nao_aplica");
 
 app.post(
   "/api/bookings",
@@ -1634,8 +1700,8 @@ app.post(
     const pulos = { lotada: 0, jaMarcada: 0, teto: 0, liberada: 0 };
     const painel = doPainel(req);
 
-    /* Fora do painel esta rota só existe para a aula experimental. A aluna já
-       matriculada usa exclusivamente o portal: grade inicial de 12 meses,
+    /* Fora do painel esta rota só existe para a 1ª aula (a matrícula). A aluna
+       já matriculada usa exclusivamente o portal: grade inicial de 12 meses,
        reposição ou extra, sempre pelos fluxos próprios. */
     if (!painel && !b.firstClass)
       return res.status(403).json({ error: "Marcações comuns são feitas pela ADMIN. Use o portal para reposição ou aula extra. 💚" });
@@ -1644,8 +1710,8 @@ app.post(
        Marcar várias datas de uma vez é operação de quem monta a agenda. Pelo
        portal e pelo WhatsApp a marcação é sempre UMA aula, numa turma que já
        existe: é assim que cada aula aparece na agenda uma a uma, com vaga
-       conferida e teto do plano medido no ato. A rota é pública (a tela da
-       experimental usa) e o corpo da requisição qualquer um monta — então quem
+       conferida e teto do plano medido no ato. A rota é pública (a tela de
+       matrícula usa) e o corpo da requisição qualquer um monta — então quem
        decide é o login, não o `dates` que chegou. */
     if (replicando && !painel)
       return res.status(403).json({
@@ -1657,15 +1723,15 @@ app.post(
        depois de a reserva já existir — e o teto ficava sem quem o medisse. */
     let client = await prisma.client.findFirst({ where: { name: b.clientName } });
 
-    /* Uma aula experimental por aluna. Quem já fez (ou faltou) não remarca a
-       experimental — o caminho dela agora é se matricular e marcar a aula
-       OFICIAL pelo portal. Este bloqueio é do fluxo público; a Inêz continua
-       podendo marcar o que precisar pelo painel (que não manda firstClass). */
+    /* Uma matrícula por aluna. Quem já passou por ela (ou faltou na 1ª aula)
+       não refaz o fluxo — o caminho dela agora é marcar pelo portal. Este
+       bloqueio é do fluxo público; a Inêz continua podendo marcar o que
+       precisar pelo painel (que não manda firstClass). */
     if (b.firstClass && !b.viaPainel) {
       const existente = await prisma.client.findFirst({ where: { name: b.clientName } });
-      if (jaTeveExperimental(existente))
+      if (jaFezMatricula(existente))
         return res.status(409).json({
-          error: "Você já tem a sua aula experimental registrada — ela é uma só. " +
+          error: "Você já tem a sua matrícula registrada — ela é uma só. " +
             "Para marcar uma aula, entre na área do aluno com o seu CPF. Qualquer dúvida, chame a gente no WhatsApp. 💚",
         });
     }
@@ -1705,15 +1771,27 @@ app.post(
         });
       }
 
-      /* Aula experimental: a aula em si é gratuita — o que se cobra na tela é a
-         1ª MENSALIDADE do plano escolhido MAIS a taxa de matrícula, cobrada uma
+      /* Aula de matrícula (a 1ª da aluna): o que se cobra na tela é a 1ª
+         MENSALIDADE do plano escolhido MAIS a taxa de matrícula, cobrada uma
          vez só. É esse pagamento que matricula a aluna (ver
          registrarMatriculaPaga). A taxa fica gravada na reserva para o
          financeiro conseguir separá-la da mensalidade depois.
-         Ao replicar, só a primeira aula é a experimental. */
-      const experimental = !!b.firstClass && i === 0;
+         Ao replicar, só a primeira aula é a de matrícula. */
+      const ehMatricula = !!b.firstClass && i === 0;
       const freqEscolhida = Number(b.weeklyFreq) === 2 ? 2 : 1;
-      const taxa = experimental ? taxaMatriculaAtual() : 0;
+      const taxa = ehMatricula ? taxaMatriculaAtual() : 0;
+
+      /* Regra 6: Vagas liberadas por falta/cancelamento só ficam livres para reposição,
+         aula extra e escala. Alunas novas (1ª aula) não podem ocupar vaga decorrente
+         de cancelamento de aluna regular. */
+      if (!painel && (ehMatricula || b.firstClass || client?.firstClass)) {
+        const totalNoSlot = await prisma.booking.count({ where: { slotId: slot.id } });
+        if (totalNoSlot >= (slot.capacity || 1)) {
+          return res.status(409).json({
+            error: "Este horário possui apenas vagas liberadas por alunas ausentes (reservadas para reposição, extra e escala). Por favor, escolha um horário com vaga regular para sua primeira aula. 💚",
+          });
+        }
+      }
 
       /* AULA DE MENSALISTA É AULA DO PLANO — e o plano tem teto.
          A marcação da mensalista nasce marcada como `Mensalista`: é essa marca
@@ -1722,9 +1800,9 @@ app.post(
          acumulava quantas quisesse por aqui enquanto o portal a barrava.
 
          Quem NÃO é mensalista não tem teto nenhum: paga por aula e marca
-         quantas quiser, desde que haja vaga na turma. A experimental também
-         fica de fora — é aula única, anterior ao plano. */
-      const doPlano = !experimental && tipoMensalista(client) !== null;
+         quantas quiser, desde que haja vaga na turma. A aula de matrícula
+         também fica de fora — é aula única, anterior ao plano. */
+      const doPlano = !ehMatricula && tipoMensalista(client) !== null;
       if (doPlano) {
         try {
           await exigirRegras(client, { date: slot.date, time: slot.time }, {
@@ -1751,27 +1829,29 @@ app.post(
           // aula do plano já está paga pela mensalidade — nasce confirmada,
           // como no agendamento em lote e na replicação da turma
           status: doPlano ? "confirmada" : "aguardando",
-          value: experimental ? valorPrimeiroPagamento(freqEscolhida) : (Number(b.value) || 0),
+          value: ehMatricula ? valorPrimeiroPagamento(freqEscolhida) : (Number(b.value) || 0),
           taxaMatricula: taxa || null,
-          paymentMethod: experimental ? MARCA_MATRICULA : doPlano ? PGTO_PLANO : null,
+          paymentMethod: ehMatricula ? MARCA_MATRICULA : doPlano ? PGTO_PLANO : null,
         },
       });
       criadas.push(booking);
 
       if (!client) client = await ensureClient(b.clientName, b.phone, unit, [], b.cpf, b.email, b.firstClass, { birthday: b.birthday });
-      if (experimental && client) {
+      if (ehMatricula && client) {
         /* O plano escolhido na tela da matrícula fica guardado aqui como
            INTENÇÃO (weeklyFreq + mensalistaTipo), mas `plan` continua "avulso":
            ela só vira mensalista de fato quando a 1ª mensalidade é paga. Quem faz
            essa virada é registrarMatriculaPaga(), que roda tanto no "já paguei"
-           quanto no webhook do Sicredi. */
+           quanto no webhook do Sicredi.
+           Regra 5: Alunas novas entram no plano em ESCALA por padrão. */
         const freq = Number(b.weeklyFreq) === 2 ? 2 : Number(b.weeklyFreq) === 1 ? 1 : null;
+        const tipoEntrada = b.mensalistaTipo === "fixo" ? "fixo" : "escala";
         await prisma.client.update({
           where: { id: client.id },
           data: {
             matriculaStatus: "pendente",
             trialDate: slot.date,
-            ...(freq ? { weeklyFreq: freq, mensalistaTipo: b.mensalistaTipo === "escala" ? "escala" : "fixo" } : {}),
+            ...(freq ? { weeklyFreq: freq, mensalistaTipo: tipoEntrada } : {}),
           },
         });
       }
@@ -1827,13 +1907,24 @@ app.delete(
     const id = Number(req.params.id);
     const bk = await prisma.booking.findUnique({ where: { id } });
     if (!bk) return res.json({ ok: true, deleted: 0 });
-    // ?series=1: exclui também as demais aulas da mesma marcação replicada,
-    // de hoje em diante — aulas passadas ficam para preservar o histórico.
-    if (req.query.series === "1" && bk.seriesId) {
-      const where = { seriesId: bk.seriesId, OR: [{ id }, { date: { gte: todayISO() } }] };
-      const alvos = await prisma.booking.findMany({ where, select: { id: true } });
-      const r = await prisma.booking.deleteMany({ where });
-      for (const a of alvos) await devolverCredito(a.id); // reposição excluída devolve o crédito
+    // ?series=1 ou ?match=1: exclui também as demais aulas da aluna neste mesmo dia da semana e horário, de hoje em diante
+    if (req.query.series === "1" || req.query.match === "1") {
+      const dow = new Date(bk.date + "T00:00").getDay();
+      const futuras = await prisma.booking.findMany({
+        where: {
+          clientName: bk.clientName,
+          unit: bk.unit,
+          time: bk.time,
+          date: { gte: todayISO() },
+        },
+      });
+      const matching = futuras.filter((b) => {
+        if (bk.seriesId && b.seriesId === bk.seriesId) return true;
+        return new Date(b.date + "T00:00").getDay() === dow;
+      });
+      const ids = [...new Set([id, ...matching.map((b) => b.id)])];
+      for (const bId of ids) await devolverCredito(bId);
+      const r = await prisma.booking.deleteMany({ where: { id: { in: ids } } });
       return res.json({ ok: true, deleted: r.count });
     }
     await prisma.booking.delete({ where: { id } });
@@ -1930,7 +2021,7 @@ app.post(
       data: {
         paid: true,
         status: "confirmada",
-        // a experimental mantém a marca da matrícula para o dinheiro não virar aula
+        // a 1ª aula mantém a marca da matrícula para o dinheiro não virar aula
         paymentMethod: ehPagamentoDeMatricula(cur?.paymentMethod) ? cur.paymentMethod : (req.body.paymentMethod || "Pix"),
         paymentDate: req.body.paymentDate || todayISO(),
         /* O valor da MATRÍCULA é do servidor, não do cliente: ele é a soma da
@@ -2437,6 +2528,35 @@ app.post("/api/invoices/:id/cancel", wrap(async (req, res) => {
   res.json(inv);
 }));
 
+/* Alterar data de vencimento e dados da mensalidade (mesmo que esteja em atraso) */
+app.patch("/api/invoices/:id", wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const cur = await prisma.invoice.findUnique({ where: { id } });
+  if (!cur) return res.status(404).json({ error: "Mensalidade não encontrada." });
+
+  const data = {};
+  if (req.body.dueDate !== undefined) {
+    const dd = String(req.body.dueDate).trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dd)) return res.status(400).json({ error: "Data de vencimento inválida (formato AAAA-MM-DD)." });
+    data.dueDate = dd;
+    // Ao alterar o vencimento para data futura/hoje, zera marcadores de avisos já disparados
+    if (dd >= todayISO()) {
+      data.avisoAVencerAt = null;
+      data.avisoAtrasoAt = null;
+    }
+  }
+  if (req.body.amountCents !== undefined) {
+    data.amountCents = Math.round(Number(req.body.amountCents)) || cur.amountCents;
+  }
+  if (req.body.semPix !== undefined) {
+    data.semPix = !!req.body.semPix;
+  }
+
+  const updated = await prisma.invoice.update({ where: { id }, data });
+  res.json(comEncargos(updated));
+}));
+
+
 /* Reemitir o Pix de uma mensalidade, pelo painel.
    Existe porque mudar o valor apaga o QR antigo (ele cobrava o preço velho) e a
    Inêz precisa do código novo na mão para mandar pelo WhatsApp — sem depender de
@@ -2773,8 +2893,8 @@ setTimeout(dispararRodada, 15_000); // e uma vez no boot, já com o banco de pé
 
    Mensalidade marcada como "sem Pix" (baixa manual no mês anterior) fica FORA
    dos dois: quem acerta por fora não recebe cobrança automática. */
-const AVISO_ANTES = 2;  // dias antes do vencimento
-const AVISO_ATRASO = 1; // dias depois do vencimento
+const AVISO_ANTES = 3;  // dias antes do vencimento
+const AVISO_ATRASO = 2; // dias depois do vencimento
 
 /* ---------- HORÁRIO DAS MENSAGENS QUE O SISTEMA INICIA ----------
 
@@ -2916,12 +3036,13 @@ async function rodadaLembretesDeAula() {
   }
   if (aulas.length) console.log(`[lembrete aula] ${aulas.length} lembrete(s) de ${amanha} enviados.`);
 }
-const dispararLembretes = () => rodadaLembretesDeAula().catch((e) => {
-  ultimoDiaLembretes = null; // falhou: a próxima hora tenta de novo
-  console.warn("[lembrete aula]", e.message);
-});
-setInterval(dispararLembretes, 60 * 60 * 1000);
-setTimeout(dispararLembretes, 75_000);
+// Lembrete de véspera desativado para economizar custos de templates pagos do WhatsApp.
+// const dispararLembretes = () => rodadaLembretesDeAula().catch((e) => {
+//   ultimoDiaLembretes = null;
+//   console.warn("[lembrete aula]", e.message);
+// });
+// setInterval(dispararLembretes, 60 * 60 * 1000);
+// setTimeout(dispararLembretes, 75_000);
 
 const dispararAvisos = () => rodadaAvisosMensalidade().catch((e) => {
   ultimoDiaAvisos = null; // falhou: a próxima hora tenta de novo
@@ -2929,6 +3050,63 @@ const dispararAvisos = () => rodadaAvisosMensalidade().catch((e) => {
 });
 setInterval(dispararAvisos, 60 * 60 * 1000);
 setTimeout(dispararAvisos, 45_000);
+
+/* ---------- MENSAGEM AUTOMÁTICA DE ANIVERSÁRIO ----------
+   Disparada uma vez por dia, dentro da janela permitida (8h às 20h),
+   para alunas ativas que fazem aniversário na data de hoje.
+   Grava `aniversarioMsgAt` com a data do envio para nunca reenviar no mesmo ano. */
+let ultimoDiaAniversarios = null;
+async function rodadaAniversariantes() {
+  if (!SETTINGS.waAvisosAuto) return;
+  if (!waConfigured() || !podeMandarAgora()) return;
+  const hoje = todayISO();
+  if (ultimoDiaAniversarios === hoje) return;
+  ultimoDiaAniversarios = hoje;
+
+  const mmddHoje = hoje.slice(5); // "MM-DD"
+  const anoHoje = hoje.slice(0, 4);
+
+  const clients = await prisma.client.findMany({
+    where: {
+      status: { not: "cancelado" },
+      birthday: { not: null },
+      phone: { not: null },
+    },
+  });
+
+  const aniversariantesHoje = clients.filter((c) => {
+    if (!c.birthday || !c.phone) return false;
+    const bmmdd = c.birthday.slice(5);
+    if (bmmdd !== mmddHoje) return false;
+    // se já enviou mensagem este ano, não repete
+    if (c.aniversarioMsgAt && c.aniversarioMsgAt.startsWith(anoHoje)) return false;
+    return true;
+  });
+
+  for (const c of aniversariantesHoje) {
+    try {
+      await waSend(c.phone, textoAniversario({ nome: c.name }));
+      await prisma.client.update({
+        where: { id: c.id },
+        data: { aniversarioMsgAt: hoje },
+      });
+      console.log(`[aniversário wa] Mensagem de parabéns enviada para ${c.name} (${c.phone}).`);
+    } catch (e) {
+      console.warn(`[aniversário wa] Falha ao enviar para ${c.name}: ${e.message}`);
+    }
+  }
+  if (aniversariantesHoje.length) {
+    console.log(`[aniversário wa] ${aniversariantesHoje.length} mensagem(ns) de aniversário enviadas hoje.`);
+  }
+}
+
+const dispararAniversarios = () => rodadaAniversariantes().catch((e) => {
+  ultimoDiaAniversarios = null;
+  console.warn("[aniversario wa]", e.message);
+});
+setInterval(dispararAniversarios, 60 * 60 * 1000);
+setTimeout(dispararAniversarios, 60_000);
+
 
 /* ---------- PORTAL DO ALUNO ---------- */
 // Localiza o aluno pela "chave" usada no portal: CPF, telefone (dígitos) ou id.
@@ -2979,6 +3157,9 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
   const janela = tipo === "escala"
     ? janelaEscala(ativasFuturas, t)
     : { aberta: true, proxima: null, motivo: "" };
+  const tetoEscala = tipo === "escala"
+    ? tetoMensalEscala(client, t, bookings)
+    : null;
   const extra = (await passeExtraDisponivel(client.id)) || (await passeExtraPendente(client.id));
   res.json({
     client: safeClient(client),
@@ -2990,6 +3171,7 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
     regras: {
       tipo,                                  // "fixo" | "escala" | null
       janela,                                // { aberta, proxima, motivo }
+      tetoEscala,                            // { competencia, limite, marcadas, restantes, atingido }
     },
     // Aula extra comprada: null, ou { status, valor, pixCode, ... }
     extra: extra ? resumoPasse(extra) : null,
@@ -3100,7 +3282,7 @@ const resumoPasse = (p) => ({
   paidAt: p.paidAt || null,
 });
 
-// Converter em mensalista pelo portal (usado no tablet da sala, ao fim da experimental)
+// Converter em mensalista pelo portal (usado no tablet da sala)
 app.post("/api/portal/:key/enroll", wrap(async (req, res) => {
   const client = await clientByPortalKey(req.params.key);
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
@@ -3223,8 +3405,8 @@ app.post("/api/portal/:key/absence/:bookingId", wrap(async (req, res) => {
 /* ===================== MATRÍCULA E CONVERSÃO =====================
    Fluxo combinado com a Inêz (revisto em 28/08/2026 — a taxa de matrícula
    deixou de existir e o valor dela está diluído na mensalidade):
-   - Para agendar a experimental, a aluna escolhe o plano e paga a 1ª
-     MENSALIDADE cheia. A aula experimental em si continua gratuita.
+   - Para agendar a PRIMEIRA aula, a aluna escolhe o plano e paga a 1ª
+     MENSALIDADE cheia. É esse pagamento que garante a vaga.
    - Pagou → está matriculada (status "convertida"), o mês corrente já sai
      quitado e a próxima mensalidade cai no mês seguinte, no mesmo dia.
    - Fez e não gostou → a mensalidade é devolvida por inteiro (status
@@ -3316,7 +3498,7 @@ async function criarGradeInicial12Meses(client, slotsBase) {
 
 // Converte a aluna em mensalista: define o plano, registra/gera as mensalidades
 // e, quando ela escolhe a grade, replica os padrões por 12 meses. Lança { code }.
-// `mensalidadePaga` chega quando o pagamento da experimental JÁ é a mensalidade
+// `mensalidadePaga` chega quando o pagamento da matrícula JÁ é a mensalidade
 // do mês corrente — é o caminho da tela pública da aluna nova.
 async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, billingDay, mensalistaTipo, mensalidadePaga, exigirGrade = false }) {
   const jaMensalista = client.plan === "mensalista" && !!client.weeklyFreq;
@@ -3386,14 +3568,14 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
       status: "ativo",
       weeklyFreq: freq,
       mensalistaTipo: tipoEfetivo,
-      firstClass: false, // deixou de ser aluna nova/experimental
+      firstClass: false, // deixou de ser aluna nova
       monthlyValue: null, // passa a seguir a tabela do plano
       billingDay: dia,
       ...(virouMatricula ? { matriculaStatus: "convertida" } : {}),
     },
   });
 
-  /* O mês da matrícula JÁ ESTÁ PAGO quando ela pagou pela tela da experimental:
+  /* O mês da matrícula JÁ ESTÁ PAGO quando ela pagou pela tela de matrícula:
      aquele Pix era a mensalidade do mês corrente, não uma taxa de entrada. Fica
      registrado aqui como mensalidade quitada para o dinheiro aparecer no
      financeiro (Recebimentos e Mensalistas) em vez de sumir dentro da reserva. */
@@ -3541,7 +3723,7 @@ app.post("/api/clients/:id/enroll", wrap(async (req, res) => {
   } catch (e) { res.status(e.code || 500).json({ error: e.message }); }
 }));
 
-/* Devolução da 1ª MENSALIDADE — a aluna fez a experimental e não quis
+/* Devolução da 1ª MENSALIDADE — a aluna se matriculou e não quis
    continuar. Como ela já sai matriculada ao pagar, devolver também precisa
    DESFAZER a matrícula: senão ela ficaria com mensalidade e aulas de um plano
    que nunca começou.
@@ -3574,7 +3756,7 @@ app.post("/api/clients/:id/matricula/refund", wrap(async (req, res) => {
   desfez.taxaRetida = Number(reservaMatricula?.taxaMatricula || 0);
   desfez.devolver = reservaMatricula ? mensalidadeDaReserva(reservaMatricula) : 0;
 
-  // Aulas futuras do plano somem — a aula experimental (já realizada) fica no histórico.
+  // Aulas futuras do plano somem — a aula de matrícula (já realizada) fica no histórico.
   const aulas = await prisma.booking.updateMany({
     where: { clientName: client.name, date: { gte: t }, status: { not: "cancelada" }, paymentMethod: { notIn: MARCAS_MATRICULA } },
     data: { status: "cancelada", absenceReason: "Matrícula devolvida — aluna não continuou" },
@@ -3912,7 +4094,7 @@ async function upsertClienteWa({ nome, phone, cpf, email, birthday, unit }) {
   });
 }
 
-/* Cria a reserva da experimental já como pagamento de matrícula: o valor é a 1ª
+/* Cria a reserva da 1ª aula já como pagamento de matrícula: o valor é a 1ª
    MENSALIDADE do plano escolhido (é ela que matricula a aluna — ver
    registrarMatriculaPaga), e o plano fica guardado no cadastro como INTENÇÃO,
    exatamente como faz a tela da matrícula no site.
@@ -3953,6 +4135,19 @@ async function expirarReservaWa(booking) {
     where: { id: booking.id },
     data: { status: "cancelada", holdUntil: null, absenceReason: "Reserva não paga no prazo — vaga liberada" },
   });
+  // Se a pessoa só tinha essa reserva e nunca pagou matrícula nem mensalidade, classifica como lead
+  const cli = await prisma.client.findFirst({ where: { name: booking.clientName } });
+  if (cli && cli.matriculaStatus !== "paga" && cli.matriculaStatus !== "convertida" && cli.plan !== "mensalista") {
+    const temOutraPaga = await prisma.booking.count({
+      where: { clientName: cli.name, status: { not: "cancelada" }, paid: true },
+    });
+    if (temOutraPaga === 0) {
+      await prisma.client.update({
+        where: { id: cli.id },
+        data: { status: "lead", firstClass: false },
+      });
+    }
+  }
   await prisma.waConversation.updateMany({
     where: { bookingId: booking.id },
     // A reserva caiu: a conversa volta ao zero inteira (ver CONVERSA_ZERADA).
@@ -3966,7 +4161,7 @@ async function expirarReservaWa(booking) {
       quando: fmtSlotBR({ date: booking.date, time: booking.time }),
     }));
   }
-  console.log(`[wa hold] reserva ${booking.id} (${booking.clientName}) expirou — vaga liberada.`);
+  console.log(`[wa hold] reserva ${booking.id} (${booking.clientName}) expirou — vaga liberada e cliente mantido como lead.`);
 }
 
 /* Rodada das reservas seguradas: cutuca quem está a HOLD_AVISO_MIN do fim e
@@ -4500,18 +4695,18 @@ async function handleWaMessage(msg) {
     if (!existente) return telaNome();
 
     /* Já é nossa aluna: este fluxo cobra a 1ª MENSALIDADE, que é o que matricula
-       quem está chegando. Quem já passou pela experimental não pode entrar aqui
-       — a aula dela já está paga dentro da mensalidade do mês, e cobrar de novo
-       seria vender duas vezes a mesma coisa. Ela marca pelo portal, onde as
-       regras do plano (teto da semana, janela da escala) são aplicadas. */
-    if (jaTeveExperimental(existente)) {
+       quem está chegando. Quem já se matriculou não pode entrar aqui — a aula
+       dela já está paga dentro da mensalidade do mês, e cobrar de novo seria
+       vender duas vezes a mesma coisa. Ela marca pelo portal, onde as regras
+       do plano (teto da semana, janela da escala) são aplicadas. */
+    if (jaFezMatricula(existente)) {
       await setConv({ step: "done", slotId: null });
       return waSend(msg.from,
         `${existente.name.split(" ")[0]}, achei seu cadastro — você já é nossa aluna! 💚\n\n` +
         `Suas aulas você marca pelo *portal da aluna*, que já conhece o seu plano e o seu saldo de reposição:\n${WA_PORTAL_URL}\n\n` +
         `Se tiver qualquer dificuldade, me chama neste número:\n📞 ${WA_ATENDENTE}`);
     }
-    // Tem ficha mas ainda não fez a experimental: só falta escolher o plano.
+    // Tem ficha mas ainda não se matriculou: só falta escolher o plano.
     return telaPlano(existente.name, `Achei o seu cadastro, ${existente.name.split(" ")[0]}! 💚 `);
   }
 
@@ -5240,6 +5435,7 @@ const COLUNAS_ESPERADAS = [
   ["WaConversation", "lastInboundAt", "DATETIME(3) NULL"],
   // "Cadastro via WhatsApp" no painel
   ["Client", "origem", "VARCHAR(20) NULL"],
+  ["Client", "aniversarioMsgAt", "VARCHAR(10) NULL"],
   /* Taxa de matrícula, de volta em 01/09/2026: quanto a escola cobra hoje
      (Settings) e quanto foi cobrado daquela aluna (Booking). Ver a migration
      20260901140000 para o porquê de serem duas. */
