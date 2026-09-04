@@ -4244,7 +4244,7 @@ async function createWaBooking(client, slot, { weeklyFreq }) {
       matriculaStatus: "pendente",
       trialDate: slot.date,
       weeklyFreq: freq,
-      mensalistaTipo: "escala",
+      mensalistaTipo: "fixo",
       unit: client.unit || slot.unit,
     },
   });
