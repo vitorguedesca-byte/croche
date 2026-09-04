@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "./api.js";
-import { todayISO, addDays, fmtDate, fmtDateLong, money, capitalize, fimDaAula, validarCPF, formatarCPF, waLink } from "./helpers.js";
+import { todayISO, addDays, fmtDate, fmtDateLong, money, capitalize, fimDaAula, validarCPF, formatarCPF, waLink, mesmaSemana } from "./helpers.js";
 
 const DOW = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
 
@@ -84,7 +84,7 @@ function PtAgenda({ available, value, onPick }) {
               aula dela.
 
    Em ambos: de segunda a sexta, até as 18h. */
-function EscolhaDePlano({ tipo, setTipo, freq, setFreq, valor1x, valor2x, taxa = 0 }) {
+function EscolhaDePlano({ tipo, setTipo, freq, setFreq, onFreqChange, valor1x, valor2x, taxa = 0 }) {
   const Opcao = ({ on, onClick, titulo, linhas, preco }) => (
     <button
       type="button"
@@ -121,13 +121,13 @@ function EscolhaDePlano({ tipo, setTipo, freq, setFreq, valor1x, valor2x, taxa =
 
       <label className="pt-label" style={{ marginTop: "1.1rem" }}>Quantas aulas por semana?</label>
       <Opcao
-        on={Number(freq) === 1} onClick={() => setFreq(1)}
+        on={Number(freq) === 1} onClick={() => { setFreq(1); onFreqChange?.(1); }}
         titulo="1x por semana"
         linhas={taxa > 0 ? `4 aulas por mês · 1º pagamento: ${money(valor1x + taxa)}` : "4 aulas por mês"}
         preco={`${money(valor1x)}/mês`}
       />
       <Opcao
-        on={Number(freq) === 2} onClick={() => setFreq(2)}
+        on={Number(freq) === 2} onClick={() => { setFreq(2); onFreqChange?.(2); }}
         titulo="2x por semana"
         linhas={taxa > 0 ? `8 aulas por mês · 1º pagamento: ${money(valor2x + taxa)}` : "8 aulas por mês"}
         preco={`${money(valor2x)}/mês`}
@@ -143,6 +143,74 @@ function EscolhaDePlano({ tipo, setTipo, freq, setFreq, valor1x, valor2x, taxa =
   );
 }
 
+/* Seleção da 2ª aula na mesma semana para o plano 2x por semana */
+function PtAgendaSemana({ available, firstSlot, value, onPick }) {
+  if (!firstSlot) return null;
+  const slotsDaSemana = available.filter(
+    (s) => s.unit === firstSlot.unit && mesmaSemana(s.date, firstSlot.date) && s.id !== firstSlot.id
+  );
+
+  const byDay = {};
+  slotsDaSemana.forEach((s) => {
+    (byDay[s.date] = byDay[s.date] || []).push(s);
+  });
+  Object.values(byDay).forEach((arr) => arr.sort((a, b) => a.time.localeCompare(b.time)));
+  const days = Object.keys(byDay).sort();
+
+  if (!days.length) {
+    return (
+      <div style={{ marginTop: "1rem", padding: ".85rem 1rem", borderRadius: 10, background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba", fontSize: ".9rem", lineHeight: 1.45 }}>
+        ⚠️ Não há outros horários disponíveis com vagas nesta mesma semana na unidade {firstSlot.unit}. Você poderá marcar o 2º horário pela área do aluno ou combinar pelo WhatsApp da escola.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: "1.2rem", padding: "1.1rem", background: "rgba(28,94,51,.04)", border: "1.5px solid var(--green-mid, #2d7a46)", borderRadius: 12 }}>
+      <div style={{ fontWeight: 700, color: "var(--green-deep, #1c5e33)", marginBottom: ".35rem", display: "flex", alignItems: "center", gap: ".4rem", fontSize: "1rem" }}>
+        <span>🗓️</span> Escolha sua 2ª aula na mesma semana
+      </div>
+      <div style={{ fontSize: ".88rem", color: "var(--muted)", marginBottom: ".85rem" }}>
+        Para o plano de <b>2x por semana</b>, selecione o segundo horário na mesma semana da primeira aula ({fmtDate(firstSlot.date)}):
+      </div>
+      {value ? (
+        <div style={{ padding: ".7rem .9rem", background: "#fff", borderRadius: 8, border: "1.5px solid var(--green-deep, #1c5e33)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: ".5rem" }}>
+          <div>
+            <span style={{ color: "var(--green-deep)", fontWeight: 700 }}>✓ 2ª aula escolhida:</span>{" "}
+            <b>{capitalize(fmtDateLong(value.date))} às {value.time}</b>
+          </div>
+          <button type="button" className="pt-link" style={{ fontSize: ".85rem", margin: 0 }} onClick={() => onPick(null)}>
+            Trocar
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: ".75rem" }}>
+          {days.map((d) => (
+            <div key={d} style={{ background: "#fff", padding: ".6rem .85rem", borderRadius: 8, border: "1px solid var(--line)" }}>
+              <div style={{ fontSize: ".88rem", fontWeight: 600, color: "var(--terracota)", marginBottom: ".4rem" }}>
+                {capitalize(fmtDateLong(d))}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: ".45rem" }}>
+                {byDay[d].map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className={`pt-time ${value?.id === s.id ? "on" : ""}`}
+                    onClick={() => onPick(s)}
+                    style={{ padding: ".4rem .85rem", fontSize: ".92rem" }}
+                  >
+                    {s.time}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function FirstClassBooking({ onBack, fromSite }) {
   const [meta, setMeta] = useState({ units: [], pixKey: "", pixName: "" });
   const [available, setAvailable] = useState([]);
@@ -153,6 +221,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const [step, setStep] = useState("unit"); // unit | cal1 | pay | done
   const [unit, setUnit] = useState(null);
   const [slot, setSlot] = useState(null); // horário da primeira aula
+  const [slot2, setSlot2] = useState(null); // 2º horário da semana quando plano 2x
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -205,11 +274,16 @@ export default function FirstClassBooking({ onBack, fromSite }) {
     if (!/\S+@\S+\.\S+/.test(email.trim())) return flash("Informe um email válido.");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(birthday)) return flash("Informe a sua data de nascimento.");
     if (birthday >= todayISO()) return flash("A data de nascimento precisa ser no passado.");
+    if (Number(freq) === 2 && !slot2) {
+      return flash("Por favor, selecione a 2ª aula na mesma semana para o plano 2x por semana.");
+    }
     setBusy(true);
     try {
       const b = booking || await api.createBooking({
         clientName: name.trim(), phone: phone.trim(), cpf: cpf.trim(), email: email.trim(), birthday,
-        unit: slot.unit, slotId: slot.id, firstClass: true, // o valor sai do plano escolhido, no servidor
+        unit: slot.unit, slotId: slot.id,
+        secondSlotId: slot2?.id || null,
+        firstClass: true, // o valor sai do plano escolhido, no servidor
         // plano escolhido: fica guardado como intenção e vira matrícula ao pagar
         weeklyFreq: freq, mensalistaTipo: tipo,
       });
@@ -271,7 +345,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   }, [step, pix, booking?.id]);
 
   const restart = () => {
-    setStep("unit"); setUnit(null); setSlot(null);
+    setStep("unit"); setUnit(null); setSlot(null); setSlot2(null);
     setName(""); setPhone(""); setCpf(""); setEmail(""); setBirthday("");
     setTipo("escala"); setFreq(1); setBooking(null); setInscricao(null); setPix(null);
     loadAvail();
@@ -299,7 +373,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
             <h2 className="pt-h2" style={{ marginTop: 0 }}>Escolha a unidade</h2>
             <div className="pt-unit-pick">
               {meta.units.map((u) => (
-                <button key={u} className="pt-unit-card" onClick={() => { setUnit(u); setSlot(null); loadAvail(u); setStep("cal1"); }}>
+                <button key={u} className="pt-unit-card" onClick={() => { setUnit(u); setSlot(null); setSlot2(null); loadAvail(u); setStep("cal1"); }}>
                   <div className="ic">📍</div><b>{u}</b><span>Aulas presenciais</span>
                 </button>
               ))}
@@ -310,18 +384,25 @@ export default function FirstClassBooking({ onBack, fromSite }) {
         {/* 2 · HORÁRIO (calendário) */}
         {step === "cal1" && (
           <div className="pt-card">
-            <button className="pt-link" onClick={() => { setStep("unit"); setUnit(null); }}>← Trocar unidade ({unit})</button>
+            <button className="pt-link" onClick={() => { setStep("unit"); setUnit(null); setSlot2(null); }}>← Trocar unidade ({unit})</button>
             <h2 className="pt-h2">Escolha o dia e o horário</h2>
             {loading ? <div className="pt-cal-empty">Carregando horários…</div>
-              : <PtAgenda available={available} value={slot} onPick={(s) => { setSlot(s); setStep("pay"); }} />}
+              : <PtAgenda available={available} value={slot} onPick={(s) => { setSlot(s); setSlot2(null); setStep("pay"); }} />}
           </div>
         )}
 
         {/* 3 · MATRÍCULA (Pix) */}
         {step === "pay" && slot && (
           <div className="pt-card">
-            <button className="pt-link" onClick={() => { setStep("cal1"); }}>← Trocar horário</button>
-            <div className="pt-fc-resume">📍 <b>{slot.unit}</b> · {capitalize(fmtDateLong(slot.date))} · <b>{slot.time}</b></div>
+            <button className="pt-link" onClick={() => { setStep("cal1"); setSlot2(null); }}>← Trocar horário</button>
+            <div className="pt-fc-resume">
+              <div>📍 <b>{slot.unit}</b> · 1ª aula: {capitalize(fmtDateLong(slot.date))} · <b>{slot.time}</b></div>
+              {Number(freq) === 2 && slot2 && (
+                <div style={{ marginTop: ".35rem", color: "var(--green-deep, #1c5e33)", fontWeight: 600 }}>
+                  ➕ 2ª aula: {capitalize(fmtDateLong(slot2.date))} · <b>{slot2.time}</b>
+                </div>
+              )}
+            </div>
 
             <div className="pt-matricula">
               {taxa > 0 ? (<>
@@ -355,10 +436,20 @@ export default function FirstClassBooking({ onBack, fromSite }) {
               <EscolhaDePlano
                 tipo={tipo} setTipo={setTipo}
                 freq={freq} setFreq={setFreq}
+                onFreqChange={(f) => { if (f === 1) setSlot2(null); }}
                 valor1x={meta.valorPlano1x ?? 120}
                 valor2x={meta.valorPlano2x ?? 200}
                 taxa={taxa}
               />
+
+              {Number(freq) === 2 && (
+                <PtAgendaSemana
+                  available={available}
+                  firstSlot={slot}
+                  value={slot2}
+                  onPick={setSlot2}
+                />
+              )}
 
               {/* O resumo do que vai ser cobrado fica ANTES do botão: ninguém
                   deve descobrir o total só quando o Pix já está na tela. */}

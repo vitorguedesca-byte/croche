@@ -38,6 +38,7 @@ import {
   somarComp,
   tipoMensalista,
   podeReplicarMensalista,
+  mesmaSemana,
 } from "./regrasAula.js";
 import {
   anosDoCalendario,
@@ -1663,6 +1664,7 @@ async function ensureClient(nomeBruto, phone, unit, tags, cpf, email, firstClass
     data: {
       name, phone: phone || "", email: (email || "").trim() || null, cpf: onlyDigits(cpf) || null,
       unit, tags: JSON.stringify(tags || []), firstClass: !!firstClass,
+      status: firstClass ? "lead" : (extra.status || "ativo"),
       ...(extra.birthday ? { birthday: extra.birthday } : {}),
     },
   });
@@ -1839,21 +1841,49 @@ app.post(
       if (!client) client = await ensureClient(b.clientName, b.phone, unit, [], b.cpf, b.email, b.firstClass, { birthday: b.birthday });
       if (ehMatricula && client) {
         /* O plano escolhido na tela da matrícula fica guardado aqui como
-           INTENÇÃO (weeklyFreq + mensalistaTipo), mas `plan` continua "avulso":
-           ela só vira mensalista de fato quando a 1ª mensalidade é paga. Quem faz
+           INTENÇÃO (weeklyFreq + mensalistaTipo), mas `plan` continua "avulso" e status continua "lead":
+           ela só vira mensalista/aluna ativa de fato quando a 1ª mensalidade é paga. Quem faz
            essa virada é registrarMatriculaPaga(), que roda tanto no "já paguei"
-           quanto no webhook do Sicredi.
-           Regra 5: Alunas novas entram no plano em ESCALA por padrão. */
+           quanto no webhook do Sicredi. */
         const freq = Number(b.weeklyFreq) === 2 ? 2 : Number(b.weeklyFreq) === 1 ? 1 : null;
         const tipoEntrada = b.mensalistaTipo === "fixo" ? "fixo" : "escala";
         await prisma.client.update({
           where: { id: client.id },
           data: {
+            status: "lead",
             matriculaStatus: "pendente",
             trialDate: slot.date,
             ...(freq ? { weeklyFreq: freq, mensalistaTipo: tipoEntrada } : {}),
           },
         });
+
+        // Matrícula 2x por semana: se enviou o 2º horário da mesma semana (secondSlotId ou slot2Id)
+        const slot2Id = Number(b.secondSlotId || b.slot2Id);
+        if (freq === 2 && slot2Id && slot2Id !== slot.id) {
+          const slot2 = await prisma.slot.findUnique({ where: { id: slot2Id } });
+          if (slot2 && mesmaSemana(slot2.date, slot.date) && !feriadoNoDia(slot2.date, slot2.unit)) {
+            const occ2 = await occupancy(slot2.id);
+            if (occ2 < (slot2.capacity || 1)) {
+              const booking2 = await prisma.booking.create({
+                data: {
+                  clientName: b.clientName,
+                  phone: b.phone || "",
+                  unit: slot2.unit,
+                  date: slot2.date,
+                  time: slot2.time,
+                  prof: slot2.prof,
+                  slotId: slot2.id,
+                  status: "aguardando",
+                  value: 0,
+                  taxaMatricula: null,
+                  paymentMethod: MARCA_MATRICULA,
+                  holdUntil: new Date(Date.now() + HOLD_MIN * 60_000),
+                },
+              });
+              criadas.push(booking2);
+            }
+          }
+        }
       }
     }
 
@@ -1947,9 +1977,32 @@ async function registrarMatriculaPaga(booking) {
   const c = await prisma.client.findFirst({ where: { name: booking.clientName } });
   if (!c || c.matriculaStatus !== "pendente") return;
   const pagoEm = booking.paymentDate || todayISO();
+
+  // Se houver uma 2ª reserva de matrícula (ex.: plano 2x por semana) aguardando hold, confirma-a também:
+  const outrasMatricula = await prisma.booking.findMany({
+    where: {
+      clientName: booking.clientName,
+      paymentMethod: MARCA_MATRICULA,
+      status: "aguardando",
+      id: { not: booking.id },
+    },
+  });
+  for (const om of outrasMatricula) {
+    await prisma.booking.update({
+      where: { id: om.id },
+      data: {
+        status: "confirmada",
+        paid: true,
+        paymentDate: pagoEm,
+        paymentMethod: PGTO_PLANO,
+        holdUntil: null,
+      },
+    });
+  }
+
   const atualizado = await prisma.client.update({
     where: { id: c.id },
-    data: { matriculaStatus: "paga", matriculaAt: pagoEm },
+    data: { matriculaStatus: "paga", matriculaAt: pagoEm, status: "ativo" },
   });
   if (!atualizado.weeklyFreq || (atualizado.plan === "mensalista" && atualizado.matriculaStatus === "convertida")) return null;
   try {
@@ -3153,6 +3206,8 @@ const safeClient = (c) => { const { pin, ...rest } = c; return { ...rest, tags: 
 app.get("/api/portal/:key", wrap(async (req, res) => {
   const client = await clientByPortalKey(req.params.key);
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const pode = clientPodeAcessarPortal(client);
+  if (!pode.ok) return res.status(403).json({ error: pode.motivo, leadPendente: pode.leadPendente || false });
   const t = todayISO();
   const [bookings, slots, ativas, invoices] = await Promise.all([
     prisma.booking.findMany({ where: { clientName: client.name }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
@@ -3183,7 +3238,7 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
   const tipo = tipoMensalista(client);
   const ativasFuturas = bookings.filter((b) => b.status !== "cancelada" && b.date >= t);
   const janela = tipo === "escala"
-    ? janelaEscala(ativasFuturas, t)
+    ? janelaEscala(ativasFuturas, t, { weeklyFreq: client.weeklyFreq, alvoDate: t, todasAulas: bookings })
     : { aberta: true, proxima: null, motivo: "" };
   const tetoEscala = tipo === "escala"
     ? tetoMensalEscala(client, t, bookings)
@@ -3401,6 +3456,8 @@ const resumoPasse = (p) => ({
 app.post("/api/portal/:key/enroll", wrap(async (req, res) => {
   const client = await clientByPortalKey(req.params.key);
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const pode = clientPodeAcessarPortal(client);
+  if (!pode.ok) return res.status(403).json({ error: pode.motivo });
   try { res.json(await converterEmMensalista(client, { ...(req.body || {}), exigirGrade: true })); }
   catch (e) { res.status(e.code || 500).json({ error: e.message }); }
 }));
@@ -3410,6 +3467,8 @@ app.post("/api/portal/:key/enroll", wrap(async (req, res) => {
 app.post("/api/portal/:key/book", wrap(async (req, res) => {
   const client = await clientByPortalKey(req.params.key);
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const pode = clientPodeAcessarPortal(client);
+  if (!pode.ok) return res.status(403).json({ error: pode.motivo });
   if (req.body.reposicao) {
     try {
       return res.json(await marcarReposicao(client, req.body.slotId));
@@ -3633,18 +3692,16 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
   }
 
   const ids = [...new Set((Array.isArray(slotIds) ? slotIds : slotId ? [slotId] : []).map(Number).filter(Number.isInteger))];
-  // Se não foi passado slotId e a aluna é de turma fixa, busca da 1ª aula agendada / reserva da matrícula
+  // Se faltam horários e a aluna é de turma fixa, busca das reservas de 1ª aula / matrícula
   // APENAS se for aluna nova na 1ª aula e a aula for futura (não tenta replicar aulas passadas de alunas antigas)
-  if (!ids.length && tipoEfetivo === "fixo" && client.firstClass) {
-    const totalAulas = await prisma.booking.count({
-      where: { clientName: client.name, status: { not: "cancelada" } },
+  if (tipoEfetivo === "fixo" && ids.length < freq && client.firstClass) {
+    const bookings = await prisma.booking.findMany({
+      where: { clientName: client.name, status: { not: "cancelada" }, date: { gte: todayISO() } },
+      orderBy: { date: "asc" },
+      take: freq,
     });
-    if (totalAulas <= 1) {
-      const b = await prisma.booking.findFirst({
-        where: { clientName: client.name, status: { not: "cancelada" }, date: { gte: todayISO() } },
-        orderBy: { date: "asc" },
-      });
-      if (b?.slotId) ids.push(b.slotId);
+    for (const b of bookings) {
+      if (b.slotId && !ids.includes(b.slotId)) ids.push(b.slotId);
     }
   }
 
@@ -4213,6 +4270,7 @@ async function upsertClienteWa({ nome, phone, cpf, email, birthday, unit }) {
     data: {
       name, phone: phone || "", email: email || null, cpf: cpfDigits || null,
       unit: unit || UNITS[0], tags: "[]", firstClass: true, origem: "whatsapp",
+      status: "lead",
     },
   });
 }
@@ -4224,7 +4282,7 @@ async function upsertClienteWa({ nome, phone, cpf, email, birthday, unit }) {
 
    A ficha já existe quando chegamos aqui: ela nasceu no passo do cadastro, antes
    da reserva, porque é o CPF DELA que o Sicredi usa para emitir o Pix. */
-async function createWaBooking(client, slot, { weeklyFreq }) {
+async function createWaBooking(client, slot, { weeklyFreq, slot2Id = null }) {
   const freq = Number(weeklyFreq) === 2 ? 2 : 1;
   const booking = await prisma.booking.create({
     data: {
@@ -4238,9 +4296,37 @@ async function createWaBooking(client, slot, { weeklyFreq }) {
       holdUntil: new Date(Date.now() + HOLD_MIN * 60_000),
     },
   });
+
+  let booking2 = null;
+  let slot2 = null;
+  if (freq === 2 && slot2Id && slot2Id !== slot.id) {
+    slot2 = await prisma.slot.findUnique({ where: { id: slot2Id } });
+    if (slot2 && mesmaSemana(slot2.date, slot.date) && !feriadoNoDia(slot2.date, slot2.unit)) {
+      const occ2 = await occupancy(slot2.id);
+      if (occ2 < (slot2.capacity || 1)) {
+        booking2 = await prisma.booking.create({
+          data: {
+            clientName: client.name,
+            phone: client.phone || "",
+            unit: slot2.unit,
+            date: slot2.date,
+            time: slot2.time,
+            prof: slot2.prof,
+            slotId: slot2.id,
+            status: "aguardando",
+            value: 0,
+            paymentMethod: MARCA_MATRICULA,
+            holdUntil: new Date(Date.now() + HOLD_MIN * 60_000),
+          },
+        });
+      }
+    }
+  }
+
   const atualizado = await prisma.client.update({
     where: { id: client.id },
     data: {
+      status: "lead",
       matriculaStatus: "pendente",
       trialDate: slot.date,
       weeklyFreq: freq,
@@ -4248,7 +4334,7 @@ async function createWaBooking(client, slot, { weeklyFreq }) {
       unit: client.unit || slot.unit,
     },
   });
-  return { booking, client: atualizado };
+  return { booking, booking2, slot2, client: atualizado };
 }
 
 /* Libera a vaga de uma reserva cujo prazo estourou. Não é cancelamento de aula:
@@ -4258,18 +4344,22 @@ async function expirarReservaWa(booking) {
     where: { id: booking.id },
     data: { status: "cancelada", holdUntil: null, absenceReason: "Reserva não paga no prazo — vaga liberada" },
   });
-  // Se a pessoa só tinha essa reserva e não tem nenhuma outra aula ativa nem paga, classifica como lead
+  // Cancela também eventuais outras reservas de matrícula aguardando da aluna
+  await prisma.booking.updateMany({
+    where: {
+      clientName: booking.clientName,
+      paymentMethod: MARCA_MATRICULA,
+      status: "aguardando",
+    },
+    data: { status: "cancelada", holdUntil: null, absenceReason: "Reserva não paga no prazo — vaga liberada" },
+  });
+  // Se a reserva expirou sem pagamento concluído, garante status como lead
   const cli = await prisma.client.findFirst({ where: { name: booking.clientName } });
   if (cli && cli.matriculaStatus !== "paga" && cli.matriculaStatus !== "convertida" && cli.plan !== "mensalista") {
-    const temOutraAtiva = await prisma.booking.count({
-      where: { clientName: cli.name, status: { not: "cancelada" }, id: { not: booking.id } },
+    await prisma.client.update({
+      where: { id: cli.id },
+      data: { status: "lead", firstClass: false },
     });
-    if (temOutraAtiva === 0) {
-      await prisma.client.update({
-        where: { id: cli.id },
-        data: { status: "lead", firstClass: false },
-      });
-    }
   }
   await prisma.waConversation.updateMany({
     where: { bookingId: booking.id },
@@ -4623,7 +4713,7 @@ async function handleWaMessage(msg) {
      cria a aula segurada, emite o Pix com o CPF DELA e manda o código.
      A vaga fica de pé por HOLD_MIN minutos — quem confirma a reserva é o
      pagamento, não a conversa. */
-  const cadastrarECobrar = async (freq) => {
+  const cadastrarECobrar = async (freq, slot2Id = null) => {
     const slot = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
     if (!slot) return telaUnidade("Esse horário expirou. ");
     if ((await occupancy(slot.id)) >= (slot.capacity || 1))
@@ -4645,7 +4735,7 @@ async function handleWaMessage(msg) {
     });
     console.log(`[wa] cadastro via WhatsApp: ${client.name} (ficha ${client.id}, CPF ${cpf.slice(0, 3)}***).`);
 
-    const { booking } = await createWaBooking(client, slot, { weeklyFreq: freq });
+    const { booking, booking2, slot2 } = await createWaBooking(client, slot, { weeklyFreq: freq, slot2Id });
     let pixCode = "";
     try {
       ({ pixCode } = await emitirPixDaReserva(booking, { cpf, name: client.name }));
@@ -4659,6 +4749,12 @@ async function handleWaMessage(msg) {
         where: { id: booking.id },
         data: { status: "cancelada", holdUntil: null, absenceReason: "Falha ao emitir o Pix da reserva" },
       });
+      if (booking2) {
+        await prisma.booking.update({
+          where: { id: booking2.id },
+          data: { status: "cancelada", holdUntil: null, absenceReason: "Falha ao emitir o Pix da reserva" },
+        });
+      }
       await setConv({ step: "done", slotId: null, bookingId: null, clientId: client.id });
       return waSend(msg.from,
         `Seu cadastro ficou pronto, ${client.name.split(" ")[0]}! Só não consegui gerar o Pix agora. 😞\n\n` +
@@ -4666,10 +4762,11 @@ async function handleWaMessage(msg) {
     }
 
     await setConv({ step: "cobranca", bookingId: booking.id, clientId: client.id, weeklyFreq: freq, pendingName: null });
+    const quandoStr = slot2 ? `${fmtSlotBR(slot)} e ${fmtSlotBR(slot2)}` : fmtSlotBR(slot);
     await waSend(msg.from, textoCobrancaReserva({
       nome: client.name,
       unidade: slot.unit,
-      quando: fmtSlotBR(slot),
+      quando: quandoStr,
       // A cobrança mostra as duas parcelas e o total: o Pix vem no valor cheio,
       // e o número do QR tem que bater com o que ela acabou de ler.
       mensalidade: moedaBR(valorDoPlano(freq)),
@@ -4684,6 +4781,29 @@ async function handleWaMessage(msg) {
       { id: "duvida:pix", title: "💠 Reenviar o Pix" },
       { id: "humano", title: "Falar com atendente" },
     ]);
+  };
+
+  const telaSegundoHorario = async (slot1, prefix = "") => {
+    const todos = await waAvailableSlots(slot1.unit);
+    const mesmaSem = todos.filter((s) => !s.esgotada && s.id !== slot1.id && mesmaSemana(s.date, slot1.date));
+    if (!mesmaSem.length) {
+      await waSend(msg.from, "Não encontramos outros horários com vagas na mesma semana da sua primeira aula. Não se preocupe, você poderá marcar a sua 2ª aula no portal assim que confirmar a matrícula! 💚");
+      return cadastrarECobrar(2);
+    }
+    const top = mesmaSem.slice(0, 8); // até 8 horários + pular
+    const rows = top.map((s) => ({
+      id: "slot2:" + s.id,
+      title: fmtSlotDia(s),
+      description: waDescricaoSlot(s),
+    }));
+    rows.push({ id: "slot2:pular", title: "Definir depois", description: "Escolher a 2ª aula mais tarde" });
+    await setConv({ step: "slot2", weeklyFreq: 2 });
+    return waList(
+      msg.from,
+      `${prefix}Como você escolheu *2x por semana*, escolha o seu *segundo horário* na mesma semana (${fmtSlotBR(slot1)}):\n\nToque abaixo para escolher 👇`,
+      "Escolher 2º horário",
+      rows
+    );
   };
 
   /* ----- atendimento humano: vale em QUALQUER passo, e vem antes de tudo -----
@@ -4737,6 +4857,10 @@ async function handleWaMessage(msg) {
     if (conv.step === "email") return telaEmail("Retomando! ");
     if (conv.step === "nasc") return telaNasc("Retomando! ");
     if (conv.step === "plano") return telaPlano(conv.pendingName || "", "Retomando! ");
+    if (conv.step === "slot2" && conv.slotId) {
+      const s = await prisma.slot.findUnique({ where: { id: conv.slotId } });
+      if (s) return telaSegundoHorario(s, "Retomando! ");
+    }
     return telaUnidade();
   }
 
@@ -4895,7 +5019,26 @@ async function handleWaMessage(msg) {
     if (!freq) return telaPlano(conv.pendingName || "", "Não entendi 🤔. ");
     await setConv({ weeklyFreq: freq });
     conv = { ...conv, weeklyFreq: freq };
+    if (freq === 2) {
+      const slot1 = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
+      if (slot1) {
+        return telaSegundoHorario(slot1);
+      }
+    }
     return cadastrarECobrar(freq);
+  }
+
+  if (conv.step === "slot2") {
+    if (rid === "slot2:pular" || body.trim().toLowerCase() === "pular" || body.trim().toLowerCase() === "depois") {
+      return cadastrarECobrar(2);
+    }
+    if (rid.startsWith("slot2:")) {
+      const s2Id = Number(rid.replace("slot2:", ""));
+      if (s2Id) return cadastrarECobrar(2, s2Id);
+    }
+    const slot1 = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
+    if (slot1) return telaSegundoHorario(slot1, "Toque em uma das opções da lista para escolher. ");
+    return cadastrarECobrar(2);
   }
 
   /* Aguardando o Pix. A conversa não avança sozinha: quem move daqui é o
@@ -5446,6 +5589,25 @@ app.get("/api/admin/users", wrap(async (_req, res) => {
 
 /* ---------- AUTH (PIN de 4 dígitos) ---------- */
 
+/* Só pode acessar o portal da aluna quem já é cadastrado e que já fez o pagamento. */
+function clientPodeAcessarPortal(client) {
+  if (!client) return { ok: false, motivo: "Cadastro não encontrado." };
+  if (client.status === "cancelado") {
+    return {
+      ok: false,
+      motivo: "Seu cadastro está inativo ou cancelado. Entre em contato com a escola pelo WhatsApp para reativar seu acesso. 💚",
+    };
+  }
+  if (client.status === "lead" || client.matriculaStatus === "pendente") {
+    return {
+      ok: false,
+      leadPendente: true,
+      motivo: "O portal da aluna é exclusivo para alunas cadastradas com matrícula e pagamento confirmados. Seu pagamento ainda não foi identificado. 💚 Se você já realizou o Pix, aguarde alguns instantes pela confirmação bancária.",
+    };
+  }
+  return { ok: true };
+}
+
 // Localiza o aluno(a) pelo CPF (somente dígitos)
 async function clientByCpf(cpfRaw) {
   const cpf = onlyDigits(cpfRaw);
@@ -5458,6 +5620,15 @@ app.post("/api/auth/check", wrap(async (req, res) => {
   if (onlyDigits(req.body.cpf).length !== 11) return res.status(400).json({ error: "Informe um CPF válido (11 dígitos)." });
   const client = await clientByCpf(req.body.cpf);
   if (!client) return res.json({ exists: false, hasPin: false });
+  const pode = clientPodeAcessarPortal(client);
+  if (!pode.ok) {
+    return res.status(403).json({
+      error: pode.motivo,
+      leadPendente: pode.leadPendente || false,
+      exists: true,
+      hasPin: !!client.pin,
+    });
+  }
   res.json({ exists: true, hasPin: !!client.pin, clientId: client.id });
 }));
 
@@ -5467,6 +5638,8 @@ app.post("/api/auth/set-pin", wrap(async (req, res) => {
   if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error: "PIN de 4 dígitos é obrigatório." });
   const client = await clientByCpf(req.body.cpf);
   if (!client) return res.status(404).json({ error: "CPF não encontrado." });
+  const pode = clientPodeAcessarPortal(client);
+  if (!pode.ok) return res.status(403).json({ error: pode.motivo });
   if (client.pin) return res.status(409).json({ error: "PIN já cadastrado. Use o login normal." });
   const hash = await bcrypt.hash(pin, 10);
   const updated = await prisma.client.update({ where: { id: client.id }, data: { pin: hash } });
@@ -5480,6 +5653,8 @@ app.post("/api/auth/login", wrap(async (req, res) => {
   if (!pin) return res.status(400).json({ error: "PIN obrigatório." });
   const client = await clientByCpf(req.body.cpf);
   if (!client || !client.pin) return res.status(401).json({ error: "Credenciais inválidas." });
+  const pode = clientPodeAcessarPortal(client);
+  if (!pode.ok) return res.status(403).json({ error: pode.motivo });
   const ok = await bcrypt.compare(pin, client.pin);
   if (!ok) return res.status(401).json({ error: "PIN incorreto." });
   const { pin: _p, ...safe } = client;

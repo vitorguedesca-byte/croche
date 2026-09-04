@@ -43,6 +43,7 @@ export function weekStart(iso) {
   const dow = (d.getDay() + 6) % 7;
   return addDays(iso, -dow);
 }
+export const mesmaSemana = (a, b) => weekStart(a) === weekStart(b);
 export const fmtDate = (iso) => new Date(iso + "T00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
 export const fmtDateLong = (iso) => new Date(iso + "T00:00").toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "long" });
 export const weekdayShort = (iso) => new Date(iso + "T00:00").toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "");
@@ -207,6 +208,7 @@ export const clientActiveCount = (data, c) =>
   bookingsActive(data).filter((b) => b.clientName === c.name).length;
 
 export function classifyClient(data, c) {
+  if (c.status === "lead") return "lead";
   const bks = (data.bookings || []).filter((b) => b.clientName === c.name);
   const activeBks = bks.filter((b) => b.status !== "cancelada");
   const hasMultipleBookings = activeBks.length > 1;
@@ -214,20 +216,18 @@ export function classifyClient(data, c) {
   const hasPaidBooking = bks.some((b) => b.paid || b.status === "concluida" || (b.status === "confirmada" && b.paymentMethod));
   const isMatriculada = c.matriculaStatus === "paga" || c.matriculaStatus === "convertida" || c.plan === "mensalista";
 
+  // Se não concluiu pagamento e não é mensalista matriculada:
+  if (!hasPaidBooking && !isMatriculada) {
+    const hasActiveHold = activeBks.some((b) => b.status === "aguardando" && b.holdUntil && new Date(b.holdUntil).getTime() > Date.now());
+    if (!hasActiveHold) return "lead";
+  }
+
   // Se a aluna tem múltiplas aulas ativas montadas na grade ou já esteve presente em aula,
   // ela é uma aluna com rotina na escola — não deve ser tratada como lead de remarketing.
   if (hasMultipleBookings || hasAttendance) {
     return c.firstClass ? "novato" : "cliente";
   }
 
-  // Se o cadastro foi explicitamente marcado como lead e não tem aulas ativas:
-  if (c.status === "lead" && activeBks.length === 0) return "lead";
-
-  // Se não concluiu pagamento e não é mensalista matriculada:
-  if (!hasPaidBooking && !isMatriculada) {
-    const hasActiveHold = activeBks.some((b) => b.status === "aguardando" && b.holdUntil && new Date(b.holdUntil).getTime() > Date.now());
-    if (!hasActiveHold) return "lead";
-  }
   return c.firstClass ? "novato" : "cliente";
 }
 

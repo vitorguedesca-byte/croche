@@ -736,6 +736,7 @@ export function Clientes({ params }) {
                       {c.plan === "mensalista" ? <span className="badge b-ok ml">📅 {c.weeklyFreq ? `${c.weeklyFreq}x/semana` : "mensalista"}</span> : null}
                       {c.matriculaStatus === "paga" && c.plan !== "mensalista" ? <span className="badge b-warn ml">🎟️ matrícula a concluir</span> : null}
                       {tab === "novato" ? <span className="badge b-terra ml">✨ 1ª aula</span> : null}
+                      {(tab === "lead" || c.status === "lead") ? <span className="badge b-warn ml" style={{ background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba" }}>⚠️ Pagamento não realizado</span> : null}
                       {/* Ficha digitada pela própria aluna na conversa do bot,
                           sem ninguém conferindo do outro lado. Vale como aviso:
                           nome, e-mail e nascimento podem precisar de revisão. */}

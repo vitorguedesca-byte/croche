@@ -84,6 +84,41 @@ console.log("\n— janelaEscala: mensagem —");
 const j = janelaEscala([{ date: "2026-08-27", time: "14:00", status: "confirmada" }], HOJE);
 ok(j.aberta === false && /quinta, 27\/08/.test(j.motivo), `mensagem cita o dia da próxima aula: "${j.motivo}"`);
 
+console.log("\n— escala 2x: marcar as duas aulas da semana —");
+const escala2x = { plan: "mensalista", mensalistaTipo: "escala", weeklyFreq: 2 };
+const aulaTerca = { date: "2026-08-25", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO };
+const aulaQuinta = { date: "2026-08-27", time: "14:00", status: "confirmada", paymentMethod: PGTO_PLANO };
+
+// 1. Sem aulas na semana: pode marcar a 1ª aula da semana
+ok(c(escala2x, { date: "2026-08-25", time: "09:00" }, { aulasAtivas: [] }).ok === true,
+  "escala 2x: pode marcar a 1ª aula da semana");
+
+// 2. Já marcou a 1ª aula (terça): a janela CONTINUA ABERTA para marcar a 2ª aula (quinta) da mesma semana!
+ok(c(escala2x, { date: "2026-08-27", time: "14:00" }, {
+  aulasAtivas: [aulaTerca],
+  todasAulas: [aulaTerca],
+}).ok === true, "escala 2x: após marcar a 1ª, pode marcar a 2ª aula da mesma semana");
+
+// 3. Já tem 2 aulas marcadas na semana: não pode marcar a 3ª aula na mesma semana
+ok(c(escala2x, { date: "2026-08-28", time: "15:00" }, {
+  aulasAtivas: [aulaTerca, aulaQuinta],
+  todasAulas: [aulaTerca, aulaQuinta],
+}).codigo === "escala", "escala 2x: 3ª aula na mesma semana é bloqueada pela janela/teto");
+
+// 4. Marcação para a próxima semana: só abre a partir da última aula da semana atual
+ok(c(escala2x, { date: "2026-09-01", time: "09:00" }, {
+  aulasAtivas: [aulaTerca, aulaQuinta],
+  todasAulas: [aulaTerca, aulaQuinta],
+  hoje: "2026-08-26", // quarta: a aula de quinta ainda não aconteceu
+}).codigo === "escala", "escala 2x: próxima semana bloqueada antes da última aula da semana atual");
+
+// 5. No dia da última aula (quinta 27/08): a próxima semana fica liberada para as 2 aulas!
+ok(c(escala2x, { date: "2026-09-01", time: "09:00" }, {
+  aulasAtivas: [aulaQuinta],
+  todasAulas: [aulaTerca, aulaQuinta],
+  hoje: "2026-08-27", // quinta: dia da última aula
+}).ok === true, "escala 2x: próxima semana liberada a partir da última aula");
+
 console.log("\n— teto mensal da escala (120,00 = 4 aulas / 200,00 = 8 aulas) —");
 const escala120 = { plan: "mensalista", mensalistaTipo: "escala", weeklyFreq: 1, monthlyValue: 120 };
 const escala200 = { plan: "mensalista", mensalistaTipo: "escala", weeklyFreq: 2, monthlyValue: 200 };

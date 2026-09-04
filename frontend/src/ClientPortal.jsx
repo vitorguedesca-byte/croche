@@ -159,7 +159,22 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
             <label className="pt-label">Seu CPF</label>
             <input className="pt-input" inputMode="numeric" placeholder="000.000.000-00" value={input}
               onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && checkCpf()} />
-            {err && <div className="pt-err">{err}</div>}
+            {err && (
+              <div className="pt-err" style={{ textAlign: "left", lineHeight: 1.45 }}>
+                {err}
+                <div style={{ marginTop: ".65rem" }}>
+                  <a
+                    className="pt-link"
+                    style={{ fontWeight: 600, color: "var(--green-deep, #1c5e33)", textDecoration: "underline" }}
+                    href={waLink(WA_ESCOLA, "Olá! Tentei acessar a área da aluna e preciso de ajuda com meu cadastro/pagamento.")}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    💬 Falar com a escola no WhatsApp →
+                  </a>
+                </div>
+              </div>
+            )}
             <button className="pt-btn" onClick={checkCpf} disabled={loading}>{loading ? "Verificando…" : "Continuar"}</button>
             <p className="pt-hint">É a sua primeira vez? Toque em <b>Agendar aula</b> na página inicial. 💚</p>
           </>)}

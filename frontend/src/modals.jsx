@@ -2229,6 +2229,8 @@ export function ClientProfile({ client, initialTab }) {
             <span className="chip">{c.unit || "—"}</span>
             {c.status === "cancelado"
               ? <span className="badge b-danger">Inscrição cancelada</span>
+              : c.status === "lead"
+              ? <span className="badge b-warn" style={{ background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba" }}>⚠️ Pagamento não realizado</span>
               : <span className="badge b-ok">Ativa</span>}
             {c.firstClass ? <span className="badge b-terra">✨ Novo(a)</span> : null}
             {/* Ficha nascida na conversa do WhatsApp: os dados foram digitados
@@ -2269,6 +2271,17 @@ export function ClientProfile({ client, initialTab }) {
         <div className="prin">
           {cartaoIdentidade}
           <div className="prin-main">
+            {c.status === "lead" && (
+              <div style={{ background: "#fff3cd", color: "#856404", padding: ".75rem 1rem", borderRadius: 8, marginBottom: "1rem", border: "1px solid #ffeeba", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
+                <div>
+                  <b style={{ display: "block", fontSize: ".95rem" }}>⚠️ Lead — Pagamento não realizado</b>
+                  <span style={{ fontSize: ".84rem" }}>A aluna iniciou o agendamento mas o pagamento não foi confirmado. O acesso ao portal da aluna está bloqueado.</span>
+                </div>
+                <button className="btn wa sm" style={{ whiteSpace: "nowrap" }} onClick={() => openWa(c.phone, `Olá ${c.name}! Tudo bem? 💚 Vi que você iniciou o agendamento da sua aula de crochê na Fios que Curam mas ainda não recebemos a confirmação do pagamento. Posso te ajudar a garantir sua vaga?`)}>
+                  Cobrar no WhatsApp
+                </button>
+              </div>
+            )}
             <div className="prof-kpis">
               <div className="prof-kpi"><div className="l">Aulas</div><div className="v">{total}</div></div>
               <div className="prof-kpi"><div className="l">Presenças</div><div className="v">{at.pres}</div><div className="f">{at.falt} falta(s)</div></div>

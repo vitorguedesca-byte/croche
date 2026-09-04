@@ -229,26 +229,6 @@ export const podeReplicarMensalista = (client) => tipoMensalista(client) === "fi
 
 export const TIPO_LABEL = { fixo: "Mensalista fixo", escala: "Mensalista escala" };
 
-/* Janela de marcação da escala.
-   `aulasAtivas` são as aulas não canceladas da aluna (basta as de hoje em
-   diante). Sem nenhuma aula em aberto a janela fica ABERTA — senão a aluna que
-   acabou de entrar, ou que liberou a última aula, ficaria travada para sempre
-   sem ter como marcar a primeira. */
-export function janelaEscala(aulasAtivas, hoje) {
-  const futuras = (aulasAtivas || [])
-    .filter((b) => b && b.status !== "cancelada" && b.date >= hoje)
-    .sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
-  if (futuras.some((b) => b.date === hoje)) return { aberta: true, proxima: null, motivo: "" };
-  if (!futuras.length) return { aberta: true, proxima: null, motivo: "" };
-  const prox = futuras[0];
-  return {
-    aberta: false,
-    proxima: prox,
-    motivo: `Na escala, a próxima aula é marcada no dia da sua aula. Sua próxima é ${diaBR(prox.date)}` +
-      (prox.time ? ` às ${prox.time}` : "") + " — marque por lá. 💚",
-  };
-}
-
 // 'YYYY-MM-DD' → 'sáb, 22/08' (curto, para caber nas mensagens)
 function diaBR(date) {
   const m = String(date || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -258,12 +238,6 @@ function diaBR(date) {
   ];
   return `${dow}, ${m[3]}/${m[2]}`;
 }
-
-/* ---------- teto de aulas por semana (o plano 1x ou 2x contratado) ----------
-   A semana vai de SEGUNDA a domingo, igual à agenda do painel. Só as aulas do
-   plano ocupam vaga: reposição e aula extra são justamente aulas ALÉM do plano
-   e não podem consumir o que a aluna já paga. Quem não tem weeklyFreq (plano
-   antigo) não tem teto. */
 
 // 'YYYY-MM-DD' → segunda-feira daquela semana, em UTC (sem fuso atrapalhar)
 export function segundaDaSemana(date) {
@@ -276,6 +250,66 @@ export function segundaDaSemana(date) {
 export const mesmaSemana = (a, b) => segundaDaSemana(a) === segundaDaSemana(b);
 // Só conta como aula do plano o que o backend marcou como "Mensalista".
 export const contaNoTeto = (b) => b && b.status !== "cancelada" && b.paymentMethod === PGTO_PLANO;
+
+/* Janela de marcação da escala.
+   • 1x por semana: a próxima aula é marcada no dia da sua aula (ou se não houver aula futura).
+   • 2x por semana (Vitor, 04/09/2026): a aluna de escala 2x pode marcar as DUAS aulas da semana
+     a partir da última aula realizada da semana anterior. Não trava após marcar a 1ª aula. */
+export function janelaEscala(aulasAtivas, hoje, opts = {}) {
+  const { weeklyFreq = 1, alvoDate, todasAulas = [] } = opts;
+  const futuras = (aulasAtivas || [])
+    .filter((b) => b && b.status !== "cancelada" && b.date >= hoje)
+    .sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+
+  if (Number(weeklyFreq) === 2) {
+    const alvo = alvoDate || hoje;
+    const segAlvo = segundaDaSemana(alvo);
+    const segHoje = segundaDaSemana(hoje);
+    const listaCompleta = todasAulas.length ? todasAulas : (aulasAtivas || []);
+    const marcadasNaSemanaAlvo = listaCompleta.filter(
+      (b) => contaNoTeto(b) && mesmaSemana(b.date, alvo)
+    );
+
+    // Se estiver tentando marcar para uma semana futura:
+    if (segAlvo > segHoje) {
+      // Verifica se a última aula da semana atual já passou ou é hoje:
+      const aulasSemanaAtual = listaCompleta
+        .filter((b) => contaNoTeto(b) && mesmaSemana(b.date, hoje))
+        .sort((a, b) => a.date.localeCompare(b.date));
+
+      const ultimaAulaSemanaAtual = aulasSemanaAtual[aulasSemanaAtual.length - 1];
+      if (ultimaAulaSemanaAtual && ultimaAulaSemanaAtual.date > hoje) {
+        return {
+          aberta: false,
+          proxima: ultimaAulaSemanaAtual,
+          motivo: `Na escala 2x, as aulas da próxima semana são liberadas a partir da sua última aula desta semana (${diaBR(ultimaAulaSemanaAtual.date)}). 💚`,
+        };
+      }
+    }
+
+    // Na semana do alvo, pode marcar se tiver menos de 2 aulas:
+    if (marcadasNaSemanaAlvo.length < 2) {
+      return { aberta: true, proxima: null, motivo: "" };
+    }
+
+    return {
+      aberta: false,
+      proxima: marcadasNaSemanaAlvo[0],
+      motivo: `Você já tem as 2 aulas agendadas para esta semana. 💚`,
+    };
+  }
+
+  // Regra padrão 1x por semana:
+  if (futuras.some((b) => b.date === hoje)) return { aberta: true, proxima: null, motivo: "" };
+  if (!futuras.length) return { aberta: true, proxima: null, motivo: "" };
+  const prox = futuras[0];
+  return {
+    aberta: false,
+    proxima: prox,
+    motivo: `Na escala, a próxima aula é marcada no dia da sua aula. Sua próxima é ${diaBR(prox.date)}` +
+      (prox.time ? ` às ${prox.time}` : "") + " — marque por lá. 💚",
+  };
+}
 
 /* Quantas aulas do plano a aluna já tem na semana da data alvo, e qual é o teto.
    `aulasAtivas` são as aulas dela (canceladas podem vir junto, são filtradas). */
@@ -362,7 +396,12 @@ export function checarRegras(client, alvo, ctx = {}) {
 
   if (tipo === "escala") {
     if (!ctx.ignorarJanela) {
-      const j = janelaEscala(ctx.aulasAtivas, ctx.hoje);
+      const freq = freqNaData(client, alvo?.date || ctx.hoje);
+      const j = janelaEscala(ctx.aulasAtivas, ctx.hoje, {
+        weeklyFreq: freq,
+        alvoDate: alvo?.date,
+        todasAulas: ctx.todasAulas || ctx.aulasAtivas,
+      });
       if (!j.aberta) return { ok: false, codigo: "escala", motivo: j.motivo };
     }
     if (!ctx.ignorarTeto && alvo?.date) {
