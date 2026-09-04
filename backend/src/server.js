@@ -391,11 +391,6 @@ const fmtDiaBR = (d) => {
   return m ? `${m[2]}/${m[1]}` : d;
 };
 
-// 'YYYY-MM' → 'julho de 2026', para as mensagens ficarem legíveis
-const compPorExtenso = (comp) => {
-  const [y, m] = comp.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" });
-};
 
 // último dia do mês seguinte à competência 'YYYY-MM'
 function fimDoMesSeguinte(comp) {
