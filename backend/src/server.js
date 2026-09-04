@@ -104,8 +104,8 @@ const depoUpload = multer({
 const app = express();
 app.use(cors());
 app.use(express.json());
-// Garantir UTF-8 em todas as respostas JSON
-app.use((_req, res, next) => { res.setHeader("Content-Type", "application/json; charset=utf-8"); next(); });
+// Garantir UTF-8 em todas as respostas JSON da API
+app.use("/api", (_req, res, next) => { res.setHeader("Content-Type", "application/json; charset=utf-8"); next(); });
 
 /* ===================== AUTENTICAÇÃO DO PAINEL ADMIN =====================
    Protege as rotas do painel. Só quem tem conta (usuário+senha) acessa.

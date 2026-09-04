@@ -1278,7 +1278,7 @@ export function Depoimentos() {
   const openEdit = (t) => {
     setForm({ name: t.name, role: t.role, text: t.text, active: t.active, order: t.order });
     setPhotoFile(null);
-    setPhotoPreview(t.photo ? `/depoimentos/${t.photo}` : null);
+    setPhotoPreview(t.photo ? `/depoimentos/${encodeURIComponent(t.photo)}` : null);
     setEditing(t);
   };
 
@@ -1384,7 +1384,17 @@ export function Depoimentos() {
             {list.map(t => (
               <div key={t.id} className={`dep-card ${t.active ? "" : "off"}`}>
                 <div className="dep-av">
-                  {t.photo ? <img src={`/depoimentos/${t.photo}`} alt={t.name} /> : t.name[0]}
+                  {t.photo ? (
+                    <img
+                      src={`/depoimentos/${encodeURIComponent(t.photo)}`}
+                      alt={t.name}
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none";
+                        if (e.currentTarget.nextSibling) e.currentTarget.nextSibling.style.display = "inline";
+                      }}
+                    />
+                  ) : null}
+                  <span style={{ display: t.photo ? "none" : "inline" }}>{t.name ? t.name[0] : "?"}</span>
                 </div>
                 <div className="dep-body">
                   <div className="dep-top">

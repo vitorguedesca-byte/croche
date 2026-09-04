@@ -602,9 +602,10 @@
     const active = list.filter(t => t.active);
     if (!active.length) { grid.innerHTML = ""; return; }
     grid.innerHTML = active.map(t => {
+      const initial = (t.name || "?")[0];
       const av = t.photo
-        ? `<img src="/depoimentos/${encodeURIComponent(t.photo)}" alt="${t.name}" />`
-        : `<span>${t.name[0]}</span>`;
+        ? `<img src="/depoimentos/${encodeURIComponent(t.photo)}" alt="${t.name}" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='inline';" /><span style="display:none">${initial}</span>`
+        : `<span>${initial}</span>`;
       return `
         <div class="depo reveal">
           <div class="stars">★★★★★</div>
