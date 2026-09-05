@@ -81,6 +81,7 @@ ${taxa
 Em caso de falta sem aviso prévio de no mínimo ${REPO_HORAS_MIN} horas, não devolvemos o valor da matrícula.
 
 ${REGRAS_REPOSICAO}`;
+};
 
 /* Pix do 1º pagamento, com o prazo da vaga dito na cara — é o que faz a aluna
    pagar agora em vez de deixar para depois.
