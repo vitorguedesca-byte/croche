@@ -297,11 +297,14 @@ const comEncargos = (inv) => {
   if (!inv) return inv;
   const e = inv.status === "pendente" ? encargosDe(inv, todayISO()) : semEncargos(inv);
   /* O QR guardado pode estar cobrando um valor antigo — foi emitido antes de a
-     multa entrar. A tela precisa saber disso para oferecer um código novo em
-     vez de mostrar um QR que cobra menos do que a conta ao lado dele. */
+     multa entrar, ou foi emitido quando a fatura estava em atraso e o vencimento
+     foi prorrogado para hoje/futuro. A tela precisa saber disso para oferecer um
+     código novo em vez de mostrar um QR que cobra valor diferente da conta. */
   const pixAtualizado = !inv.pixCode
     ? false
-    : encargosDaMensalidade(inv, inv.encargosAte || inv.dueDate).totalCents === e.totalCents;
+    : (inv.encargosAte && !e.atrasada)
+      ? false
+      : encargosDaMensalidade(inv, inv.encargosAte || inv.dueDate).totalCents === e.totalCents;
   return {
     ...inv,
     pixAtualizado,
@@ -2546,7 +2549,9 @@ async function pixPagavelDaMensalidade(invoice) {
     );
   }
   const devido = encargosHoje(invoice, hoje);
-  const valorMudou = invoice.pixCode ? totalDoPixAtual(invoice) !== devido.totalCents : false;
+  const valorMudou = invoice.pixCode
+    ? (totalDoPixAtual(invoice) !== devido.totalCents || (invoice.encargosAte && !devido.atrasada))
+    : false;
   // Reaproveitar enquanto vale E enquanto o valor não muda é o que impede a
   // reemissão a cada clique — sem isso o `seq` estouraria o teto rapidinho.
   if (invoice.pixCode && pixValidoEm(invoice) >= hoje && !valorMudou) return invoice;
@@ -2646,15 +2651,31 @@ app.patch("/api/invoices/:id", wrap(async (req, res) => {
   if (req.body.dueDate !== undefined) {
     const dd = String(req.body.dueDate).trim().slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dd)) return res.status(400).json({ error: "Data de vencimento inválida (formato AAAA-MM-DD)." });
-    data.dueDate = dd;
-    // Ao alterar o vencimento para data futura/hoje, zera marcadores de avisos já disparados
-    if (dd >= todayISO()) {
-      data.avisoAVencerAt = null;
-      data.avisoAtrasoAt = null;
+    if (dd !== cur.dueDate) {
+      data.dueDate = dd;
+      // Ao alterar o vencimento para data futura/hoje, zera marcadores de avisos já disparados
+      if (dd >= todayISO()) {
+        data.avisoAVencerAt = null;
+        data.avisoAtrasoAt = null;
+      }
+      // Se a data de vencimento mudou, anula o Pix anterior para que um novo seja gerado com a data e encargos corretos
+      if (cur.pixCode || cur.encargosAte) {
+        data.encargosAte = null;
+        data.pixCode = null;
+        data.txid = null;
+        data.pixExpiresOn = null;
+      }
     }
   }
   if (req.body.amountCents !== undefined) {
-    data.amountCents = Math.round(Number(req.body.amountCents)) || cur.amountCents;
+    const val = Math.round(Number(req.body.amountCents));
+    if (val && val !== cur.amountCents) {
+      data.amountCents = val;
+      data.pixCode = null;
+      data.txid = null;
+      data.pixExpiresOn = null;
+      data.encargosAte = null;
+    }
   }
   if (req.body.semPix !== undefined) {
     data.semPix = !!req.body.semPix;
