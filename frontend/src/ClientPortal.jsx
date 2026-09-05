@@ -104,8 +104,9 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
     try { setData(await api.portal.get(p)); } catch {}
   };
 
-  const checkCpf = async () => {
-    const cpf = input.replace(/\D/g, "");
+  const checkCpf = async (cpfExplicit) => {
+    const raw = typeof cpfExplicit === "string" ? cpfExplicit : input;
+    const cpf = raw.replace(/\D/g, "");
     if (cpf.length !== 11) { setErr("Digite o seu CPF (11 números)."); return; }
     setLoading(true); setErr("");
     try {
@@ -115,6 +116,20 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
       setAuthStep(r.hasPin ? "enter" : "create"); setLoading(false);
     } catch (e) { setErr(e.message); setLoading(false); }
   };
+
+  useEffect(() => {
+    if (!kiosk && !data) {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const urlCpf = params.get("cpf");
+        const initial = (urlCpf || getStored() || "").replace(/\D/g, "");
+        if (initial.length === 11) {
+          setInput(initial);
+          checkCpf(initial);
+        }
+      } catch {}
+    }
+  }, []);
   const createPin = async () => {
     if (pin.length !== 4) { setErr("O PIN deve ter 4 números."); return; }
     if (pin !== pinConfirm) { setErr("Os PINs não conferem."); setPinConfirm(""); return; }

@@ -2049,12 +2049,15 @@ async function avisarMatriculaConfirmada(booking) {
       where: { bookingId: booking.id },
       data: { step: "done", bookingId: null, slotId: null, pendingName: null },
     });
+    const client = await prisma.client.findFirst({ where: { name: booking.clientName } });
+    const portalUrl = client?.cpf ? `${WA_PORTAL_URL}?cpf=${client.cpf}` : WA_PORTAL_URL;
     await waSend(booking.phone, textoMatriculaConfirmada({
       nome: booking.clientName,
       unidade: booking.unit,
       quando: fmtSlotBR({ date: booking.date, time: booking.time }),
       // a taxa gravada NA RESERVA: é o que ela pagou, não o que a tabela diz hoje
       taxa: booking.taxaMatricula ? moedaBR(booking.taxaMatricula) : "",
+      portalUrl,
     }));
   } catch (e) {
     console.warn(`[wa] confirmação da matrícula de ${booking.clientName} não saiu: ${e.message}`);
@@ -5047,7 +5050,13 @@ async function handleWaMessage(msg) {
     const b = conv.bookingId ? await prisma.booking.findUnique({ where: { id: conv.bookingId } }) : null;
     if (b && b.paid) {
       await setConv({ step: "done", bookingId: null, slotId: null });
-      return waButtons(msg.from, "Seu pagamento já está confirmado e sua vaga garantida! 💚", [{ id: "new", title: "🔄 Marcar outra aula" }]);
+      return waButtons(
+        msg.from,
+        `Seu pagamento já está confirmado e sua vaga garantida! 💚\n\n` +
+        `📱 *Acesse o Portal da Aluna:*\n${WA_PORTAL_URL}\n\n` +
+        `Entre com seu CPF e cadastre seu *PIN de 4 dígitos* para gerenciar suas aulas e acompanhar seu plano.`,
+        [{ id: "new", title: "🔄 Marcar outra aula" }]
+      );
     }
     return waButtons(msg.from, "Ainda não vi o pagamento cair por aqui. Assim que cair, eu te aviso na hora. 💚", [
       { id: "duvida:pix", title: "💠 Reenviar o Pix" },

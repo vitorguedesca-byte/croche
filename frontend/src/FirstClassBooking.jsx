@@ -504,10 +504,66 @@ export default function FirstClassBooking({ onBack, fromSite }) {
             <div style={{ fontSize: "2.6rem" }}>🎉</div>
             <h2 className="pt-h2" style={{ textAlign: "center" }}>Tudo certo, {name.split(" ")[0]}!</h2>
             <div className="pt-fc-resume" style={{ textAlign: "left" }}>
-              📍 <b>{slot.unit}</b><br />🗓 {capitalize(fmtDateLong(slot.date))}<br />
-              ⏰ <b>{slot.time}{meta.duracaoAulaMin ? ` às ${fimDaAula(slot.time, meta.duracaoAulaMin)}` : ""}</b>
+              <div>📍 <b>{slot.unit}</b></div>
+              <div style={{ marginTop: ".25rem" }}>
+                🗓 <b>1ª aula:</b> {capitalize(fmtDateLong(slot.date))} às <b>{slot.time}{meta.duracaoAulaMin ? ` às ${fimDaAula(slot.time, meta.duracaoAulaMin)}` : ""}</b>
+              </div>
+              {slot2 && (
+                <div style={{ marginTop: ".25rem", color: "var(--green-deep, #1c5e33)" }}>
+                  🗓 <b>2ª aula:</b> {capitalize(fmtDateLong(slot2.date))} às <b>{slot2.time}{meta.duracaoAulaMin ? ` às ${fimDaAula(slot2.time, meta.duracaoAulaMin)}` : ""}</b>
+                </div>
+              )}
             </div>
-            <p className="pt-hint">Sua primeira aula está reservada e você já está matriculada 💛</p>
+            <p className="pt-hint">Sua vaga está garantida e sua matrícula confirmada! 💚</p>
+
+            {/* Chamada para o Portal da Aluna */}
+            <div style={{
+              margin: "1.2rem 0",
+              padding: "1.2rem",
+              background: "linear-gradient(135deg, rgba(28,94,51,.08) 0%, rgba(28,94,51,.02) 100%)",
+              border: "2px solid var(--green-mid, #2d7a46)",
+              borderRadius: 12,
+              textAlign: "left"
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: ".5rem", marginBottom: ".4rem" }}>
+                <span style={{ fontSize: "1.4rem" }}>📱</span>
+                <b style={{ color: "var(--green-deep, #1c5e33)", fontSize: "1.05rem" }}>Seu próximo passo: Acesse o Portal da Aluna</b>
+              </div>
+              <p style={{ margin: "0 0 .8rem 0", fontSize: ".93rem", color: "var(--ink)", lineHeight: 1.5 }}>
+                Acesse o <b>Portal da Aluna</b> informando seu CPF e <b>cadastre seu PIN de 4 dígitos</b> (sua senha de acesso exclusiva). Pelo portal você gerencia seus agendamentos, reposições e acompanha suas mensalidades via Pix! 💚
+              </p>
+              <button
+                type="button"
+                className="pt-btn"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: ".5rem",
+                  width: "100%",
+                  padding: ".85rem 1rem",
+                  fontSize: "1rem",
+                  fontWeight: 700,
+                  boxShadow: "0 4px 12px rgba(28,94,51,.25)",
+                  cursor: "pointer"
+                }}
+                onClick={() => {
+                  const onlyCpf = (cpf || "").replace(/\D/g, "");
+                  if (onlyCpf) {
+                    try { localStorage.setItem("fqc_portal_cpf", onlyCpf); } catch {}
+                    window.location.href = "/portal?cpf=" + onlyCpf;
+                  } else {
+                    window.location.href = "/portal";
+                  }
+                }}
+              >
+                🔐 Acessar Portal da Aluna e cadastrar PIN →
+              </button>
+              <div style={{ marginTop: ".6rem", fontSize: ".82rem", color: "var(--muted)", textAlign: "center" }}>
+                Link direto: <a href="/portal" style={{ color: "var(--green-deep)", fontWeight: 600, textDecoration: "underline" }}>fiosquecuram.com.br/portal</a>
+              </div>
+            </div>
+
             <div className="pt-matricula" style={{ textAlign: "left" }}>
               <p><b>Seu plano</b></p>
               <p>🧵 <b>{tipo === "escala" ? "Escala" : "Fixo"} · {freq}x por semana</b> — {money(inscricao?.valorMensal ?? mensalidade)}/mês.</p>

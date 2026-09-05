@@ -52,14 +52,26 @@ Agradecemos pela compreensão e parceria. Essas regras nos ajudam a manter um am
    mensalidade e a taxa fica. Isto é REPETIÇÃO do que ela leu antes de pagar, de
    propósito — a hora de descobrir o que não volta não é a hora de pedir de
    volta. */
-export const textoMatriculaConfirmada = ({ nome, unidade, quando, taxa }) =>
-`Obrigada, ${String(nome || "").split(" ")[0]}! 🙏 Recebemos o seu pagamento.
+export const textoMatriculaConfirmada = ({ nome, unidade, quando, taxa, portalUrl }) => {
+  const urlPortal = portalUrl || WA_PORTAL_URL;
+  return `Obrigada, ${String(nome || "").split(" ")[0]}! 🙏 Recebemos o seu pagamento.
 
 *Confirmação de agendamento*
 📍 ${unidade}
 🗓️ ${quando}
 
-Sua vaga está garantida. Antes da primeira aula, leia com calma as regras abaixo — é rapidinho e evita mal-entendido depois. 👇
+Sua vaga está garantida! 💚
+
+📱 *Seu próximo passo: Acesse o Portal da Aluna*
+Para gerenciar suas aulas e acompanhar seus pagamentos:
+1️⃣ Acesse o portal: ${urlPortal}
+2️⃣ Digite o seu CPF
+3️⃣ Crie o seu *PIN de 4 dígitos* (sua senha de acesso exclusiva)
+
+Pelo portal você acompanha sua matrícula, agenda novas aulas e reposições e acessa seus pagamentos via Pix.
+
+---
+Antes da primeira aula, leia com calma as regras abaixo — é rapidinho e evita mal-entendido depois. 👇
 
 ${taxa
   ? `💬 Caso você decida não continuar após a primeira aula, devolvemos a *mensalidade integralmente* — a taxa de matrícula de ${taxa} não é devolvida.`

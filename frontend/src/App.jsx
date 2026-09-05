@@ -21,13 +21,13 @@ const KIOSK_KEY = "fqc_kiosk";
 /* Endereços das telas públicas. O caminho é o endereço oficial — é ele que vai
    no WhatsApp e na landing, e é por isso que a aluna nunca precisa ver "/admin".
    Os hashes ficam como atalho antigo: link já enviado continua abrindo. */
-const ROTAS_PUBLICAS = { "/portal": "portal", "/agendar": "cliente" };
+const ROTAS_PUBLICAS = { "/portal": "portal", "/aluno": "portal", "/agendar": "cliente" };
 function rotaPublica() {
-  // "/portal/" e "/portal" são a mesma tela
+  // "/portal/", "/portal", "/aluno/", "/aluno" são a mesma tela
   const p = window.location.pathname.replace(/\/+$/, "") || "/";
   if (ROTAS_PUBLICAS[p]) return ROTAS_PUBLICAS[p];
   const h = window.location.hash;
-  return h === "#agendar" ? "cliente" : h === "#portal" ? "portal" : null;
+  return h === "#agendar" ? "cliente" : (h === "#portal" || h === "#aluno") ? "portal" : null;
 }
 
 const NAV = [
@@ -86,8 +86,8 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
-    if (["#agendar", "#portal", "#tablet", "#sairtablet"].includes(window.location.hash)) {
-      // Tira só o hash: o caminho (/portal, /agendar) é o endereço da tela e fica.
+    if (["#agendar", "#portal", "#aluno", "#tablet", "#sairtablet"].includes(window.location.hash)) {
+      // Tira só o hash: o caminho (/portal, /aluno, /agendar) é o endereço da tela e fica.
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
     }
   }, []);
