@@ -47,6 +47,7 @@ import {
   recusaFeriado,
 } from "./feriados.js";
 import { padronizarNome } from "./nomes.js";
+import { undoManager } from "./undo.js";
 import {
   PENDENCIA_POR_PASSO,
   WA_ATENDENTE,
@@ -5197,24 +5198,227 @@ async function limparGradeRecorrenteAoVirarEscala(client) {
 }
 
 /* Derruba o que estava marcado para a frente quando a aluna sai do curso.
-   Devolve a conta do que foi cancelado, para a tela poder dizer em números. */
+   Exclui as aulas da grade sem deixar registros fantasmas/cancelados poluindo turmas,
+   e salva snapshot completo no undoManager para suporte ao Ctrl+Z. */
 async function encerrarAluna(client) {
   const t = todayISO();
-  const aulas = await prisma.booking.updateMany({
-    where: { clientName: client.name, date: { gte: t }, status: { not: "cancelada" } },
-    data: { status: "cancelada", absenceReason: "Inscrição encerrada" },
+  // 1. Coleta todas as aulas futuras da aluna para backup antes de excluir
+  const aulasParaRemover = await prisma.booking.findMany({
+    where: { clientName: client.name, date: { gte: t } },
   });
-  // Só as competências FUTURAS: a do mês corrente continua em aberto.
-  const mensalidades = await prisma.invoice.updateMany({
+
+  // 2. Exclui definitivamente as aulas futuras da grade sem deixar registros fantasmas
+  const deletadas = await prisma.booking.deleteMany({
+    where: { clientName: client.name, date: { gte: t } },
+  });
+
+  // 3. Cancela mensalidades futuras (competências posteriores ao mês atual)
+  const mensalidadesFuturas = await prisma.invoice.findMany({
     where: { clientId: client.id, status: "pendente", competencia: { gt: competenciaAtual() } },
-    data: { status: "cancelado" },
   });
+  if (mensalidadesFuturas.length > 0) {
+    await prisma.invoice.updateMany({
+      where: { id: { in: mensalidadesFuturas.map((i) => i.id) } },
+      data: { status: "cancelado" },
+    });
+  }
+
+  // 4. Salva no undoManager (backup da aluna + histórico de Ctrl+Z)
+  undoManager.saveClientBackup(client.id, {
+    client: { ...client },
+    bookings: aulasParaRemover,
+    invoiceIds: mensalidadesFuturas.map((i) => i.id),
+  });
+
+  undoManager.pushAction({
+    type: "inativar_aluna",
+    description: `Inativação de ${client.name}`,
+    client: { ...client },
+    bookings: aulasParaRemover,
+    invoiceIds: mensalidadesFuturas.map((i) => i.id),
+  });
+
   // Aula extra comprada e ainda não usada fica pendurada — o valor foi pago e
   // não é devolvido, então quem decide o que fazer com ela é a Inêz.
   const extrasPagas = await prisma.extraPass.count({ where: { clientId: client.id, status: "pago" } });
-  console.log(`[encerramento] ${client.name}: ${aulas.count} aula(s) e ${mensalidades.count} mensalidade(s) canceladas.`);
-  return { aulas: aulas.count, mensalidades: mensalidades.count, extrasPagas };
+  console.log(`[encerramento] ${client.name}: ${deletadas.count} aula(s) excluídas da grade sem deixar registro e ${mensalidadesFuturas.length} mensalidade(s) canceladas.`);
+  return { aulas: deletadas.count, mensalidades: mensalidadesFuturas.length, extrasPagas, canUndo: true };
 }
+
+async function reativarAlunaComManutencao(clientId) {
+  const client = await prisma.client.findUnique({ where: { id: clientId } });
+  if (!client) throw new Error("Aluna não encontrada");
+
+  // 1. Atualiza status de volta para ativo
+  const atualizada = await prisma.client.update({
+    where: { id: clientId },
+    data: { status: "ativo" },
+  });
+
+  // 2. Busca o backup de aulas salvas
+  const backup = undoManager.getClientBackup(clientId);
+  let aulasRestauradas = 0;
+
+  if (backup && Array.isArray(backup.bookings) && backup.bookings.length > 0) {
+    for (const b of backup.bookings) {
+      let targetSlotId = b.slotId;
+      const slotExiste = await prisma.slot.findUnique({ where: { id: targetSlotId } });
+      if (!slotExiste) {
+        // Se a turma foi excluída por completo no meio tempo, recria o slot
+        const slotNovo = await prisma.slot.create({
+          data: {
+            date: b.date,
+            time: b.time,
+            unit: b.unit,
+            prof: b.prof || profFor(b.unit),
+            capacity: CAPACITY_PADRAO,
+          },
+        });
+        targetSlotId = slotNovo.id;
+      }
+
+      await prisma.booking.create({
+        data: {
+          clientName: b.clientName,
+          phone: b.phone || client.phone || "",
+          unit: b.unit,
+          date: b.date,
+          time: b.time,
+          prof: b.prof,
+          slotId: targetSlotId,
+          seriesId: b.seriesId,
+          status: b.status === "cancelada" ? "confirmada" : (b.status || "confirmada"),
+          attendance: b.attendance || "",
+          absenceReason: "",
+          value: b.value ?? 80,
+          taxaMatricula: b.taxaMatricula,
+          paid: b.paid ?? false,
+          paymentMethod: b.paymentMethod,
+          paymentDate: b.paymentDate,
+        },
+      });
+      aulasRestauradas++;
+    }
+
+    // Reativa mensalidades que foram canceladas no encerramento
+    if (Array.isArray(backup.invoiceIds) && backup.invoiceIds.length > 0) {
+      await prisma.invoice.updateMany({
+        where: { id: { in: backup.invoiceIds }, status: "cancelado" },
+        data: { status: "pendente" },
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    client: atualizada,
+    aulasRestauradas,
+    message: `${client.name} reativada com sucesso! ${aulasRestauradas} aula(s) restauradas na agenda.`,
+  };
+}
+
+async function reverterUltimoUndo() {
+  const action = undoManager.popAction();
+  if (!action) {
+    return { ok: false, message: "Nenhuma ação recente para desfazer." };
+  }
+
+  if (action.type === "inativar_aluna") {
+    const r = await reativarAlunaComManutencao(action.client.id);
+    return {
+      ok: true,
+      undone: true,
+      actionType: action.type,
+      message: `Inativação desfeita! ${action.client.name} reativada e ${r.aulasRestauradas} aula(s) restauradas na agenda.`,
+    };
+  }
+
+  if (action.type === "excluir_aluna") {
+    // Recria a aluna excluída
+    const { id, createdAt, ...clientData } = action.client;
+    const novoClient = await prisma.client.create({
+      data: {
+        ...clientData,
+        status: "ativo",
+      },
+    });
+
+    let aulasRestauradas = 0;
+    if (Array.isArray(action.bookings)) {
+      for (const b of action.bookings) {
+        let targetSlotId = b.slotId;
+        const slotExiste = await prisma.slot.findUnique({ where: { id: targetSlotId } });
+        if (!slotExiste) {
+          const slotNovo = await prisma.slot.create({
+            data: {
+              date: b.date,
+              time: b.time,
+              unit: b.unit,
+              prof: b.prof || profFor(b.unit),
+              capacity: CAPACITY_PADRAO,
+            },
+          });
+          targetSlotId = slotNovo.id;
+        }
+
+        await prisma.booking.create({
+          data: {
+            clientName: novoClient.name,
+            phone: novoClient.phone || b.phone || "",
+            unit: b.unit,
+            date: b.date,
+            time: b.time,
+            prof: b.prof,
+            slotId: targetSlotId,
+            seriesId: b.seriesId,
+            status: b.status === "cancelada" ? "confirmada" : (b.status || "confirmada"),
+            attendance: b.attendance || "",
+            absenceReason: "",
+            value: b.value ?? 80,
+            taxaMatricula: b.taxaMatricula,
+            paid: b.paid ?? false,
+            paymentMethod: b.paymentMethod,
+            paymentDate: b.paymentDate,
+          },
+        });
+        aulasRestauradas++;
+      }
+    }
+
+    return {
+      ok: true,
+      undone: true,
+      actionType: action.type,
+      message: `Exclusão desfeita! Cadastro de ${novoClient.name} recriado com ${aulasRestauradas} aula(s) restauradas na agenda.`,
+    };
+  }
+
+  return { ok: false, message: `Tipo de ação desconhecido: ${action.type}` };
+}
+
+app.post(
+  "/api/undo",
+  wrap(async (req, res) => {
+    const result = await reverterUltimoUndo();
+    res.json(result);
+  })
+);
+
+app.get(
+  "/api/undo/status",
+  wrap(async (req, res) => {
+    res.json(undoManager.getStatus());
+  })
+);
+
+app.post(
+  "/api/clients/:id/reativar",
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const result = await reativarAlunaComManutencao(id);
+    res.json(result);
+  })
+);
 
 app.delete(
   "/api/clients/:id",
@@ -5222,11 +5426,28 @@ app.delete(
     const id = Number(req.params.id);
     const cli = await prisma.client.findUnique({ where: { id } });
     if (!cli) return res.json({ ok: true });
+
+    // Salva snapshot para Ctrl+Z
+    const aulas = await prisma.booking.findMany({
+      where: { clientName: cli.name, date: { gte: todayISO() } },
+    });
+    const invoices = await prisma.invoice.findMany({
+      where: { clientId: id },
+    });
+
+    undoManager.pushAction({
+      type: "excluir_aluna",
+      description: `Exclusão do cadastro de ${cli.name}`,
+      client: { ...cli },
+      bookings: aulas,
+      invoices: invoices,
+    });
+
     // remove as aulas futuras e a lista de espera da pessoa; o histórico passado é mantido
     await prisma.booking.deleteMany({ where: { clientName: cli.name, date: { gte: todayISO() } } });
     await prisma.waitlist.deleteMany({ where: { name: cli.name } });
     await prisma.client.delete({ where: { id } }); // mensalidades caem junto (cascade)
-    res.json({ ok: true });
+    res.json({ ok: true, canUndo: true });
   })
 );
 

@@ -645,7 +645,7 @@ export function Clientes({ params }) {
   const mesOf = (c) => clientMonthClasses(data, c.name, comp);
   const cntOf = (c) => mesOf(c).feitas;
 
-  const groups = { cliente: [], novato: [], lead: [] };
+  const groups = { cliente: [], novato: [], lead: [], "ex-aluno": [] };
   data.clients.forEach((c) => {
     const k = classifyClient(data, c);
     (groups[k] || groups.cliente).push(c);
@@ -655,6 +655,7 @@ export function Clientes({ params }) {
     ["cliente", "👩 Alunos", groups.cliente.length, "Alunos com cadastro e aulas ativas."],
     ["novato", "✨ 1ª Aula (Pagas)", groups.novato.length, "Alunos com primeira aula/matrícula confirmada e paga."],
     ["lead", "🎯 Leads (Remarketing)", groups.lead.length, "Contatos que iniciaram cadastro mas não concluíram o pagamento — ideal para remarketing."],
+    ["ex-aluno", "👋 Ex-Alunos", groups["ex-aluno"].length, "Alunas inativadas ou com inscrições encerradas. As aulas foram removidas da grade e você pode restaurar tudo a qualquer momento."],
   ];
   const hint = (TABS.find((t) => t[0] === tab) || [])[3];
 
@@ -670,18 +671,58 @@ export function Clientes({ params }) {
     await run(api.resetPin(c.id));
     toast("PIN resetado! A aluna criará um novo no próximo acesso.");
   };
-  const delClient = async (c) => {
-    if (!(await confirmModal({ title: "Excluir cadastro", message: `Excluir ${c.name}?\n\nAs aulas futuras serão removidas da agenda; o histórico de aulas passadas é mantido.`, confirmLabel: "Excluir", tone: "danger" }))) return;
-    await run(api.deleteClient(c.id));
-    toast("Cadastro excluído.");
+
+  const inativarAluna = async (c) => {
+    if (!(await confirmModal({
+      title: "Inativar aluna",
+      message: `Inativar ${c.name}?\n\n` +
+        `• O cadastro será movido para a aba "Ex-Alunos"\n` +
+        `• Todas as aulas futuras serão excluídas da grade sem deixar registros\n` +
+        `• As mensalidades dos próximos meses serão canceladas\n\n` +
+        `Você poderá reverter a qualquer momento usando Ctrl+Z ou clicando em "Restaurar" na aba Ex-Alunos.`,
+      confirmLabel: "Inativar e limpar grade",
+      tone: "danger"
+    }))) return;
+    const res = await run(api.updateClient(c.id, { status: "cancelado" }));
+    toast(`Aluna ${c.name} inativada e movida para Ex-Alunos. ↩️ (Ctrl+Z para desfazer)`, "info");
   };
+
+  const reativar = async (c) => {
+    if (!(await confirmModal({
+      title: "Restaurar aluna",
+      message: `Reativar ${c.name}?\n\nO cadastro voltará para a lista de alunos ativos e as aulas agendadas serão restauradas na grade da agenda.`,
+      confirmLabel: "Restaurar aluna",
+      tone: "ok"
+    }))) return;
+    const res = await run(api.reativarClient(c.id));
+    toast(res?.message || `${c.name} reativada com sucesso!`, "success");
+  };
+
+  const delClientDefinitivo = async (c) => {
+    if (!(await confirmModal({
+      title: "Excluir cadastro definitivamente",
+      message: `Excluir definitivamente o cadastro de ${c.name}?\n\nEsta ação apagará o cadastro do banco de dados. (Se excluir por engano, você ainda poderá usar Ctrl+Z logo em seguida para desfazer).`,
+      confirmLabel: "Excluir definitivamente",
+      tone: "danger"
+    }))) return;
+    await run(api.deleteClient(c.id));
+    toast(`Cadastro de ${c.name} excluído. ↩️ (Ctrl+Z para desfazer)`);
+  };
+
   const waMsg = (c) => tab === "lead"
     ? `Olá ${c.name}! Tudo bem? 💚 Vi que você demonstrou interesse nas nossas aulas de crochê da Fios que Curam. Ficou alguma dúvida sobre os horários ou valores? Posso te ajudar a garantir sua vaga!`
     : tab === "novato"
     ? `Olá ${c.name}! Que alegria ter você na sua primeira aula de crochê 💚 Qualquer dúvida, é só chamar!`
+    : tab === "ex-aluno"
+    ? `Olá ${c.name}! 💚 Sentimos sua falta aqui nas aulas de crochê da Fios que Curam! Que tal voltar a crochetar com a gente? Tenho novos horários disponíveis para você.`
     : `Olá ${c.name}! 💚`;
 
-  const emptyLabel = { cliente: "Nenhum aluno encontrado.", novato: "Nenhum aluno na primeira aula.", lead: "Nenhum lead pendente de remarketing." }[tab];
+  const emptyLabel = {
+    cliente: "Nenhum aluno encontrado.",
+    novato: "Nenhum aluno na primeira aula.",
+    lead: "Nenhum lead pendente de remarketing.",
+    "ex-aluno": "Nenhuma ex-aluna registrada.",
+  }[tab];
 
   return (
     <div className="panel">
@@ -722,46 +763,90 @@ export function Clientes({ params }) {
         <span className="count">{list.length} de {groups[tab].length}</span>
       </div>
       {list.length ? (
-        <table><thead><tr><th>Aluno</th><th>Unidade</th><th title={`Aulas feitas em ${compLabel(comp)}`}>Aulas no mês</th><th>Presença</th><th></th></tr></thead><tbody>
-          {list.map((c) => {
-            const mes = mesOf(c);
-            const at = clientAttendance(data, c.name);
-            return (
-              <tr key={c.id} style={tab === "novato" ? { background: "rgba(194,113,79,.06)" } : {}}>
-                <td className="c-main">
-                  <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} />)}>
-                    <span className="cli-av">{initials(c.name)}</span>
-                    <div>
-                      <span className="cli-name">{c.name}</span>
-                      {c.plan === "mensalista" ? <span className="badge b-ok ml">📅 {c.weeklyFreq ? `${c.weeklyFreq}x/semana` : "mensalista"}</span> : null}
-                      {c.matriculaStatus === "paga" && c.plan !== "mensalista" ? <span className="badge b-warn ml">🎟️ matrícula a concluir</span> : null}
-                      {tab === "novato" ? <span className="badge b-terra ml">✨ 1ª aula</span> : null}
-                      {(tab === "lead" || c.status === "lead") ? <span className="badge b-warn ml" style={{ background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba" }}>⚠️ Pagamento não realizado</span> : null}
-                      {/* Ficha digitada pela própria aluna na conversa do bot,
-                          sem ninguém conferindo do outro lado. Vale como aviso:
-                          nome, e-mail e nascimento podem precisar de revisão. */}
-                      {c.origem === "whatsapp" ? <span className="badge b-info ml" title="Cadastro feito pela própria aluna na conversa do WhatsApp — confira os dados">💬 Cadastro via WhatsApp</span> : null}
-                      <div className="cli-sub">{c.phone || "sem telefone"}{c.birthday ? " · 🎂 " + fmtDate(c.birthday) : ""}</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Aluno</th>
+              <th>Unidade</th>
+              <th title={tab === "ex-aluno" ? "Total de presenças registradas no histórico" : `Aulas feitas em ${compLabel(comp)}`}>
+                {tab === "ex-aluno" ? "Aulas no histórico" : "Aulas no mês"}
+              </th>
+              <th>{tab === "ex-aluno" ? "Situação" : "Presença"}</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((c) => {
+              const mes = mesOf(c);
+              const at = clientAttendance(data, c.name);
+              return (
+                <tr key={c.id} style={tab === "novato" ? { background: "rgba(194,113,79,.06)" } : tab === "ex-aluno" ? { opacity: 0.9 } : {}}>
+                  <td className="c-main">
+                    <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} />)}>
+                      <span className="cli-av">{initials(c.name)}</span>
+                      <div>
+                        <span className="cli-name">{c.name}</span>
+                        {tab === "ex-aluno" || c.status === "cancelado" ? <span className="badge b-danger ml">Inativa</span> : null}
+                        {c.plan === "mensalista" && c.status !== "cancelado" ? <span className="badge b-ok ml">📅 {c.weeklyFreq ? `${c.weeklyFreq}x/semana` : "mensalista"}</span> : null}
+                        {c.matriculaStatus === "paga" && c.plan !== "mensalista" && c.status !== "cancelado" ? <span className="badge b-warn ml">🎟️ matrícula a concluir</span> : null}
+                        {tab === "novato" ? <span className="badge b-terra ml">✨ 1ª aula</span> : null}
+                        {(tab === "lead" || c.status === "lead") ? <span className="badge b-warn ml" style={{ background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba" }}>⚠️ Pagamento não realizado</span> : null}
+                        {c.origem === "whatsapp" ? <span className="badge b-info ml" title="Cadastro feito pela própria aluna na conversa do WhatsApp — confira os dados">💬 Cadastro via WhatsApp</span> : null}
+                        <div className="cli-sub">{c.phone || "sem telefone"}{c.birthday ? " · 🎂 " + fmtDate(c.birthday) : ""}</div>
+                      </div>
                     </div>
-                  </div>
-                </td>
-                <td data-l="Unidade"><span className="chip">{c.unit}</span></td>
-                <td data-l="Aulas no mês" title={`${compLabel(comp)}: ${mes.feitas} aula(s) feita(s)${mes.faltas ? ` · ${mes.faltas} falta(s)` : ""}${mes.futuras ? ` · ${mes.futuras} ainda por vir` : ""}`}>
-                  <b style={{ color: mes.feitas ? "var(--terracota)" : "var(--muted)" }}>{mes.feitas}</b>
-                  {mes.futuras ? <span className="cli-sub"> +{mes.futuras} agendada(s)</span> : null}
-                </td>
-                <td data-l="Presença"><span className="badge b-ok" title="Presenças">✓ {at.pres}</span>{at.falt ? <> <span className="badge b-danger" title="Faltas">✕ {at.falt}</span></> : null}</td>
-                <td className="td-actions">
-                  <button className="btn wa sm" title="WhatsApp" onClick={() => openWa(c.phone, waMsg(c))}><WaIcon /></button>
-                  {c.hasPin && <button className="btn sec sm" onClick={() => resetPin(c)}>🔒 Resetar PIN</button>}
-                  <button className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>Editar</button>
-                  <button className="btn ghost sm" style={{ color: "var(--danger)" }} title="Excluir" onClick={() => delClient(c)}>🗑</button>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody></table>
-      ) : <div className="empty"><div className="ic">{tab === "novato" ? "✨" : "👩"}</div><p>{emptyLabel}</p></div>}
+                  </td>
+                  <td data-l="Unidade"><span className="chip">{c.unit}</span></td>
+                  <td data-l={tab === "ex-aluno" ? "Aulas no histórico" : "Aulas no mês"}>
+                    {tab === "ex-aluno" ? (
+                      <b style={{ color: at.pres ? "var(--terracota)" : "var(--muted)" }}>{at.pres} aula(s) feita(s)</b>
+                    ) : (
+                      <>
+                        <b style={{ color: mes.feitas ? "var(--terracota)" : "var(--muted)" }}>{mes.feitas}</b>
+                        {mes.futuras ? <span className="cli-sub"> +{mes.futuras} agendada(s)</span> : null}
+                      </>
+                    )}
+                  </td>
+                  <td data-l={tab === "ex-aluno" ? "Situação" : "Presença"}>
+                    {tab === "ex-aluno" ? (
+                      <span className="badge b-muted">Inscrição encerrada</span>
+                    ) : (
+                      <>
+                        <span className="badge b-ok" title="Presenças">✓ {at.pres}</span>
+                        {at.falt ? <> <span className="badge b-danger" title="Faltas">✕ {at.falt}</span></> : null}
+                      </>
+                    )}
+                  </td>
+                  <td className="td-actions">
+                    <button className="btn wa sm" title="WhatsApp" onClick={() => openWa(c.phone, waMsg(c))}><WaIcon /></button>
+                    {tab === "ex-aluno" ? (
+                      <>
+                        <button className="btn ok sm" title="Restaurar aluna e suas aulas salvas na grade" onClick={() => reativar(c)}>
+                          🔄 Restaurar
+                        </button>
+                        <button className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>
+                          Editar
+                        </button>
+                        <button className="btn ghost sm" style={{ color: "var(--danger)" }} title="Excluir cadastro definitivamente" onClick={() => delClientDefinitivo(c)}>
+                          🗑
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {c.hasPin && <button className="btn sec sm" onClick={() => resetPin(c)}>🔒 Resetar PIN</button>}
+                        <button className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>Editar</button>
+                        <button className="btn ghost sm" style={{ color: "var(--danger)" }} title="Inativar aluna (limpar grade e mover para Ex-Alunos)" onClick={() => inativarAluna(c)}>
+                          🚫 Inativar
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : <div className="empty"><div className="ic">{tab === "novato" ? "✨" : tab === "ex-aluno" ? "👋" : tab === "lead" ? "🎯" : "👩"}</div><p>{emptyLabel}</p></div>}
     </div>
   );
 }
@@ -1012,6 +1097,7 @@ function PixDoMes() {
   const { data } = useStore();
   const { open } = useModal();
   const [comp, setComp] = useState(compAtual());
+  const [filtroGrupo, setFiltroGrupo] = useState("todos"); // "todos" | "atraso" | "aberto" | "pago"
   const atual = compAtual();
 
   const cliOf = (inv) => data.clients.find((c) => c.id === inv.clientId);
@@ -1035,11 +1121,47 @@ function PixDoMes() {
   // Pix sem código emitido: a mensalidade existe, mas não há QR para mandar.
   const semPix = abertas.filter((i) => !i.pixCode).length;
 
+  const msgCobranca = (c, inv) => {
+    const e = inv.encargos;
+    const primeiro = (c?.name || "").split(" ")[0] || "aluna";
+    const linhas = [
+      `Olá ${primeiro}! 💚 Passando para lembrar da sua mensalidade de ${compLabel(inv.competencia)}, aqui na Fios que Curam.`,
+      "",
+      `Vencimento: ${fmtDate(inv.dueDate)}`,
+    ];
+    if (e && e.atrasada) {
+      linhas.push(
+        `Está em atraso há ${e.dias} ${e.dias === 1 ? "dia" : "dias"}.`,
+        "",
+        `Mensalidade: ${money(inv.amountCents / 100)}`,
+        `Multa: ${money(e.multa)}`,
+        `Juros (${e.dias} ${e.dias === 1 ? "dia" : "dias"}): ${money(e.juros)}`,
+        `*Total: ${money(e.total)}*`,
+      );
+    } else {
+      linhas.push("", `*Valor: ${money(inv.amountCents / 100)}*`);
+    }
+    if (inv.pixCode && inv.pixAtualizado !== false) {
+      linhas.push("", "Segue o Pix copia-e-cola:", inv.pixCode);
+    } else {
+      linhas.push("", "Me avisa por aqui que eu te mando o Pix atualizado. 💚");
+    }
+    linhas.push("", "Qualquer dúvida, é só responder por aqui!");
+    return linhas.join("\n");
+  };
+
+  const cobrarNoWa = (c, inv) => {
+    if (!c?.phone) return toast((c?.name || "Aluna") + " não tem telefone cadastrado.", "error");
+    openWa(c.phone, msgCobranca(c, inv));
+  };
+
   const GRUPOS = [
     { k: "atraso", tit: "⚠️ Em atraso", cls: "b-danger", lista: atrasadas },
     { k: "aberto", tit: "⏳ A receber", cls: "b-warn", lista: noPrazo },
     { k: "pago", tit: "✓ Recebido", cls: "b-ok", lista: pagas },
   ];
+
+  const gruposExibidos = filtroGrupo === "todos" ? GRUPOS : GRUPOS.filter((g) => g.k === filtroGrupo);
 
   return (
     <div className="panel" style={{ marginBottom: "1.2rem" }}>
@@ -1049,15 +1171,56 @@ function PixDoMes() {
           <span className="ag-period">💠 Pix de {compLabel(comp)}</span>
           <button className="navbtn" onClick={() => setComp(addComp(comp, 1))} disabled={comp >= atual}>→</button>
           {comp !== atual && <button className="btn ghost sm" onClick={() => setComp(atual)}>Mês atual</button>}
+          {filtroGrupo !== "todos" && (
+            <button className="btn ghost sm" onClick={() => setFiltroGrupo("todos")}>
+              ✕ Limpar filtro ({filtroGrupo === "atraso" ? "em atraso" : filtroGrupo})
+            </button>
+          )}
         </div>
         <span className="cli-sub">{invs.length} mensalidade(s) emitida(s){semPix ? ` · ${semPix} sem Pix gerado` : ""}</span>
       </div>
 
       <div className="fch-tot">
-        <div className="fch-card"><div className="l">✓ Recebido</div><div className="v">{money(recebido)}</div><div className="cli-sub">{pagas.length} paga(s) · {pctRecebido}% do emitido</div></div>
-        <div className="fch-card"><div className="l">⏳ A receber</div><div className="v warn">{money(aReceber)}</div><div className="cli-sub">{noPrazo.length} dentro do prazo</div></div>
-        <div className="fch-card"><div className="l">⚠️ Em atraso</div><div className="v" style={{ color: "var(--danger)" }}>{money(emAtraso)}</div><div className="cli-sub">{atrasadas.length} vencida(s){atrasadas.length ? " · com multa e juros" : ""}</div></div>
-        <div className="fch-card"><div className="l">💠 Emitido no mês</div><div className="v terra">{money(emitido)}</div><div className="cli-sub">{invs.length} Pix</div></div>
+        <div
+          className="fch-card"
+          style={{ cursor: "pointer", outline: filtroGrupo === "pago" ? "2px solid var(--ok)" : "none" }}
+          title="Clique para filtrar apenas recebidos"
+          onClick={() => setFiltroGrupo(filtroGrupo === "pago" ? "todos" : "pago")}
+        >
+          <div className="l">✓ Recebido</div>
+          <div className="v">{money(recebido)}</div>
+          <div className="cli-sub">{pagas.length} paga(s) · {pctRecebido}% do emitido</div>
+        </div>
+        <div
+          className="fch-card"
+          style={{ cursor: "pointer", outline: filtroGrupo === "aberto" ? "2px solid var(--warn)" : "none" }}
+          title="Clique para filtrar apenas a receber no prazo"
+          onClick={() => setFiltroGrupo(filtroGrupo === "aberto" ? "todos" : "aberto")}
+        >
+          <div className="l">⏳ A receber</div>
+          <div className="v warn">{money(aReceber)}</div>
+          <div className="cli-sub">{noPrazo.length} dentro do prazo</div>
+        </div>
+        <div
+          className="fch-card"
+          style={{ cursor: "pointer", outline: filtroGrupo === "atraso" ? "2px solid var(--danger)" : "none", background: filtroGrupo === "atraso" ? "rgba(220,53,69,0.06)" : undefined }}
+          title="Clique para filtrar apenas em atraso"
+          onClick={() => setFiltroGrupo(filtroGrupo === "atraso" ? "todos" : "atraso")}
+        >
+          <div className="l">⚠️ Em atraso</div>
+          <div className="v" style={{ color: "var(--danger)" }}>{money(emAtraso)}</div>
+          <div className="cli-sub">{atrasadas.length} vencida(s){atrasadas.length ? " · com multa e juros" : ""}</div>
+        </div>
+        <div
+          className="fch-card"
+          style={{ cursor: "pointer", outline: filtroGrupo === "todos" ? "2px solid var(--terracota)" : "none" }}
+          title="Clique para ver todas as mensalidades emitidas"
+          onClick={() => setFiltroGrupo("todos")}
+        >
+          <div className="l">💠 Emitido no mês</div>
+          <div className="v terra">{money(emitido)}</div>
+          <div className="cli-sub">{invs.length} Pix</div>
+        </div>
       </div>
 
       {/* Barra de composição: o mês inteiro numa linha só. */}
@@ -1071,10 +1234,10 @@ function PixDoMes() {
       )}
 
       {invs.length ? (
-        <table><thead><tr><th>Aluno</th><th>Vencimento</th><th>Valor</th><th>Situação</th><th>Pix</th></tr></thead><tbody>
-          {GRUPOS.filter((g) => g.lista.length).map((g) => (
+        <table><thead><tr><th>Aluno</th><th>Vencimento</th><th>Valor</th><th>Situação</th><th>Pix</th><th>WhatsApp</th></tr></thead><tbody>
+          {gruposExibidos.filter((g) => g.lista.length).map((g) => (
             <Fragment key={g.k}>
-              <tr className="grp"><td colSpan={5} style={{ paddingTop: ".9rem" }}>
+              <tr className="grp"><td colSpan={6} style={{ paddingTop: ".9rem" }}>
                 <b className="cli-sub" style={{ textTransform: "uppercase", letterSpacing: ".04em" }}>{g.tit} · {g.lista.length}</b>
               </td></tr>
               {g.lista.map((i) => (
@@ -1120,6 +1283,19 @@ function PixDoMes() {
                             💠 Copiar{i.pixAtualizado === false ? " (desatualizado)" : ""}
                           </button>
                         : <span className="badge b-muted">sem Pix</span>}
+                  </td>
+                  <td data-l="WhatsApp">
+                    {i.status === "pago" ? (
+                      <span className="cli-sub">—</span>
+                    ) : (
+                      <button
+                        className="btn wa sm"
+                        title={i.encargos?.atrasada ? "Cobrar pelo WhatsApp do atendimento (sem Meta)" : "Lembrar pelo WhatsApp do atendimento"}
+                        onClick={() => cobrarNoWa(i.cli, i)}
+                      >
+                        <WaIcon /> {i.encargos?.atrasada ? "Cobrar" : "Lembrar"}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

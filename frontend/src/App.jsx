@@ -11,6 +11,7 @@ import { exportBookingsCsv } from "./exports.js";
 import ClientPortal from "./ClientPortal.jsx";
 import FirstClassBooking from "./FirstClassBooking.jsx";
 import { Notifications } from "./Notifications.jsx";
+import { toast } from "./toast.jsx";
 
 // O painel se atualiza sozinho a cada 25s e sempre que a aba volta ao foco
 // (ver store.jsx) — por isso não há botão de atualizar na barra do topo.
@@ -64,7 +65,7 @@ const TITLES = {
 };
 
 export default function App() {
-  const { data, error } = useStore();
+  const { data, error, reload } = useStore();
   const { open } = useModal();
   const instrutora = isInstrutora();
   const [view, setView] = useState(instrutora ? "agenda" : "dashboard");
@@ -91,6 +92,34 @@ export default function App() {
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
     }
   }, []);
+
+  // Atalho global Ctrl+Z / Cmd+Z para desfazer inativação ou exclusão acidental no painel
+  useEffect(() => {
+    if (mode !== "admin") return;
+    const handleKeyDown = async (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
+        const active = document.activeElement;
+        const tag = (active?.tagName || "").toLowerCase();
+        if (tag === "input" || tag === "textarea" || active?.isContentEditable) {
+          return;
+        }
+        e.preventDefault();
+        try {
+          const res = await api.undo();
+          if (res?.ok && res?.undone) {
+            toast(res.message || "Ação desfeita com sucesso! ↩️", "success");
+            await reload();
+          } else {
+            toast(res?.message || "Nenhuma ação recente para desfazer.", "info");
+          }
+        } catch (err) {
+          toast("Não foi possível desfazer: " + (err.message || "tente novamente"), "error");
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [mode, reload]);
 
   // No tablet da sala o portal é a única tela: sem volta para o painel admin.
   if (kiosk) return <ClientPortal kiosk onSairKiosk={() => { try { localStorage.removeItem(KIOSK_KEY); } catch {} setKiosk(false); }} />;

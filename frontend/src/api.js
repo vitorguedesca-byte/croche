@@ -80,6 +80,9 @@ export const api = {
   createClient: (data) => req("POST", "/api/clients", data),
   updateClient: (id, data) => req("PATCH", `/api/clients/${id}`, data),
   deleteClient: (id) => req("DELETE", `/api/clients/${id}`),
+  reativarClient: (id) => req("POST", `/api/clients/${id}/reativar`),
+  undo: () => req("POST", "/api/undo"),
+  getUndoStatus: () => req("GET", "/api/undo/status"),
 
   // mensalidades (mensalistas)
   batchBook: (clientId, data) => req("POST", `/api/clients/${clientId}/batch-book`, data),

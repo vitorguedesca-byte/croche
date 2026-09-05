@@ -3073,15 +3073,15 @@ function useClientForm(client, onDone) {
         (i) => i.clientId === client.id && i.status === "pendente" && i.competencia <= comp
       ).length;
       const ok = await confirmModal({
-        title: "Encerrar a inscrição",
-        message: `${client.name} deixa de ser aluna. Ao salvar:\n\n` +
-          `• ${aulas} aula(s) futura(s) serão canceladas\n` +
+        title: "Inativar e encerrar inscrição",
+        message: `${client.name} será movida para a aba "Ex-Alunos". Ao salvar:\n\n` +
+          `• ${aulas} aula(s) futura(s) serão excluídas da grade sem deixar resíduos\n` +
           `• ${futuras} mensalidade(s) dos próximos meses serão canceladas\n` +
           (doMes
             ? `• ${doMes} mensalidade(s) deste mês (ou anteriores) CONTINUAM em aberto — se quiser perdoar, cancele na aba Mensalidades\n`
             : "") +
-          "\nEla também deixa de ganhar e usar créditos de reposição.",
-        confirmLabel: "Encerrar inscrição", cancelLabel: "Voltar", tone: "danger",
+          "\nVocê poderá reverter com Ctrl+Z ou restaurar o cadastro e as aulas na aba Ex-Alunos.",
+        confirmLabel: "Inativar e limpar grade", cancelLabel: "Voltar", tone: "danger",
       });
       if (!ok) return;
     }
@@ -3164,8 +3164,8 @@ function useClientForm(client, onDone) {
       }
     } else if (saved?.encerrado) {
       const e = saved.encerrado;
-      toast(`Inscrição encerrada. ${e.aulas} aula(s) e ${e.mensalidades} mensalidade(s) canceladas.` +
-        (e.extrasPagas ? ` Atenção: ela tem ${e.extrasPagas} aula(s) extra(s) já paga(s).` : ""));
+      toast(`Aluna inativada e movida para Ex-Alunos. ${e.aulas} aula(s) excluídas da grade. ↩️ (Ctrl+Z para desfazer)` +
+        (e.extrasPagas ? ` Atenção: ela tem ${e.extrasPagas} aula(s) extra(s) já paga(s).` : ""), "info");
     } else {
       toast("Cadastro salvo. 💚");
     }

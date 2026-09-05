@@ -208,6 +208,7 @@ export const clientActiveCount = (data, c) =>
   bookingsActive(data).filter((b) => b.clientName === c.name).length;
 
 export function classifyClient(data, c) {
+  if (c.status === "cancelado" || c.status === "inativo") return "ex-aluno";
   if (c.status === "lead") return "lead";
   const bks = (data.bookings || []).filter((b) => b.clientName === c.name);
   const activeBks = bks.filter((b) => b.status !== "cancelada");
