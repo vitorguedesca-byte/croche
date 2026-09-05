@@ -3043,6 +3043,8 @@ function useClientForm(client, onDone) {
   const [plano, setPlano] = useState(client?.plan === "mensalista" ? String(client.weeklyFreq || 1) : "avulso");
   // Tipo de mensalista: "fixo" (agenda montada pela Inêz) | "escala" (ela marca)
   const [tipoMens, setTipoMens] = useState(client?.mensalistaTipo === "escala" ? "escala" : "fixo");
+  const [customMonthly, setCustomMonthly] = useState(client?.monthlyValue != null ? "individual" : "tabela");
+  const [monthlyValue, setMonthlyValue] = useState(client?.monthlyValue != null ? String(client.monthlyValue) : "");
   const toggle = (t) => setTags((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
 
   const save = async () => {
@@ -3051,10 +3053,22 @@ function useClientForm(client, onDone) {
     if (limpoCpf && !validarCPF(limpoCpf)) {
       return toast("CPF inválido. Verifique os números digitados antes de salvar.", "error");
     }
+
+    const eraMensal = client?.plan === "mensalista";
+    const querMensal = plano !== "avulso";
+    const mudouFreq = eraMensal && querMensal && Number(plano) !== (client.weeklyFreq || 1);
+    const precisaMatricular = querMensal && (!client || !eraMensal || mudouFreq);
+
+    const valorDoPlano = (f) => (Number(f) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120));
+    const valorIndivNum = querMensal && customMonthly === "individual" && String(monthlyValue).trim() !== ""
+      ? Number(String(monthlyValue).replace(",", "."))
+      : null;
+
     const payload = {
       name: name.trim(), phone: phone.trim(), email: email.trim(), cpf: formatarCPF(cpf) || cpf.trim(), unit, tags, notes: notes.trim(),
       birthday, firstClass, status, mensalistaTipo: tipoMens,
-      billingDay: billingDay === "" ? null : Number(billingDay)
+      billingDay: billingDay === "" ? null : Number(billingDay),
+      monthlyValue: valorIndivNum,
     };
 
     /* Inativar não é só mudar um rótulo: derruba a agenda e a cobrança dela.
@@ -3086,13 +3100,6 @@ function useClientForm(client, onDone) {
       if (!ok) return;
     }
 
-    const eraMensal = client?.plan === "mensalista";
-    const querMensal = plano !== "avulso";
-    const mudouFreq = eraMensal && querMensal && Number(plano) !== (client.weeklyFreq || 1);
-    const precisaMatricular = querMensal && (!client || !eraMensal || mudouFreq);
-
-    const valorDoPlano = (f) => (Number(f) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120));
-
     /* TROCA de plano de quem já é mensalista. Vale a partir do mês que vem, nas
        duas pontas — dinheiro e aulas. O aviso diz exatamente isso em números,
        porque é a pergunta que a Inêz faria depois de salvar: "a partir de
@@ -3103,19 +3110,20 @@ function useClientForm(client, onDone) {
       const vDe = valorDoPlano(de);
       const vPara = valorDoPlano(para);
       const desde = compLabel(addComp(compAtual(), 1));
-      const individual = client.monthlyValue != null;
+      const individual = valorIndivNum != null || client.monthlyValue != null;
+      const valorIndivEfetivo = valorIndivNum != null ? valorIndivNum : client.monthlyValue;
 
       const linhas = [
         `${client.name} sai do plano de ${de}x por semana e entra no de ${para}x.`,
         "",
         `A partir de ${desde}:`,
         individual
-          ? `• Mensalidade: continua ${money(client.monthlyValue)} — ela tem valor individual, que manda sobre a tabela do plano`
+          ? `• Mensalidade: continua ${money(valorIndivEfetivo)} — ela tem valor individual, que manda sobre a tabela do plano`
           : `• Mensalidade: ${money(vDe)} → ${money(vPara)} (${vPara > vDe ? "+" : "−"}${money(Math.abs(vPara - vDe))})`,
         `• Aulas por semana: ${de} → ${para}`,
         "",
         `${compLabel(compAtual())} não muda: a mensalidade deste mês fica em ` +
-          `${individual ? money(client.monthlyValue) : money(vDe)}.`,
+          `${individual ? money(valorIndivEfetivo) : money(vDe)}.`,
       ];
       const ok = await confirmModal({
         title: "Trocar o plano de mensalista",
@@ -3125,7 +3133,7 @@ function useClientForm(client, onDone) {
       });
       if (!ok) return;
     } else if (precisaMatricular) {
-      const valor = valorDoPlano(plano);
+      const valor = valorIndivNum != null ? valorIndivNum : valorDoPlano(plano);
       // O dia da matrícula vira o dia de vencimento dela, e a 1ª mensalidade
       // cai no mês seguinte — a não ser que você já tenha fixado um dia acima.
       const dia = billingDay === "" ? Number(todayISO().slice(8, 10)) : Number(billingDay);
@@ -3142,7 +3150,12 @@ function useClientForm(client, onDone) {
     const saved = await run(client ? api.updateClient(client.id, payload) : api.createClient(payload));
     if (precisaMatricular) {
       const id = client ? client.id : saved?.id;
-      const r = id ? await run(api.enroll(id, { weeklyFreq: Number(plano), mensalistaTipo: tipoMens, billingDay: billingDay === "" ? undefined : Number(billingDay) })) : null;
+      const r = id ? await run(api.enroll(id, {
+        weeklyFreq: Number(plano),
+        mensalistaTipo: tipoMens,
+        billingDay: billingDay === "" ? undefined : Number(billingDay),
+        monthlyValue: valorIndivNum,
+      })) : null;
       /* O backend devolve `troca` quando foi mudança de plano (e não matrícula
          nova). Repetimos o resultado no aviso: a Inêz acabou de confirmar uma
          tela de números e precisa ver que foi isso mesmo que gravou. */
@@ -3175,6 +3188,7 @@ function useClientForm(client, onDone) {
   return { meta, client, name, setName, phone, setPhone, email, setEmail, cpf, setCpf,
     unit, setUnit, tags, toggle, notes, setNotes, birthday, setBirthday,
     firstClass, setFirstClass, status, setStatus, plano, setPlano, tipoMens, setTipoMens,
+    customMonthly, setCustomMonthly, monthlyValue, setMonthlyValue,
     billingDay, setBillingDay, save };
 }
 
@@ -3244,16 +3258,6 @@ function ClientFormFields({ f }) {
           {f.plano !== "avulso" && client?.plan !== "mensalista" && (
             <div className="help" style={{ marginTop: ".4rem" }}>Ao salvar, a matrícula é feita e a 1ª mensalidade é gerada automaticamente.</div>
           )}
-          {f.plano !== "avulso" && (
-            <div style={{ marginTop: ".7rem" }}>
-              <label style={{ display: "block", marginBottom: ".3rem" }}>Tipo de mensalista</label>
-              <Select value={f.tipoMens} onChange={f.setTipoMens} options={TIPO_MENSALISTA_OPCOES} />
-              <div className="help" style={{ marginTop: ".4rem" }}>
-                A frequência do plano define a grade inicial. Reposição, remarcação,
-                cancelamento e aula extra continuam sempre individuais.
-              </div>
-            </div>
-          )}
         </div>
         <div className="field"><label>Situação da inscrição</label>
           <Select
@@ -3271,21 +3275,109 @@ function ClientFormFields({ f }) {
           </div>
         </div>
       </div>
-      <div className="field">
-        <label>Dia de vencimento (Boleto / PIX)</label>
-        <Select
-          value={f.billingDay}
-          onChange={f.setBillingDay}
-          grid
-          defaultOption={{ label: `Dia ${meta.vencimentoDia || 10} — padrão do sistema`, icon: "⚙️" }}
-          options={Array.from({ length: 28 }, (_, i) => ({
-            value: i + 1,
-            label: String(i + 1),
-            triggerLabel: `Dia ${i + 1} de cada mês`,
-          }))}
-        />
-        <div className="help" style={{ marginTop: ".4rem" }}>Dia do mês em que vence a mensalidade para a emissão do boleto ou PIX.</div>
-      </div>
+
+      {f.plano !== "avulso" && (
+        <div style={{
+          margin: ".5rem 0 1rem 0",
+          padding: ".9rem 1rem",
+          borderRadius: 8,
+          border: "1.5px solid var(--primary, #1c5e33)",
+          background: "rgba(28, 94, 51, 0.04)"
+        }}>
+          <div style={{ fontWeight: 600, color: "var(--primary, #1c5e33)", marginBottom: ".6rem", display: "flex", alignItems: "center", gap: ".4rem" }}>
+            <span>⚙️</span> Regras e Mensalidade do Plano
+          </div>
+
+          <div className="row2" style={{ marginBottom: ".6rem" }}>
+            <div className="field" style={{ margin: 0 }}>
+              <label style={{ display: "block", marginBottom: ".3rem" }}>Regra / Tipo de mensalista</label>
+              <Select value={f.tipoMens} onChange={f.setTipoMens} options={TIPO_MENSALISTA_OPCOES} />
+              <div className="help" style={{ marginTop: ".3rem" }}>
+                {f.tipoMens === "fixo" ? "Dia e horário fixos toda semana." : "Aluna agenda aulas pelo portal conforme as vagas."}
+              </div>
+            </div>
+
+            <div className="field" style={{ margin: 0 }}>
+              <label style={{ display: "block", marginBottom: ".3rem" }}>Dia de vencimento (Boleto / PIX)</label>
+              <Select
+                value={f.billingDay}
+                onChange={f.setBillingDay}
+                grid
+                defaultOption={{ label: `Dia ${meta.vencimentoDia || 10} — padrão`, icon: "⚙️" }}
+                options={Array.from({ length: 28 }, (_, i) => ({
+                  value: i + 1,
+                  label: String(i + 1),
+                  triggerLabel: `Dia ${i + 1} de cada mês`,
+                }))}
+              />
+              <div className="help" style={{ marginTop: ".3rem" }}>Dia do mês em que vence a mensalidade.</div>
+            </div>
+          </div>
+
+          <div className="field" style={{ margin: 0 }}>
+            <label style={{ display: "block", marginBottom: ".3rem" }}>Valor da Mensalidade</label>
+            <div style={{ display: "flex", gap: ".5rem", marginBottom: ".5rem" }}>
+              <button
+                type="button"
+                onClick={() => f.setCustomMonthly("tabela")}
+                style={{
+                  flex: 1,
+                  padding: ".45rem .8rem",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  border: `1.5px solid ${f.customMonthly === "tabela" ? "var(--primary, #1c5e33)" : "var(--line, #e2e8f0)"}`,
+                  background: f.customMonthly === "tabela" ? "rgba(28,94,51,0.1)" : "#fff",
+                  color: f.customMonthly === "tabela" ? "var(--primary, #1c5e33)" : "var(--text, #333)",
+                  fontWeight: f.customMonthly === "tabela" ? 600 : 400,
+                  fontSize: ".85rem",
+                }}
+              >
+                📋 Tabela ({money(Number(f.plano) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120))}/mês)
+              </button>
+              <button
+                type="button"
+                onClick={() => f.setCustomMonthly("individual")}
+                style={{
+                  flex: 1,
+                  padding: ".45rem .8rem",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  border: `1.5px solid ${f.customMonthly === "individual" ? "var(--primary, #1c5e33)" : "var(--line, #e2e8f0)"}`,
+                  background: f.customMonthly === "individual" ? "rgba(28,94,51,0.1)" : "#fff",
+                  color: f.customMonthly === "individual" ? "var(--primary, #1c5e33)" : "var(--text, #333)",
+                  fontWeight: f.customMonthly === "individual" ? 600 : 400,
+                  fontSize: ".85rem",
+                }}
+              >
+                ✏️ Valor Individual (personalizado)
+              </button>
+            </div>
+            {f.customMonthly === "individual" ? (
+              <div style={{ marginTop: ".4rem" }}>
+                <label style={{ fontSize: ".85rem", color: "var(--muted)", display: "block", marginBottom: ".2rem" }}>
+                  Valor personalizado por mês (R$):
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder={String(Number(f.plano) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120))}
+                  value={f.monthlyValue}
+                  onChange={(e) => f.setMonthlyValue(e.target.value)}
+                  style={{ width: "100%", fontWeight: 600 }}
+                />
+                <div className="help" style={{ marginTop: ".3rem" }}>
+                  Este valor específico terá prioridade sobre a tabela geral para esta aluna.
+                </div>
+              </div>
+            ) : (
+              <div className="help">
+                A aluna pagará o valor vigente da tabela geral do curso ({money(Number(f.plano) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120))}/mês).
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {/* O campo de etiquetas some enquanto não houver nenhuma para escolher —
           a única que existia ("Lead") saiu do sistema. Se voltar a haver
           etiqueta, basta preencher TAG_OPTIONS em helpers.js. */}

@@ -52,8 +52,21 @@ Agradecemos pela compreensão e parceria. Essas regras nos ajudam a manter um am
    mensalidade e a taxa fica. Isto é REPETIÇÃO do que ela leu antes de pagar, de
    propósito — a hora de descobrir o que não volta não é a hora de pedir de
    volta. */
-export const textoMatriculaConfirmada = ({ nome, unidade, quando, taxa, portalUrl }) => {
+export const textoMatriculaConfirmada = ({ nome, unidade, quando, taxa, portalUrl, isAvulso }) => {
   const urlPortal = portalUrl || WA_PORTAL_URL;
+  if (isAvulso) {
+    return `Obrigada, ${String(nome || "").split(" ")[0]}! 🙏 Recebemos o seu pagamento da *Aula Avulsa*.
+
+*Confirmação de agendamento*
+📍 ${unidade}
+🗓️ ${quando}
+
+Sua vaga está garantida! 💚
+
+_OBS: não devolveremos o valor da aula avulsa em caso de falta._
+
+Seja muito bem-vinda ao ateliê! Se você amar a aula e quiser continuar conosco como mensalista, converse com a professora ou nos avise por aqui! 🧶`;
+  }
   return `Obrigada, ${String(nome || "").split(" ")[0]}! 🙏 Recebemos o seu pagamento.
 
 *Confirmação de agendamento*
@@ -90,8 +103,22 @@ ${REGRAS_REPOSICAO}`;
    O QR do Pix traz o total, e um número no texto diferente do número no app do
    banco é o que trava a aluna na hora de pagar — ela para para conferir, e
    quem para não paga. Discriminar também deixa claro que a taxa é uma vez só. */
-export const textoCobrancaReserva = ({ nome, unidade, quando, valor, mensalidade, taxa, minutos }) =>
-`Quase lá, ${String(nome || "").split(" ")[0]}! 💚
+export const textoCobrancaReserva = ({ nome, unidade, quando, valor, mensalidade, taxa, minutos, isAvulso }) => {
+  if (isAvulso) {
+    return `Quase lá, ${String(nome || "").split(" ")[0]}! 💚
+
+📍 ${unidade}
+🗓️ ${quando}
+🧺 *Aula Avulsa: ${valor}*
+
+_OBS: não devolveremos o valor da aula avulsa em caso de falta._
+
+Copie o código Pix abaixo e pague pelo app do seu banco. Assim que o pagamento cair, sua vaga é confirmada automaticamente e eu te mando a confirmação por aqui.
+
+⏳ Consigo segurar essa vaga por ${minutos} minutos.`;
+  }
+
+  return `Quase lá, ${String(nome || "").split(" ")[0]}! 💚
 
 📍 ${unidade}
 🗓️ ${quando}
@@ -102,6 +129,7 @@ ${taxa
 Copie o código Pix abaixo e pague pelo app do seu banco. Assim que o pagamento cair, sua vaga é confirmada automaticamente e eu te mando a confirmação por aqui.
 
 ⏳ Consigo segurar essa vaga por ${minutos} minutos.`;
+};
 
 /* Último toque, a poucos minutos do fim do prazo. É a única mensagem entre o
    Pix e a vaga sair, então ela é curta: no prazo de 10 minutos não há espaço

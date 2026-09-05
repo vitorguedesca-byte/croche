@@ -1769,20 +1769,19 @@ app.post(
         });
       }
 
-      /* Aula de matrícula (a 1ª da aluna): o que se cobra na tela é a 1ª
-         MENSALIDADE do plano escolhido MAIS a taxa de matrícula, cobrada uma
-         vez só. É esse pagamento que matricula a aluna (ver
-         registrarMatriculaPaga). A taxa fica gravada na reserva para o
-         financeiro conseguir separá-la da mensalidade depois.
-         Ao replicar, só a primeira aula é a de matrícula. */
-      const ehMatricula = !!b.firstClass && i === 0;
+      /* Aula de matrícula (a 1ª da aluna) ou Aula Avulsa:
+         Se for mensalista, o que se cobra na tela é a 1ª MENSALIDADE do plano escolhido
+         MAIS a taxa de matrícula (uma vez só). Se for aula avulsa, cobra apenas o valor da aula
+         avulsa, sem taxa de matrícula e sem gerar grade de 52 semanas. */
+      const isAvulso = b.plan === "avulso" || b.modalidade === "avulso" || b.weeklyFreq === "avulso";
+      const ehMatricula = !isAvulso && !!b.firstClass && i === 0;
       const freqEscolhida = Number(b.weeklyFreq) === 2 ? 2 : 1;
       const taxa = ehMatricula ? taxaMatriculaAtual() : 0;
 
       /* Regra 6: Vagas liberadas por falta/cancelamento só ficam livres para reposição,
          aula extra e escala. Alunas novas (1ª aula) não podem ocupar vaga decorrente
          de cancelamento de aluna regular. */
-      if (!painel && (ehMatricula || b.firstClass || client?.firstClass)) {
+      if (!painel && (ehMatricula || isAvulso || b.firstClass || client?.firstClass)) {
         const totalNoSlot = await prisma.booking.count({ where: { slotId: slot.id } });
         if (totalNoSlot >= (slot.capacity || 1)) {
           return res.status(409).json({
@@ -1800,7 +1799,7 @@ app.post(
          Quem NÃO é mensalista não tem teto nenhum: paga por aula e marca
          quantas quiser, desde que haja vaga na turma. A aula de matrícula
          também fica de fora — é aula única, anterior ao plano. */
-      const doPlano = !ehMatricula && tipoMensalista(client) !== null;
+      const doPlano = !ehMatricula && !isAvulso && tipoMensalista(client) !== null;
       if (doPlano) {
         try {
           await exigirRegras(client, { date: slot.date, time: slot.time }, {
@@ -1816,6 +1815,12 @@ app.post(
       }
 
       const statusInicial = doPlano ? "confirmada" : "aguardando";
+      const valorBooking = ehMatricula
+        ? valorPrimeiroPagamento(freqEscolhida)
+        : isAvulso
+        ? (Number(b.value) || Number(SETTINGS.valorAvulsa) || 40)
+        : (Number(b.value) || 0);
+
       const booking = await prisma.booking.create({
         data: {
           clientName: b.clientName,
@@ -1828,11 +1833,11 @@ app.post(
           // aula do plano já está paga pela mensalidade — nasce confirmada,
           // como no agendamento em lote e na replicação da turma
           status: statusInicial,
-          value: ehMatricula ? valorPrimeiroPagamento(freqEscolhida) : (Number(b.value) || 0),
+          value: valorBooking,
           taxaMatricula: taxa || null,
-          paymentMethod: ehMatricula ? MARCA_MATRICULA : doPlano ? PGTO_PLANO : null,
+          paymentMethod: ehMatricula ? MARCA_MATRICULA : isAvulso ? "Aula Avulsa" : doPlano ? PGTO_PLANO : null,
           // Reservas pendentes de pagamento (portal, site, 1ª aula) recebem hold de 10 min
-          holdUntil: (!painel && statusInicial === "aguardando") || (ehMatricula && statusInicial === "aguardando")
+          holdUntil: (!painel && statusInicial === "aguardando") || ((ehMatricula || isAvulso) && statusInicial === "aguardando")
             ? new Date(Date.now() + HOLD_MIN * 60_000)
             : null,
         },
@@ -1840,7 +1845,22 @@ app.post(
       criadas.push(booking);
 
       if (!client) client = await ensureClient(b.clientName, b.phone, unit, [], b.cpf, b.email, b.firstClass, { birthday: b.birthday });
-      if (ehMatricula && client) {
+      if (isAvulso && client) {
+        /* Aluna avulsa de primeira aula: entra como LEAD dentro de ALUNOS,
+           com plano "avulso" para exibir a legenda de aula avulsa. */
+        await prisma.client.update({
+          where: { id: client.id },
+          data: {
+            status: "lead",
+            matriculaStatus: "nao_aplica",
+            trialDate: slot.date,
+            plan: "avulso",
+            weeklyFreq: null,
+            firstClass: false,
+            unit: client.unit || slot.unit,
+          },
+        });
+      } else if (ehMatricula && client) {
         /* O plano escolhido na tela da matrícula fica guardado aqui como
            INTENÇÃO (weeklyFreq + mensalistaTipo), mas `plan` continua "avulso" e status continua "lead":
            ela só vira mensalista/aluna ativa de fato quando a 1ª mensalidade é paga. Quem faz
@@ -2040,7 +2060,9 @@ async function registrarMatriculaPaga(booking) {
    não há conversa aberta e o envio sai em silêncio. */
 async function avisarMatriculaConfirmada(booking) {
   if (!waConfigured() || !booking?.phone) return;
-  if (!ehPagamentoDeMatricula(booking.paymentMethod)) return;
+  const isMatricula = ehPagamentoDeMatricula(booking.paymentMethod);
+  const isAvulso = booking.paymentMethod === "Aula Avulsa";
+  if (!isMatricula && !isAvulso) return;
   try {
     await prisma.booking.update({
       where: { id: booking.id },
@@ -2059,9 +2081,10 @@ async function avisarMatriculaConfirmada(booking) {
       // a taxa gravada NA RESERVA: é o que ela pagou, não o que a tabela diz hoje
       taxa: booking.taxaMatricula ? moedaBR(booking.taxaMatricula) : "",
       portalUrl,
+      isAvulso,
     }));
   } catch (e) {
-    console.warn(`[wa] confirmação da matrícula de ${booking.clientName} não saiu: ${e.message}`);
+    console.warn(`[wa] confirmação da matrícula/aula de ${booking.clientName} não saiu: ${e.message}`);
   }
 }
 
@@ -3678,25 +3701,23 @@ async function criarGradeInicial12Meses(client, slotsBase) {
 // e, quando ela escolhe a grade, replica os padrões por 12 meses. Lança { code }.
 // `mensalidadePaga` chega quando o pagamento da matrícula JÁ é a mensalidade
 // do mês corrente — é o caminho da tela pública da aluna nova.
-async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, billingDay, mensalistaTipo, mensalidadePaga, exigirGrade = false }) {
+async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, billingDay, mensalistaTipo, mensalidadePaga, exigirGrade = false, monthlyValue }) {
   const jaMensalista = client.plan === "mensalista" && !!client.weeklyFreq;
   const freq = jaMensalista ? (Number(client.weeklyFreq) === 2 ? 2 : 1) : (Number(weeklyFreq) === 2 ? 2 : 1);
   const tipo = mensalistaTipo === "escala" ? "escala" : "fixo";
   const tipoEfetivo = jaMensalista ? (client.mensalistaTipo === "escala" ? "escala" : "fixo") : tipo;
   const jaTemGrade = jaMensalista ? await prisma.booking.count({
     where: { clientName: client.name, date: { gte: todayISO() }, status: { not: "cancelada" }, paymentMethod: PGTO_PLANO },
-  }) : 0;
-  if (jaMensalista && jaTemGrade > 0 && !exigirGrade)
-    throw Object.assign(new Error("Esta aluna já é mensalista e já possui grade regular de aulas."), { code: 409 });
-  if (jaMensalista && exigirGrade) {
-    if (tipoEfetivo === "escala")
-      throw Object.assign(new Error("Mensalista de escala não possui grade replicada: cada aula é marcada individualmente. 💚"), { code: 409 });
-    if (jaTemGrade)
-      throw Object.assign(new Error("Sua grade regular já está configurada. Para mudar uma aula específica, cancele somente aquela data. 💚"), { code: 409 });
+  }) > 0 : false;
+  if (jaMensalista && jaTemGrade) {
+    throw Object.assign(new Error("Esta aluna já é mensalista. Para alterar o plano dela, use a troca de plano."), { code: 409 });
   }
 
-  const ids = [...new Set((Array.isArray(slotIds) ? slotIds : slotId ? [slotId] : []).map(Number).filter(Number.isInteger))];
-  // Se faltam horários e a aluna é de turma fixa, busca das reservas de 1ª aula / matrícula
+  const ids = Array.isArray(slotIds) && slotIds.length
+    ? slotIds.map(Number).filter(Boolean)
+    : slotId ? [Number(slotId)] : [];
+
+  // Se for fixo e não passou horários suficientes, tenta reaproveitar marcações futuras já existentes dela
   // APENAS se for aluna nova na 1ª aula e a aula for futura (não tenta replicar aulas passadas de alunas antigas)
   if (tipoEfetivo === "fixo" && ids.length < freq && client.firstClass) {
     const bookings = await prisma.booking.findMany({
@@ -3753,7 +3774,9 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
       weeklyFreq: freq,
       mensalistaTipo: tipoEfetivo,
       firstClass: false, // deixou de ser aluna nova
-      monthlyValue: null, // passa a seguir a tabela do plano
+      monthlyValue: monthlyValue !== undefined
+        ? (monthlyValue === "" || monthlyValue == null ? null : Number(monthlyValue))
+        : client.monthlyValue,
       billingDay: dia,
       ...(virouMatricula ? { matriculaStatus: "convertida" } : {}),
     },
@@ -3826,7 +3849,7 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
      medida pelo plano velho.
 
    Devolve o antes/depois pronto para a tela dizer à Inêz o que aconteceu. */
-async function trocarPlanoMensalista(client, { weeklyFreq, mensalistaTipo, billingDay }) {
+async function trocarPlanoMensalista(client, { weeklyFreq, mensalistaTipo, billingDay, monthlyValue }) {
   const freqAntiga = Number(client.weeklyFreq) || 1;
   const freqNova = Number(weeklyFreq) === 2 ? 2 : 1;
   const tipoAntigo = client.mensalistaTipo === "escala" ? "escala" : "fixo";
@@ -3841,7 +3864,10 @@ async function trocarPlanoMensalista(client, { weeklyFreq, mensalistaTipo, billi
   /* Valor individual manda sobre o plano, então trocar de 1x para 2x não muda o
      que ela paga — e não há mês corrente a proteger. A tela precisa dizer isso,
      senão a Inêz troca o plano esperando um reajuste que não vem. */
-  const temValorIndividual = client.monthlyValue != null;
+  const novoValorIndividual = monthlyValue !== undefined
+    ? (monthlyValue === "" || monthlyValue == null ? null : Number(monthlyValue))
+    : client.monthlyValue;
+  const temValorIndividual = novoValorIndividual != null;
   let fixouMesCorrente = null;
   if (mudouFreq && !temValorIndividual) {
     const valorAntigo = valorDoPlano(freqAntiga) || 0;
@@ -3860,6 +3886,7 @@ async function trocarPlanoMensalista(client, { weeklyFreq, mensalistaTipo, billi
     data: {
       weeklyFreq: freqNova,
       mensalistaTipo: tipoNovo,
+      ...(monthlyValue !== undefined ? { monthlyValue: novoValorIndividual } : {}),
       ...(mudouFreq ? { weeklyFreqAnterior: freqAntiga, weeklyFreqDesde: desde } : {}),
       ...(billingDay != null && billingDay !== ""
         ? { billingDay: Math.min(28, Math.max(1, parseInt(billingDay, 10) || 1)) }
@@ -3885,7 +3912,7 @@ async function trocarPlanoMensalista(client, { weeklyFreq, mensalistaTipo, billi
       valorDe: valorDoPlano(freqAntiga) || 0,
       valorPara: valorDoPlano(freqNova) || 0,
       temValorIndividual,
-      valorIndividual: client.monthlyValue ?? null,
+      valorIndividual: novoValorIndividual,
       mesCorrente: compAtual,
       valeAPartirDe: desde,
       fixouMesCorrente,
@@ -4287,23 +4314,24 @@ async function upsertClienteWa({ nome, phone, cpf, email, birthday, unit }) {
    A ficha já existe quando chegamos aqui: ela nasceu no passo do cadastro, antes
    da reserva, porque é o CPF DELA que o Sicredi usa para emitir o Pix. */
 async function createWaBooking(client, slot, { weeklyFreq, slot2Id = null }) {
+  const isAvulso = weeklyFreq === "avulso";
   const freq = Number(weeklyFreq) === 2 ? 2 : 1;
   const booking = await prisma.booking.create({
     data: {
       clientName: client.name, phone: client.phone || "", unit: slot.unit,
       date: slot.date, time: slot.time, prof: slot.prof, slotId: slot.id,
       status: "aguardando",
-      // 1ª mensalidade + taxa de matrícula (uma vez só) — ver valorPrimeiroPagamento
-      value: valorPrimeiroPagamento(freq),
-      taxaMatricula: taxaMatriculaAtual() || null,
-      paymentMethod: MARCA_MATRICULA,
+      // Se avulso, cobra apenas o valor da aula avulsa sem taxa de matrícula
+      value: isAvulso ? (Number(SETTINGS.valorAvulsa) || 40) : valorPrimeiroPagamento(freq),
+      taxaMatricula: isAvulso ? null : (taxaMatriculaAtual() || null),
+      paymentMethod: isAvulso ? "Aula Avulsa" : MARCA_MATRICULA,
       holdUntil: new Date(Date.now() + HOLD_MIN * 60_000),
     },
   });
 
   let booking2 = null;
   let slot2 = null;
-  if (freq === 2 && slot2Id && slot2Id !== slot.id) {
+  if (!isAvulso && freq === 2 && slot2Id && slot2Id !== slot.id) {
     slot2 = await prisma.slot.findUnique({ where: { id: slot2Id } });
     if (slot2 && mesmaSemana(slot2.date, slot.date) && !feriadoNoDia(slot2.date, slot2.unit)) {
       const occ2 = await occupancy(slot2.id);
@@ -4329,7 +4357,14 @@ async function createWaBooking(client, slot, { weeklyFreq, slot2Id = null }) {
 
   const atualizado = await prisma.client.update({
     where: { id: client.id },
-    data: {
+    data: isAvulso ? {
+      status: "lead",
+      matriculaStatus: "nao_aplica",
+      trialDate: slot.date,
+      plan: "avulso",
+      weeklyFreq: null,
+      unit: client.unit || slot.unit,
+    } : {
       status: "lead",
       matriculaStatus: "pendente",
       trialDate: slot.date,
@@ -4694,12 +4729,15 @@ async function handleWaMessage(msg) {
     await setConv({ step: "plano", ...(nome ? { pendingName: padronizarNome(nome) } : {}) });
     const primeiro = String(nome || "").split(" ")[0];
     const taxa = taxaMatriculaAtual();
+    const vAvulsa = Number(SETTINGS.valorAvulsa) || 40;
     const linhaPlano = (f) => taxa
       ? `*${f}x por semana* — ${moedaBR(valorDoPlano(f))}/mês (1º pagamento: ${moedaBR(valorPrimeiroPagamento(f))})`
       : `*${f}x por semana* — ${moedaBR(valorDoPlano(f))} por mês`;
     return waButtons(
       msg.from,
-      `${prefix}Prontinho${primeiro ? ", " + primeiro : ""}! 💚 Agora escolha a sua *mensalidade*:\n\n` +
+      `${prefix}Prontinho${primeiro ? ", " + primeiro : ""}! 💚 Como você quer fazer as suas aulas?\n\n` +
+      `🧺 *Aula Avulsa* — ${moedaBR(vAvulsa)} (aula única)\n` +
+      `_OBS: não devolveremos o valor da aula avulsa em caso de falta._\n\n` +
       `1️⃣ ${linhaPlano(1)}\n` +
       `2️⃣ ${linhaPlano(2)}\n\n` +
       (taxa
@@ -4707,6 +4745,7 @@ async function handleWaMessage(msg) {
           `A sua primeira aula já está inclusa. Se decidir não continuar depois dela, *devolvemos a mensalidade inteira* — só a taxa de matrícula não volta.`
         : `A sua primeira aula já entra nesse valor: você paga a 1ª mensalidade e, se decidir não continuar depois dela, devolvemos tudo.`),
       [
+        { id: "plano:avulso", title: "🧺 Aula Avulsa" },
         { id: "plano:1", title: "1x por semana" },
         { id: "plano:2", title: "2x por semana" },
       ]
@@ -4765,7 +4804,8 @@ async function handleWaMessage(msg) {
         `Me chama neste número que a gente garante a sua vaga na hora:\n📞 ${WA_ATENDENTE}`);
     }
 
-    await setConv({ step: "cobranca", bookingId: booking.id, clientId: client.id, weeklyFreq: freq, pendingName: null });
+    const isAvulso = freq === "avulso";
+    await setConv({ step: "cobranca", bookingId: booking.id, clientId: client.id, weeklyFreq: isAvulso ? null : freq, pendingName: null });
     const quandoStr = slot2 ? `${fmtSlotBR(slot)} e ${fmtSlotBR(slot2)}` : fmtSlotBR(slot);
     await waSend(msg.from, textoCobrancaReserva({
       nome: client.name,
@@ -4773,10 +4813,11 @@ async function handleWaMessage(msg) {
       quando: quandoStr,
       // A cobrança mostra as duas parcelas e o total: o Pix vem no valor cheio,
       // e o número do QR tem que bater com o que ela acabou de ler.
-      mensalidade: moedaBR(valorDoPlano(freq)),
+      mensalidade: isAvulso ? "" : moedaBR(valorDoPlano(freq)),
       taxa: booking.taxaMatricula ? moedaBR(booking.taxaMatricula) : "",
       valor: moedaBR(booking.value),
       minutos: HOLD_MIN,
+      isAvulso,
     }));
     // O código vai SOZINHO numa mensagem: assim ela copia com um toque, sem
     // arrastar junto o texto acima.
@@ -5016,6 +5057,11 @@ async function handleWaMessage(msg) {
   }
 
   if (conv.step === "plano") {
+    if (rid === "plano:avulso" || low.includes("avulso") || body.trim() === "0") {
+      await setConv({ weeklyFreq: null });
+      conv = { ...conv, weeklyFreq: null };
+      return cadastrarECobrar("avulso");
+    }
     // aceita o botão ("plano:1") ou o número digitado
     const freq = rid === "plano:2" || body.trim() === "2" ? 2
       : rid === "plano:1" || body.trim() === "1" ? 1

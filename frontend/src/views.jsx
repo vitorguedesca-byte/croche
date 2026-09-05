@@ -659,11 +659,19 @@ export function Clientes({ params }) {
   ];
   const hint = (TABS.find((t) => t[0] === tab) || [])[3];
 
-  let list = (groups[tab] || []).filter((c) =>
-    (!search || c.name.toLowerCase().includes(search.toLowerCase()) || (c.phone || "").includes(search)) &&
-    (unitF === "Todas" || c.unit === unitF) &&
-    (planF === "Todos" || (planF === "Mensalistas" ? c.plan === "mensalista" : c.plan !== "mensalista"))
-  );
+  const cleanSearch = search.trim();
+  const searchDigits = cleanSearch.replace(/\D/g, "");
+  let list = (groups[tab] || []).filter((c) => {
+    if (cleanSearch) {
+      const matchesName = (c.name || "").toLowerCase().includes(cleanSearch.toLowerCase());
+      const matchesPhone = (c.phone || "").includes(cleanSearch) || (searchDigits.length > 0 && (c.phone || "").replace(/\D/g, "").includes(searchDigits));
+      const clientCpfDigits = (c.cpf || "").replace(/\D/g, "");
+      const matchesCpf = (c.cpf || "").includes(cleanSearch) || (searchDigits.length > 0 && clientCpfDigits.includes(searchDigits));
+      if (!matchesName && !matchesPhone && !matchesCpf) return false;
+    }
+    return (unitF === "Todas" || c.unit === unitF) &&
+      (planF === "Todos" || (planF === "Mensalistas" ? c.plan === "mensalista" : c.plan !== "mensalista"));
+  });
   list = [...list].sort((a, b) => sortBy === "aulas" ? cntOf(b) - cntOf(a) : a.name.localeCompare(b.name));
 
   const resetPin = async (c) => {
@@ -731,7 +739,7 @@ export function Clientes({ params }) {
       </div>
       <div className="seg-hint">{hint}</div>
       <div className="filters">
-        <input className="grow" placeholder="🔍 Buscar por nome ou telefone..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        <input className="grow" placeholder="🔍 Buscar por nome, CPF ou telefone..." value={search} onChange={(e) => setSearch(e.target.value)} />
         <Select
           compact
           value={unitF}
@@ -788,6 +796,7 @@ export function Clientes({ params }) {
                         <span className="cli-name">{c.name}</span>
                         {tab === "ex-aluno" || c.status === "cancelado" ? <span className="badge b-danger ml">Inativa</span> : null}
                         {c.plan === "mensalista" && c.status !== "cancelado" ? <span className="badge b-ok ml">📅 {c.weeklyFreq ? `${c.weeklyFreq}x/semana` : "mensalista"}</span> : null}
+                        {c.plan === "avulso" && c.status !== "cancelado" ? <span className="badge ml" style={{ background: "rgba(180, 83, 9, 0.12)", color: "#b45309", border: "1px solid rgba(180, 83, 9, 0.3)" }}>🧺 AULA AVULSA</span> : null}
                         {c.matriculaStatus === "paga" && c.plan !== "mensalista" && c.status !== "cancelado" ? <span className="badge b-warn ml">🎟️ matrícula a concluir</span> : null}
                         {tab === "novato" ? <span className="badge b-terra ml">✨ 1ª aula</span> : null}
                         {(tab === "lead" || c.status === "lead") ? <span className="badge b-warn ml" style={{ background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba" }}>⚠️ Pagamento não realizado</span> : null}
@@ -949,6 +958,18 @@ export function Mensalistas() {
   const emAtraso = pendArr.filter((i) => i.encargos && i.encargos.atrasada);
   const previsto = mensalistas.reduce((s, c) => { const i = invOf(c); return s + (i ? i.amountCents / 100 : valorDe(c)); }, 0);
 
+  const [search, setSearch] = useState("");
+  const cleanSearch = search.trim();
+  const searchDigits = cleanSearch.replace(/\D/g, "");
+  const mensalistasFiltrados = mensalistas.filter((c) => {
+    if (!cleanSearch) return true;
+    const matchesName = (c.name || "").toLowerCase().includes(cleanSearch.toLowerCase());
+    const matchesPhone = (c.phone || "").includes(cleanSearch) || (searchDigits.length > 0 && (c.phone || "").replace(/\D/g, "").includes(searchDigits));
+    const clientCpfDigits = (c.cpf || "").replace(/\D/g, "");
+    const matchesCpf = (c.cpf || "").includes(cleanSearch) || (searchDigits.length > 0 && clientCpfDigits.includes(searchDigits));
+    return matchesName || matchesPhone || matchesCpf;
+  });
+
   return (
     <div className="panel">
       <div className="ag-toolbar">
@@ -962,6 +983,17 @@ export function Mensalistas() {
           title={ehMesAtual ? "" : "Boletos só são gerados para o mês atual"} onClick={gerarTodos}>
           🧾 Gerar boletos do mês
         </button>
+      </div>
+
+      <div className="filters" style={{ margin: "1rem 0" }}>
+        <input
+          className="grow"
+          placeholder="🔍 Buscar mensalista por nome, CPF ou telefone..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        {search && <button className="btn ghost sm" onClick={() => setSearch("")}>Limpar</button>}
+        <span className="count">{mensalistasFiltrados.length} de {mensalistas.length}</span>
       </div>
 
       <div className="fch-tot">
@@ -984,9 +1016,9 @@ export function Mensalistas() {
         </div>
       )}
 
-      {mensalistas.length ? (
+      {mensalistasFiltrados.length ? (
         <table><thead><tr><th>Aluno</th><th>Mensalidade</th><th>Vencimento</th><th>Status do mês</th><th></th></tr></thead><tbody>
-          {mensalistas.map((c) => {
+          {mensalistasFiltrados.map((c) => {
             const inv = invOf(c);
             return (
               <tr key={c.id}>
@@ -1058,7 +1090,7 @@ export function Mensalistas() {
             );
           })}
         </tbody></table>
-      ) : <div className="empty"><div className="ic">📅</div><p>Nenhum mensalista nessa competência.</p></div>}
+      ) : <div className="empty"><div className="ic">📅</div><p>{search ? "Nenhum mensalista encontrado para esta busca." : "Nenhum mensalista nessa competência."}</p></div>}
     </div>
   );
 }
