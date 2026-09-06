@@ -6,7 +6,7 @@ import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import {
   SlotCard, DayModal, ManageBooking, ClientProfile, SlotDetail, TurmaView, AlterarMensalidade, FeriadoAulas,
-  baixarMensalidade, AlterarVencimentoModal,
+  baixarMensalidade, AlterarVencimentoModal, BaixarLeadModal,
 } from "./modals.jsx";
 import {
   UNITS, STATUS, unitColor,
@@ -842,6 +842,15 @@ export function Clientes({ params }) {
                       </>
                     ) : (
                       <>
+                        {tab === "lead" && (
+                          <button
+                            className="btn sm"
+                            title="Dar baixa no pagamento da 1ª aula / matrícula"
+                            onClick={() => open(<BaixarLeadModal client={c} />)}
+                          >
+                            ✓ Baixar
+                          </button>
+                        )}
                         {c.hasPin && <button className="btn sec sm" onClick={() => resetPin(c)}>🔒 Resetar PIN</button>}
                         <button className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>Editar</button>
                         <button className="btn ghost sm" style={{ color: "var(--danger)" }} title="Inativar aluna (limpar grade e mover para Ex-Alunos)" onClick={() => inativarAluna(c)}>

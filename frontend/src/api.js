@@ -81,6 +81,7 @@ export const api = {
   updateClient: (id, data) => req("PATCH", `/api/clients/${id}`, data),
   deleteClient: (id) => req("DELETE", `/api/clients/${id}`),
   reativarClient: (id) => req("POST", `/api/clients/${id}/reativar`),
+  baixarLead: (id, data = {}) => req("POST", `/api/clients/${id}/baixa-lead`, data),
   undo: () => req("POST", "/api/undo"),
   getUndoStatus: () => req("GET", "/api/undo/status"),
 

@@ -5487,6 +5487,178 @@ app.post(
   })
 );
 
+/* Dar baixa manual em Lead (1ª aula avulsa ou matrícula/mensalidade paga por fora).
+   - Atualiza o status do cliente para "ativo" (sai da lista de Leads)
+   - Confirma a reserva e registra o pagamento
+   - Se aula avulsa: marca firstClass: true (vai para aba 1ª Aula Pagas) e cria a fatura quitada no financeiro
+   - Se mensalista: confirma matrícula e converte em mensalista
+*/
+app.post(
+  "/api/clients/:id/baixa-lead",
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const client = await prisma.client.findUnique({ where: { id } });
+    if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+
+    const dataPgto = req.body?.paymentDate || todayISO();
+    const formaPgto = req.body?.paymentMethod || "Pix";
+    const compAtualStr = competenciaAtual();
+
+    // Busca reservas associadas ao cliente
+    const bookings = await prisma.booking.findMany({
+      where: { clientName: client.name },
+      orderBy: { id: "desc" },
+    });
+
+    const isMensalista = client.plan === "mensalista" || client.matriculaStatus === "pendente" || (client.weeklyFreq && client.weeklyFreq > 0);
+    let valorFinal = req.body?.value !== undefined && req.body?.value !== null && req.body?.value !== ""
+      ? Number(req.body.value)
+      : null;
+
+    let bookingAtualizado = null;
+    let matriculaConvertida = null;
+    let reativouAula = false;
+
+    if (isMensalista) {
+      // Caso Mensalista / Matrícula
+      const valorPadrao = client.weeklyFreq === 2 ? (Number(SETTINGS.valorPlano2x) || 200) : (Number(SETTINGS.valorPlano1x) || 120);
+      if (valorFinal === null) valorFinal = valorPadrao;
+
+      // Procura reserva de matrícula ou a mais recente
+      const bkMatricula = bookings.find((b) => ehPagamentoDeMatricula(b.paymentMethod) || b.status === "aguardando") || bookings[0];
+      if (bkMatricula) {
+        bookingAtualizado = await prisma.booking.update({
+          where: { id: bkMatricula.id },
+          data: {
+            paid: true,
+            status: "confirmada",
+            paymentMethod: ehPagamentoDeMatricula(bkMatricula.paymentMethod) ? bkMatricula.paymentMethod : MARCA_MATRICULA,
+            paymentDate: dataPgto,
+            holdUntil: null,
+            absenceReason: "",
+            value: valorFinal,
+          },
+        });
+        matriculaConvertida = await registrarMatriculaPaga(bookingAtualizado);
+        await avisarMatriculaConfirmada(bookingAtualizado);
+      } else {
+        // Sem booking prévio: atualiza cliente diretamente
+        await prisma.client.update({
+          where: { id: client.id },
+          data: {
+            status: "ativo",
+            matriculaStatus: "paga",
+            matriculaAt: dataPgto,
+            plan: "mensalista",
+          },
+        });
+      }
+
+      // Garante fatura quitada no Financeiro
+      const jaExisteInv = await prisma.invoice.findFirst({
+        where: { clientId: client.id, competencia: compAtualStr },
+      });
+      if (!jaExisteInv) {
+        await prisma.invoice.create({
+          data: {
+            clientId: client.id,
+            competencia: compAtualStr,
+            amountCents: Math.round(valorFinal * 100),
+            dueDate: dataPgto,
+            status: "pago",
+            paidAt: dataPgto,
+            baixaManual: true,
+          },
+        });
+      } else if (jaExisteInv.status !== "pago") {
+        await prisma.invoice.update({
+          where: { id: jaExisteInv.id },
+          data: { status: "pago", paidAt: dataPgto, baixaManual: true },
+        });
+      }
+    } else {
+      // Caso Aula Avulsa
+      const valorPadrao = Number(SETTINGS.valorAvulsa) || 40;
+      if (valorFinal === null) {
+        valorFinal = bookings[0]?.value ? Number(bookings[0].value) : valorPadrao;
+      }
+
+      // Atualiza o cliente para ativo e firstClass: true (assim ele vai para a aba "1ª Aula (Pagas)")
+      await prisma.client.update({
+        where: { id: client.id },
+        data: {
+          status: "ativo",
+          firstClass: true,
+          matriculaStatus: "nao_aplica",
+          plan: "avulso",
+        },
+      });
+
+      // Se houver reserva da aluna:
+      const bk = bookings[0];
+      if (bk) {
+        let deveReativar = bk.status === "aguardando";
+        if (bk.status === "cancelada" && bk.date >= todayISO()) {
+          const slot = await prisma.slot.findUnique({ where: { id: bk.slotId } });
+          const occ = await occupancy(bk.slotId);
+          if (slot && occ < (slot.capacity || 1)) {
+            deveReativar = true;
+            reativouAula = true;
+          }
+        }
+
+        bookingAtualizado = await prisma.booking.update({
+          where: { id: bk.id },
+          data: {
+            paid: true,
+            status: deveReativar ? "confirmada" : bk.status,
+            paymentMethod: formaPgto,
+            paymentDate: dataPgto,
+            holdUntil: null,
+            ...(deveReativar ? { absenceReason: "" } : {}),
+            value: valorFinal,
+          },
+        });
+        await avisarMatriculaConfirmada(bookingAtualizado);
+      }
+
+      // Cria fatura quitada para constar em Recebimentos / Financeiro
+      const jaExisteInv = await prisma.invoice.findFirst({
+        where: { clientId: client.id, competencia: compAtualStr },
+      });
+      if (!jaExisteInv) {
+        await prisma.invoice.create({
+          data: {
+            clientId: client.id,
+            competencia: compAtualStr,
+            amountCents: Math.round(valorFinal * 100),
+            dueDate: dataPgto,
+            status: "pago",
+            paidAt: dataPgto,
+            baixaManual: true,
+          },
+        });
+      } else if (jaExisteInv.status !== "pago") {
+        await prisma.invoice.update({
+          where: { id: jaExisteInv.id },
+          data: { status: "pago", paidAt: dataPgto, baixaManual: true },
+        });
+      }
+    }
+
+    const clientAtualizado = await prisma.client.findUnique({ where: { id: client.id } });
+    console.log(`[baixa lead] ${client.name} (id ${client.id}) ativado com pagamento ${formaPgto} R$ ${valorFinal}.`);
+
+    res.json({
+      ok: true,
+      client: clientAtualizado,
+      booking: bookingAtualizado,
+      reativouAula,
+      message: `Baixa registrada com sucesso! ${client.name} agora está ativa.`,
+    });
+  })
+);
+
 app.delete(
   "/api/clients/:id",
   wrap(async (req, res) => {

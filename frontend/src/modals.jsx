@@ -741,6 +741,100 @@ export function PaymentRegister() {
   );
 }
 
+/* ======================= Dar baixa em Lead (1ª aula / matrícula paga por fora) ======================= */
+export function BaixarLeadModal({ client, onComplete }) {
+  const { data, run } = useStore();
+  const { close } = useModal();
+  const [busy, setBusy] = useState(false);
+
+  // Busca agendamentos associados
+  const bookings = (data?.bookings || []).filter((b) => b.clientName === client.name);
+  const isMensalista = client.plan === "mensalista" || client.matriculaStatus === "pendente" || (client.weeklyFreq && client.weeklyFreq > 0);
+
+  const valorPadrao = isMensalista
+    ? (client.weeklyFreq === 2 ? (Number(data?.meta?.valorPlano2x) || 200) : (Number(data?.meta?.valorPlano1x) || 120))
+    : (bookings[0]?.value ? Number(bookings[0].value) : (Number(data?.meta?.valorAvulsa) || 40));
+
+  const [value, setValue] = useState(valorPadrao);
+  const [method, setMethod] = useState("Pix");
+  const [pdate, setPdate] = useState(todayISO());
+
+  const bk = bookings[0];
+
+  const confirmar = async (e) => {
+    e?.preventDefault();
+    setBusy(true);
+    try {
+      const res = await run(api.baixarLead(client.id, {
+        paymentMethod: method,
+        paymentDate: pdate,
+        value: Number(value) || valorPadrao,
+      }));
+      toast(res?.message || `Baixa registrada! ${client.name} agora está ativa.`, "success");
+      close();
+      if (onComplete) onComplete(res);
+    } catch {
+      // erro exibido pelo run
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={`Dar baixa · ${client.name}`}
+      footer={
+        <>
+          <button className="btn ghost" disabled={busy} onClick={close}>Cancelar</button>
+          <button className="btn" disabled={busy} onClick={confirmar}>✓ Confirmar baixa</button>
+        </>
+      }
+    >
+      <div className="help" style={{ marginBottom: "1rem" }}>
+        Registra que a aluna realizou o pagamento por fora (dinheiro, Pix, cartão ou transferência). O cadastro será ativado, sairá de <b>Leads</b> e o valor entrará nos <b>Recebimentos</b> do mês.
+      </div>
+
+      <div style={{ background: "rgba(0,0,0,.03)", padding: ".75rem 1rem", borderRadius: "8px", marginBottom: "1rem", border: "1px solid rgba(0,0,0,.08)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: ".3rem" }}>
+          <span className="cli-sub">Tipo de entrada:</span>
+          <b>{isMensalista ? `📅 Mensalista (${client.weeklyFreq || 1}x/semana)` : "🧺 Aula Avulsa"}</b>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: ".3rem" }}>
+          <span className="cli-sub">Unidade:</span>
+          <span>{client.unit || "—"}</span>
+        </div>
+        {bk && (
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span className="cli-sub">Aula agendada:</span>
+            <span>{fmtDate(bk.date)} às {bk.time} {bk.status === "cancelada" ? "(reserva expirada no WhatsApp)" : `(${bk.status})`}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="row2">
+        <div className="field">
+          <label>Forma de pagamento</label>
+          <Select value={method} onChange={setMethod} options={FORMAS_PAGAMENTO} />
+        </div>
+        <div className="field">
+          <label>Data do pagamento</label>
+          <input type="date" value={pdate} onChange={(e) => setPdate(e.target.value)} />
+        </div>
+      </div>
+
+      <div className="field">
+        <label>Valor cobrado (R$)</label>
+        <input
+          type="number"
+          step="0.01"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+      </div>
+    </Modal>
+  );
+}
+
 /* ======================= Busca de Alunas (Combobox Autocomplete) ======================= */
 function getInitials(name) {
   if (!name) return "?";
@@ -2277,9 +2371,14 @@ export function ClientProfile({ client, initialTab }) {
                   <b style={{ display: "block", fontSize: ".95rem" }}>⚠️ Lead — Pagamento não realizado</b>
                   <span style={{ fontSize: ".84rem" }}>A aluna iniciou o agendamento mas o pagamento não foi confirmado. O acesso ao portal da aluna está bloqueado.</span>
                 </div>
-                <button className="btn wa sm" style={{ whiteSpace: "nowrap" }} onClick={() => openWa(c.phone, `Olá ${c.name}! Tudo bem? 💚 Vi que você iniciou o agendamento da sua aula de crochê na Fios que Curam mas ainda não recebemos a confirmação do pagamento. Posso te ajudar a garantir sua vaga?`)}>
-                  Cobrar no WhatsApp
-                </button>
+                <div style={{ display: "flex", gap: ".5rem", flexShrink: 0 }}>
+                  <button className="btn sm" onClick={() => open(<BaixarLeadModal client={c} />)}>
+                    ✓ Dar baixa
+                  </button>
+                  <button className="btn wa sm" style={{ whiteSpace: "nowrap" }} onClick={() => openWa(c.phone, `Olá ${c.name}! Tudo bem? 💚 Vi que você iniciou o agendamento da sua aula de crochê na Fios que Curam mas ainda não recebemos a confirmação do pagamento. Posso te ajudar a garantir sua vaga?`)}>
+                    Cobrar no WhatsApp
+                  </button>
+                </div>
               </div>
             )}
             <div className="prof-kpis">
