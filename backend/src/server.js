@@ -2078,15 +2078,34 @@ async function avisarMatriculaConfirmada(booking) {
     });
     const client = await prisma.client.findFirst({ where: { name: booking.clientName } });
     const portalUrl = client?.cpf ? `${WA_PORTAL_URL}?cpf=${client.cpf}` : WA_PORTAL_URL;
-    await waSend(booking.phone, textoMatriculaConfirmada({
-      nome: booking.clientName,
-      unidade: booking.unit,
-      quando: fmtSlotBR({ date: booking.date, time: booking.time }),
-      // a taxa gravada NA RESERVA: é o que ela pagou, não o que a tabela diz hoje
-      taxa: booking.taxaMatricula ? moedaBR(booking.taxaMatricula) : "",
-      portalUrl,
-      isAvulso,
-    }), { kind: "matricula" });
+    const quando = fmtSlotBR({ date: booking.date, time: booking.time });
+    /* Quase sempre a janela está aberta aqui: ela acabou de conversar com o bot
+       para escolher unidade, horário e CPF. Mas quem paga pelo portal horas
+       depois cai fora dela — e aí, sem template, a primeira mensagem que uma
+       aluna nova receberia da escola simplesmente não chegaria.
+
+       ATENÇÃO ao texto completo: ele tem 2189 caracteres e o limite de um
+       template é 1024. As REGRAS não cabem. Fora da janela sai a confirmação
+       curta, com o botão do portal e um convite para ela responder — e é a
+       resposta dela que abre a janela para as regras irem depois. Quem não
+       responder fica sem elas; está registrado em WaMessage para a Inêz ver. */
+    if (await janelaAbertaPara(booking.phone)) {
+      await waSend(booking.phone, textoMatriculaConfirmada({
+        nome: booking.clientName,
+        unidade: booking.unit,
+        quando,
+        // a taxa gravada NA RESERVA: é o que ela pagou, não o que a tabela diz hoje
+        taxa: booking.taxaMatricula ? moedaBR(booking.taxaMatricula) : "",
+        portalUrl,
+        isAvulso,
+      }), { kind: "matricula" });
+    } else {
+      const nome = isAvulso ? "aula_avulsa_confirmada" : "matricula_confirmada";
+      const r = await sendWaTemplate(booking.phone, nome, {
+        body: [primeiroNome(booking.clientName) || "aluna", booking.unit, quando],
+      });
+      await registrarWaEnvio(r, { phone: booking.phone, kind: nome });
+    }
   } catch (e) {
     console.warn(`[wa] confirmação da matrícula/aula de ${booking.clientName} não saiu: ${e.message}`);
   }
@@ -3312,7 +3331,18 @@ async function rodadaAniversariantes() {
 
   for (const c of aniversariantesHoje) {
     try {
-      await waSend(c.phone, textoAniversario({ nome: c.name }), { kind: "aniversario" });
+      /* Parabéns é a mensagem MAIS provável de pegar a janela fechada: não há
+         nenhuma transação por trás, é a escola falando do nada. Por isso o
+         template `aniversario` foi submetido como MARKETING, e não UTILITY —
+         felicitação não é transacional, e classificar errado é pedir recusa. */
+      if (await janelaAbertaPara(c.phone)) {
+        await waSend(c.phone, textoAniversario({ nome: c.name }), { kind: "aniversario" });
+      } else {
+        const r = await sendWaTemplate(c.phone, "aniversario", {
+          body: [primeiroNome(c.name) || "aluna"],
+        });
+        await registrarWaEnvio(r, { phone: c.phone, kind: "aniversario" });
+      }
       await prisma.client.update({
         where: { id: c.id },
         data: { aniversarioMsgAt: hoje },
