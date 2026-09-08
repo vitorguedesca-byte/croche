@@ -2100,7 +2100,7 @@ async function avisarMatriculaConfirmada(booking) {
         isAvulso,
       }), { kind: "matricula" });
     } else {
-      const nome = isAvulso ? "aula_avulsa_confirmada" : "matricula_confirmada";
+      const nome = isAvulso ? "pagamento_aula_avulsa" : "matricula_confirmada";
       const r = await sendWaTemplate(booking.phone, nome, {
         body: [primeiroNome(booking.clientName) || "aluna", booking.unit, quando],
       });
@@ -2322,7 +2322,11 @@ async function confirmarPagamentoPorTxid(txid) {
       nome: dona?.name,
       valor: moedaBR((pass.amountCents || 0) / 100),
     }), {
-      name: "aula_extra_confirmada",
+      /* Nome novo (08/09/2026): a Meta reclassificou `aula_extra_confirmada`
+         para MARKETING por causa do convite para marcar, e depois de apagado
+         o nome fica preso — não aceita voltar para UTILITY. Nome novo, texto
+         neutro, categoria certa. Não renomear de volta. */
+      name: "pagamento_aula_extra",
       // sem "R$": o cifrao mora no corpo do template, igual aos de mensalidade
       body: [primeiroNome(dona?.name) || "aluna", reaisBR((pass.amountCents || 0) / 100)],
     });
