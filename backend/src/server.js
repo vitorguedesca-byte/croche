@@ -2302,7 +2302,11 @@ async function confirmarPagamentoPorTxid(txid) {
     await avisarPagamento(dona, textoAulaExtraPaga({
       nome: dona?.name,
       valor: moedaBR((pass.amountCents || 0) / 100),
-    }));
+    }), {
+      name: "aula_extra_confirmada",
+      // sem "R$": o cifrao mora no corpo do template, igual aos de mensalidade
+      body: [primeiroNome(dona?.name) || "aluna", reaisBR((pass.amountCents || 0) / 100)],
+    });
     return true;
   }
 
@@ -2328,7 +2332,10 @@ async function confirmarPagamentoPorTxid(txid) {
       nome: dona?.name,
       mes: compPorExtenso(invoice.competencia),
       valor: moedaBR(pagoCents / 100),
-    }));
+    }), {
+      name: "pagamento_confirmado",
+      body: [primeiroNome(dona?.name) || "aluna", compPorExtenso(invoice.competencia), reaisBR(pagoCents / 100)],
+    });
     return true;
   }
   return false;
@@ -2339,12 +2346,21 @@ async function confirmarPagamentoPorTxid(txid) {
    quem chamou: a baixa do pagamento já aconteceu no banco quando chegamos aqui,
    e uma falha de mensagem não pode desfazer dinheiro que entrou. Foi por isso
    que a confirmação da matrícula ganhou try/catch, e vale igual para estas. */
-async function avisarPagamento(client, texto) {
+async function avisarPagamento(client, texto, template) {
   if (!waConfigured() || !client?.phone) return;
   try {
-    await waSend(client.phone, texto, { kind: "pagamento" });
+    /* Mesma regra da cobrança: quem paga por Pix quase nunca está com a janela
+       de 24h aberta — ela pagou pelo portal, não conversando aqui. Em 08/09/2026
+       as duas únicas confirmações do dia falharam com 131047 e ninguém soube.
+       Com a janela fechada vai template; sem template, não vai nada. */
+    if (await janelaAbertaPara(client.phone)) {
+      await waSend(client.phone, texto, { kind: "pagamento" });
+      return;
+    }
+    const r = await sendWaTemplate(client.phone, template.name, { body: template.body });
+    await registrarWaEnvio(r, { phone: client.phone, kind: template.name });
   } catch (e) {
-    console.warn(`[wa] confirmação de pagamento de ${client.name} não saiu: ${e.message}`);
+    console.warn(`[wa] confirmação de pagamento de ${client.name} não saiu: ${e.message}`, e.body?.error?.message || "");
   }
 }
 
