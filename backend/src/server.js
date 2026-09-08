@@ -66,6 +66,7 @@ import {
   textoMensalidadePaga,
   textoAulaExtraPaga,
   textoAniversario,
+  textoMaterialPrimeiraAula,
 } from "./textosEscola.js";
 import { sicrediConfigured, sicrediMissing, createCharge, getCharge, isPaidStatus, extractPix } from "./sicredi.js";
 import { waConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, normalizePhone } from "./wa.js";
@@ -2062,6 +2063,22 @@ async function registrarMatriculaPaga(booking) {
 
    Só fala com quem veio pelo WhatsApp: sem telefone, ou sem reserva segurada,
    não há conversa aberta e o envio sai em silêncio. */
+/* O texto não tem variável nenhuma, então o template é idêntico ao texto livre
+   — a aluna recebe a mesma coisa dentro ou fora da janela de 24h. */
+async function enviarMaterialPrimeiraAula(phone) {
+  if (!phone) return;
+  try {
+    if (await janelaAbertaPara(phone)) {
+      await waSend(phone, textoMaterialPrimeiraAula(), { kind: "material" });
+      return;
+    }
+    const r = await sendWaTemplate(phone, "material_primeira_aula", {});
+    await registrarWaEnvio(r, { phone, kind: "material_primeira_aula" });
+  } catch (e) {
+    console.warn(`[wa] material da primeira aula não saiu para ${phone}: ${e.message}`, e.body?.error?.message || "");
+  }
+}
+
 async function avisarMatriculaConfirmada(booking) {
   if (!waConfigured() || !booking?.phone) return;
   const isMatricula = ehPagamentoDeMatricula(booking.paymentMethod);
@@ -2106,6 +2123,16 @@ async function avisarMatriculaConfirmada(booking) {
       });
       await registrarWaEnvio(r, { phone: booking.phone, kind: nome });
     }
+    /* Material da primeira aula, em mensagem separada.
+
+       Sai DEPOIS do pagamento, e não no fim do cadastro (Vitor, 08/09/2026):
+       no fim do cadastro ela ainda tem uma reserva correndo contra o relógio, e
+       o código do Pix é mandado sozinho de propósito, para ela copiar com um
+       toque — qualquer mensagem depois dele empurra o código para cima.
+
+       Vale para a avulsa também: ela também tem uma primeira aula para a qual
+       precisa levar material. */
+    await enviarMaterialPrimeiraAula(booking.phone);
   } catch (e) {
     console.warn(`[wa] confirmação da matrícula/aula de ${booking.clientName} não saiu: ${e.message}`);
   }
@@ -3213,7 +3240,10 @@ async function rodadaAvisosMensalidade() {
           valor: moedaBR(inv.amountCents / 100),
           vencimento: fmtDiaBR(inv.dueDate),
         }), {
-          name: "mensalidade_a_vencer",
+          /* Nome novo (08/09/2026): template pendente não aceita edição
+             ("só podem ser editados se tiverem sido rejeitados"), e a frase do
+             atendente precisava entrar. `mensalidade_a_vencer` ficou órfão. */
+          name: "lembrete_mensalidade",
           body: [primeiroNome(client.name), mes, reaisBR(inv.amountCents / 100), fmtDiaBR(inv.dueDate)],
         });
         /* Só marca se a mensagem saiu de fato. E a marca é provisória: se o
@@ -3231,7 +3261,7 @@ async function rodadaAvisosMensalidade() {
         const saiu = await avisoComPix(client, inv, textoMensalidadeEmAtraso({
           nome: client.name, mes, dias, valor: moedaBR(total),
         }), {
-          name: "mensalidade_em_atraso",
+          name: "cobranca_mensalidade",
           body: [primeiroNome(client.name), mes, String(dias), reaisBR(total)],
         });
         if (saiu) await prisma.invoice.update({ where: { id: inv.id }, data: { avisoAtrasoAt: hoje } });
@@ -4342,8 +4372,8 @@ async function processarStatusWa(statuses) {
 const MAX_TENTATIVAS_AVISO = 3;
 async function liberarReenvioDaCobranca(reg) {
   const campo =
-    reg.kind === "mensalidade_a_vencer" ? "avisoAVencerAt" :
-    reg.kind === "mensalidade_em_atraso" ? "avisoAtrasoAt" : null;
+    reg.kind === "lembrete_mensalidade" ? "avisoAVencerAt" :
+    reg.kind === "cobranca_mensalidade" ? "avisoAtrasoAt" : null;
   if (!campo || !reg.invoiceId) return;
   const tentativas = await prisma.waMessage.count({ where: { invoiceId: reg.invoiceId, kind: reg.kind } });
   if (tentativas >= MAX_TENTATIVAS_AVISO) {

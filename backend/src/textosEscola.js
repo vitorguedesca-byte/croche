@@ -248,7 +248,9 @@ export const textoMensalidadeAVencer = ({ nome, mes, valor, vencimento }) =>
 💰 ${valor}
 📅 Vence em ${vencimento}
 
-Pagando até o vencimento você não paga multa nem juros. O Pix está logo abaixo — qualquer dúvida, é só responder por aqui. 🧶`;
+Pagando até o vencimento você não paga multa nem juros. O Pix está logo abaixo.
+
+Se algum valor ou data acima estiver diferente do que você combinou, responda *atendente* que uma pessoa da equipe assume a conversa. 🧶`;
 
 // Um dia depois do vencimento. Direto, mas sem constrangimento.
 export const textoMensalidadeEmAtraso = ({ nome, mes, valor, dias }) =>
@@ -256,7 +258,9 @@ export const textoMensalidadeEmAtraso = ({ nome, mes, valor, dias }) =>
 
 💰 Total com multa e juros: ${valor}
 
-Segue o Pix atualizado logo abaixo. Se já tiver pago, me avisa por aqui que eu confiro. 💚`;
+Segue o Pix atualizado logo abaixo. Se já tiver pago, me avisa por aqui que eu confiro.
+
+Se algum valor ou data acima estiver diferente do que você combinou, responda *atendente* que uma pessoa da equipe assume a conversa. 💚`;
 
 /* ===================== TODO PAGAMENTO É CONFIRMADO =====================
    Vitor, 02/09/2026. Até esta data, só a MATRÍCULA avisava a aluna quando o Pix
@@ -296,3 +300,21 @@ export const textoAniversario = ({ nome }) =>
 
 Toda a equipe da Fios que Curam deseja um dia maravilhoso e muito abençoado pra você! Que este novo ciclo venha repleto de saúde, paz, muitas alegrias e lindos projetos de crochê. É um prazer enorme ter você com a gente! ✨🧶`;
 
+
+/* Material da primeira aula. Texto da Inêz (08/09/2026), com os erros de
+   digitação do original corrigidos — é mensagem que vai para a aluna.
+
+   Fica em uma mensagem só e sem variável nenhuma: não depende de nada da ficha,
+   e assim cabe num template se um dia precisar sair fora da janela de 24h. */
+export const textoMaterialPrimeiraAula = () =>
+`Parte do aprendizado é saber o que comprar para a peça que você vai produzir.
+
+Para a compra ser certeira, dentro da nossa metodologia pedimos sempre um *fio de malha premium 35 mm* e uma *agulha número 8*.
+
+A segunda opção é um *fio de malha premium 25 mm* e uma *agulha número 7*.
+
+Fica bem em conta, fique tranquila. 💚
+
+Se você já faz crochê e tem material em casa, pode trazer o que tiver — mas comprar dentro dessas especificações é a sua melhor opção.
+
+Até mais! 🧶`;
