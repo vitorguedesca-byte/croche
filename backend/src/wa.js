@@ -147,18 +147,18 @@ export function sendWaTemplate(to, name, { lang = "pt_BR", header = [], body = [
   });
 }
 
-/* Tenta enviar texto livre; se a janela de 24h estiver fechada, cai para o template.
-   Evita espalhar try/catch pelo server.js toda vez que o sistema fala primeiro. */
-export async function sendWaTextOrTemplate(to, text, fallback) {
-  try {
-    return await sendWaText(to, text);
-  } catch (e) {
-    const code = e?.body?.error?.code;
-    // 131047 = fora da janela; 131026 = número não recebe mensagem livre
-    if (!fallback || (code !== 131047 && code !== 131026)) throw e;
-    return sendWaTemplate(to, fallback.name, fallback);
-  }
-}
+/* NÃO EXISTE MAIS: `sendWaTextOrTemplate` — removida em 08/09/2026.
+
+   Ela tentava o texto livre e só caía para o template dentro do `catch`,
+   apostando que a Meta devolveria 131047 na hora quando a janela estivesse
+   fechada. **Não devolve.** A Meta responde 200, entrega um id de mensagem e
+   descarta o envio depois, de forma assíncrona — o erro só aparece no webhook
+   de status, que ninguém lia. Resultado: o `catch` nunca rodava, o template
+   nunca era usado, e a cobrança sumia sem deixar rastro.
+
+   Custou 88 mensalidades de setembro/2026 marcadas como avisadas sem uma única
+   aluna ter recebido. Quem a escola inicia MANDA TEMPLATE, ponto — é o que
+   `sendWaTemplate` faz. Não reintroduzir o "tenta texto primeiro". */
 
 // Lista os templates da conta e o status de aprovação de cada um.
 export function listWaTemplates() {
@@ -173,6 +173,33 @@ export function listWaTemplates() {
 export function createWaTemplate({ name, category = "UTILITY", language = "pt_BR", components }) {
   if (!WABA_ID) return Promise.reject(new Error("WA_WABA_ID não configurado"));
   return graph("POST", `/${WABA_ID}/message_templates`, { name, category, language, components });
+}
+
+/* Extrai os avisos de ENTREGA do payload do webhook.
+
+   É a única fonte de verdade sobre a mensagem ter chegado: a resposta do envio
+   só diz que a Meta aceitou. Cada item traz o `wamid` que o envio devolveu, o
+   estado novo (sent → delivered → read, ou failed) e, quando falha, o código do
+   erro — 131047 "Re-engagement message" é o de fora da janela de 24h.
+
+   Um mesmo POST pode trazer status de várias mensagens, por isso devolve lista. */
+export function parseStatuses(body) {
+  try {
+    const sts = body?.entry?.[0]?.changes?.[0]?.value?.statuses;
+    if (!Array.isArray(sts)) return [];
+    return sts.map((s) => {
+      const err = s.errors?.[0];
+      return {
+        wamid: s.id,
+        status: s.status, // sent | delivered | read | failed
+        to: s.recipient_id || "",
+        errorCode: err?.code ?? null,
+        errorMsg: err ? String(err.title || err.message || "").slice(0, 400) : null,
+      };
+    });
+  } catch {
+    return [];
+  }
 }
 
 // Extrai a primeira mensagem recebida de um payload de webhook do WhatsApp.

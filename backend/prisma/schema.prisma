@@ -155,9 +155,15 @@ model Invoice {
   semPix        Boolean  @default(false)
   /* Quando cada aviso automático de WhatsApp saiu ('YYYY-MM-DD'). São duas datas
      e não um booleano porque o que interessa é *quando* falamos com a aluna —
-     e porque assim o reenvio acidental fica visível no banco. */
-  avisoAVencerAt String? @db.VarChar(10) // lembrete amigável, 2 dias antes
-  avisoAtrasoAt  String? @db.VarChar(10) // cobrança, 1 dia depois do vencimento
+     e porque assim o reenvio acidental fica visível no banco.
+
+     Os prazos moram em AVISO_ANTES / AVISO_ATRASO no server.js — conferir lá
+     antes de acreditar em número escrito aqui. Hoje: 3 e 2.
+
+     A marca é PROVISÓRIA. Se o webhook de status disser que a mensagem não foi
+     entregue, ela é apagada e a rodada seguinte tenta de novo (até 3 vezes). */
+  avisoAVencerAt String? @db.VarChar(10) // lembrete amigável, no dia exato de AVISO_ANTES dias antes
+  avisoAtrasoAt  String? @db.VarChar(10) // cobrança, a partir de AVISO_ATRASO dias de atraso
   createdAt     DateTime @default(now())
 
   @@index([clientId])
@@ -378,4 +384,36 @@ model Settings {
      cada aluna é Booking.taxaMatricula — mudar este valor não reescreve o
      passado. */
   taxaMatricula    Float  @default(20)
+}
+
+/* Toda mensagem que a ESCOLA inicia, com o que a Meta respondeu DEPOIS.
+
+   Existe porque "a API aceitou" não é "a aluna recebeu". Fora da janela de 24h
+   a Meta responde 200, devolve um id de mensagem e descarta o envio em
+   silêncio — o resultado real só chega minutos depois, no webhook de status.
+   Sem esta tabela a escola fica cega, e foi exatamente o que aconteceu: em
+   07/09/2026 saíram 88 cobranças de setembro, todas marcadas como avisadas no
+   banco, e nenhuma aluna recebeu. O log dizia "respondido para" nas 88.
+
+   Só registra o que a escola inicia. Resposta dentro da conversa não entra
+   aqui: aquilo a Meta entrega sempre, e encher a tabela com isso só esconderia
+   a falha que interessa. */
+model WaMessage {
+  id        Int      @id @default(autoincrement())
+  wamid     String   @unique @db.VarChar(160) // id da mensagem na Meta ("wamid.HBg...")
+  phone     String   @db.VarChar(20)
+  /* De onde partiu: 'mensalidade_a_vencer' | 'mensalidade_em_atraso' | 'pix'
+     | 'matricula' | 'pagamento' | 'aniversario' | 'livre'. */
+  kind      String   @db.VarChar(40)
+  invoiceId Int? // mensalidade a que o aviso se refere, quando for cobrança
+  // enviado (só aceito pela Meta) | entregue | lido | falhou
+  status    String   @default("enviado") @db.VarChar(20)
+  errorCode Int? // 131047 = fora da janela de 24h, o caso mais comum
+  errorMsg  String?  @db.VarChar(400)
+  sentAt    DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([phone])
+  @@index([invoiceId])
+  @@index([status])
 }

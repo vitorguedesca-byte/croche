@@ -39,6 +39,7 @@ import {
   tipoMensalista,
   podeReplicarMensalista,
   mesmaSemana,
+  diasEntreISO,
 } from "./regrasAula.js";
 import {
   anosDoCalendario,
@@ -67,7 +68,7 @@ import {
   textoAniversario,
 } from "./textosEscola.js";
 import { sicrediConfigured, sicrediMissing, createCharge, getCharge, isPaidStatus, extractPix } from "./sicredi.js";
-import { waConfigured, waVerify, sendWaText, sendWaTextOrTemplate, sendWaButtons, sendWaList, parseIncoming, normalizePhone } from "./wa.js";
+import { waConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, normalizePhone } from "./wa.js";
 import {
   CONVERSA_EXPIRA_H,
   conversaExpirou,
@@ -2085,7 +2086,7 @@ async function avisarMatriculaConfirmada(booking) {
       taxa: booking.taxaMatricula ? moedaBR(booking.taxaMatricula) : "",
       portalUrl,
       isAvulso,
-    }));
+    }), { kind: "matricula" });
   } catch (e) {
     console.warn(`[wa] confirmação da matrícula/aula de ${booking.clientName} não saiu: ${e.message}`);
   }
@@ -2341,7 +2342,7 @@ async function confirmarPagamentoPorTxid(txid) {
 async function avisarPagamento(client, texto) {
   if (!waConfigured() || !client?.phone) return;
   try {
-    await waSend(client.phone, texto);
+    await waSend(client.phone, texto, { kind: "pagamento" });
   } catch (e) {
     console.warn(`[wa] confirmação de pagamento de ${client.name} não saiu: ${e.message}`);
   }
@@ -3010,11 +3011,19 @@ setTimeout(dispararRodada, 15_000); // e uma vez no boot, já com o banco de pé
 
    Dois envios, e só dois, por mensalidade:
 
-   1. LEMBRETE, AVISO_ANTES dias ANTES do vencimento. É lembrete, não cobrança:
-      o tom é de quem avisa para a pessoa não pagar multa à toa. Foi assim que a
-      Inêz pediu — "não como se fosse uma cobrança".
-   2. COBRANÇA, AVISO_ATRASO dia DEPOIS do vencimento, já com multa e juros na
+   1. LEMBRETE, no dia EXATO de AVISO_ANTES dias antes do vencimento. É
+      lembrete, não cobrança: o tom é de quem avisa para a pessoa não pagar
+      multa à toa. Foi assim que a Inêz pediu — "não como se fosse uma cobrança".
+   2. COBRANÇA, A PARTIR de AVISO_ATRASO dias de atraso, já com multa e juros na
       conta e o Pix reemitido pelo valor novo.
+
+   Os dois NÃO são simétricos, e é de propósito. O lembrete tem data única
+   (`hoje === vencimento - AVISO_ANTES`): se a rodada não rodar naquele dia —
+   servidor fora do ar, chave desligada, dia inteiro fora da janela de silêncio
+   — aquele lembrete se perde, porque no dia seguinte a condição já é falsa.
+   Avisar "faltam 3 dias" com 2 dias de antecedência seria mentira, então
+   perder é melhor do que corrigir. Já a cobrança usa `dias >= AVISO_ATRASO` e
+   se recupera sozinha: sai na primeira rodada que encontrar o atraso.
 
    As datas de envio ficam gravadas na própria mensalidade (avisoAVencerAt /
    avisoAtrasoAt): é o que impede a rodada de repetir o recado a cada hora, e
@@ -3022,8 +3031,19 @@ setTimeout(dispararRodada, 15_000); // e uma vez no boot, já com o banco de pé
 
    Mensalidade marcada como "sem Pix" (baixa manual no mês anterior) fica FORA
    dos dois: quem acerta por fora não recebe cobrança automática. */
-const AVISO_ANTES = 3;  // dias antes do vencimento
-const AVISO_ATRASO = 2; // dias depois do vencimento
+const AVISO_ANTES = 3;  // dias antes do vencimento (dia exato)
+const AVISO_ATRASO = 2; // a partir de quantos dias de atraso
+
+/* Dias de atraso da mensalidade, contados no calendário e SEM passar pela conta
+   de multa e juros.
+
+   Existe separado de propósito. O atraso vinha de `comEncargos().encargos.dias`,
+   que cai em `semEncargos` — e devolve `dias: 0` fixo — quando a chave
+   `cobrarEncargos` está desligada. Com `dias` sempre 0, `dias >= AVISO_ATRASO`
+   nunca era verdade: desligar multa e juros DESLIGAVA a cobrança de atraso
+   inteira, em silêncio. São duas decisões diferentes (quanto se cobra × quando
+   se fala com a aluna) e agora são dois cálculos diferentes. */
+const diasDeAtraso = (inv, hoje = todayISO()) => Math.max(0, diasEntreISO(inv.dueDate, hoje));
 
 /* ---------- HORÁRIO DAS MENSAGENS QUE O SISTEMA INICIA ----------
 
@@ -3041,32 +3061,88 @@ const SILENCIO_ATE = 20; // noite: nada depois das 20h
 const horaBR = () => Number(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo", hour: "2-digit", hour12: false }));
 const podeMandarAgora = () => { const h = horaBR(); return h >= SILENCIO_DE && h < SILENCIO_ATE; };
 
-/* `fallback` é o template aprovado equivalente ao texto. Aviso de mensalidade é
-   mensagem que a ESCOLA inicia, quase sempre com a janela de 24h fechada — sem
-   template a Meta simplesmente não entrega. O Pix vai depois, em mensagem
-   separada, e essa só sai se a janela estiver aberta; fora dela, o botão do
-   template leva a aluna ao portal, onde o QR está. */
-async function avisoComPix(client, inv, texto, fallback) {
+/* ---------- A JANELA DE 24h, MEDIDA EM VEZ DE ADIVINHADA ----------
+
+   Texto livre só é entregue dentro da janela de 24h aberta pela última mensagem
+   DELA. Fora dela, a Meta responde 200, devolve um id e **descarta o envio em
+   silêncio** — não existe erro para capturar. Por isso a decisão "texto ou
+   template" é tomada ANTES de mandar, olhando o relógio, e não depois, no
+   `catch` de um erro que nunca chega. Ver wa.js, no lugar onde morava
+   `sendWaTextOrTemplate`.
+
+   O relógio é o `lastInboundAt` da conversa, o mesmo que a Meta usa.
+
+   O telefone da ficha e o wa_id quase nunca são iguais: a ficha guarda o que a
+   Inêz digitou ("(31) 99966-2684") e a Meta entrega "5531999662684", às vezes
+   sem o 9. A comparação é pela CHAVE — DDD + os 8 últimos dígitos, que é o que
+   os dois formatos sempre têm em comum. */
+const chaveTelefone = (t) => {
+  let d = String(t || "").replace(/\D/g, "");
+  if (d.startsWith("55") && d.length >= 12) d = d.slice(2);
+  return d.length >= 10 ? d.slice(0, 2) + d.slice(-8) : "";
+};
+async function janelaAbertaPara(phone) {
+  const chave = chaveTelefone(phone);
+  if (!chave) return false;
+  const convs = await prisma.waConversation.findMany({
+    where: { lastInboundAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
+    select: { phone: true },
+  });
+  return convs.some((c) => chaveTelefone(c.phone) === chave);
+}
+
+/* Guarda o envio para o webhook de status poder dizer, depois, se chegou.
+   Nunca derruba quem chamou: perder o registro é ruim, perder a mensagem é
+   pior — e a mensagem já saiu quando chegamos aqui. */
+async function registrarWaEnvio(resp, { phone, kind, invoiceId = null }) {
+  const wamid = resp?.messages?.[0]?.id;
+  if (!wamid) return null;
   try {
-    await sendWaTextOrTemplate(client.phone, texto, fallback);
+    return await prisma.waMessage.create({
+      data: { wamid, phone: String(phone || "").slice(0, 20), kind, invoiceId },
+    });
   } catch (e) {
-    console.warn(`[mensalidade wa] ${client.name}: ${e.message}`);
-    return;
+    console.warn(`[wa registro] ${kind} para ${phone}: ${e.message}`);
+    return null;
   }
+}
+
+/* `template` é o template aprovado equivalente ao texto: { name, body }.
+
+   Aviso de mensalidade é mensagem que a ESCOLA inicia, quase sempre com a
+   janela fechada — e fora dela só template é entregue. Com a janela aberta o
+   texto livre é melhor (mais natural, e não gasta template), então a escolha é
+   feita pelo relógio, uma vez, aqui em cima. */
+async function avisoComPix(client, inv, texto, template) {
+  const aberta = await janelaAbertaPara(client.phone);
+  try {
+    const r = aberta
+      ? await sendWaText(client.phone, texto)
+      : await sendWaTemplate(client.phone, template.name, { body: template.body });
+    await registrarWaEnvio(r, { phone: client.phone, kind: template.name, invoiceId: inv.id });
+  } catch (e) {
+    console.warn(`[mensalidade wa] ${client.name} (${inv.competencia}): ${e.message}`, e.body?.error?.message || "");
+    return false; // não saiu: quem chamou NÃO pode marcar a mensalidade como avisada
+  }
+  /* Daqui para baixo é texto livre e não cabe em template: com a janela fechada
+     seria descartado em silêncio, igual ao resto. Fora dela a aluna alcança o
+     QR pelo botão do template, que leva ao portal. */
+  if (!aberta) return true;
   /* O QR só vai junto se existir E estiver cobrando o valor certo. Um Pix
      emitido antes da multa cobraria menos do que a conta escrita acima dele —
      mandar isso é pior do que não mandar código nenhum. */
   try {
     const atual = await pixPagavelDaMensalidade(inv);
     if (atual?.pixCode) {
-      await waSend(client.phone, "Segue o Pix copia-e-cola 👇");
-      await waSend(client.phone, atual.pixCode);
-      return;
+      await waSend(client.phone, "Segue o Pix copia-e-cola 👇", { kind: "pix", invoiceId: inv.id });
+      await waSend(client.phone, atual.pixCode, { kind: "pix", invoiceId: inv.id });
+      return true;
     }
   } catch (e) {
     console.warn(`[mensalidade wa] Pix de ${client.name} (${inv.competencia}) não saiu: ${e.message}`);
   }
-  await waSend(client.phone, "Me avisa por aqui que eu te mando o Pix atualizado. 💚");
+  await waSend(client.phone, "Me avisa por aqui que eu te mando o Pix atualizado. 💚", { kind: "pix", invoiceId: inv.id });
+  return true;
 }
 
 let ultimoDiaAvisos = null;
@@ -3093,7 +3169,7 @@ async function rodadaAvisosMensalidade() {
     const mes = compPorExtenso(inv.competencia);
     try {
       if (!inv.avisoAVencerAt && hoje === addDays(inv.dueDate, -AVISO_ANTES)) {
-        await avisoComPix(client, inv, textoMensalidadeAVencer({
+        const saiu = await avisoComPix(client, inv, textoMensalidadeAVencer({
           nome: client.name, mes,
           valor: moedaBR(inv.amountCents / 100),
           vencimento: fmtDiaBR(inv.dueDate),
@@ -3101,19 +3177,25 @@ async function rodadaAvisosMensalidade() {
           name: "mensalidade_a_vencer",
           body: [primeiroNome(client.name), mes, reaisBR(inv.amountCents / 100), fmtDiaBR(inv.dueDate)],
         });
-        await prisma.invoice.update({ where: { id: inv.id }, data: { avisoAVencerAt: hoje } });
+        /* Só marca se a mensagem saiu de fato. E a marca é provisória: se o
+           webhook de status disser que não foi entregue, liberarReenvioDaCobranca
+           apaga isto e a rodada de amanhã tenta de novo. */
+        if (saiu) await prisma.invoice.update({ where: { id: inv.id }, data: { avisoAVencerAt: hoje } });
         continue;
       }
-      const dias = comEnc.encargos?.dias || 0;
+      /* O atraso decide SE fala; os encargos decidem QUANTO cobra. Com a chave
+         de encargos desligada o total é o valor original — mas a aluna continua
+         sendo avisada de que a mensalidade venceu. */
+      const dias = diasDeAtraso(inv, hoje);
       if (!inv.avisoAtrasoAt && dias >= AVISO_ATRASO) {
         const total = comEnc.encargos?.total ?? inv.amountCents / 100;
-        await avisoComPix(client, inv, textoMensalidadeEmAtraso({
+        const saiu = await avisoComPix(client, inv, textoMensalidadeEmAtraso({
           nome: client.name, mes, dias, valor: moedaBR(total),
         }), {
           name: "mensalidade_em_atraso",
           body: [primeiroNome(client.name), mes, String(dias), reaisBR(total)],
         });
-        await prisma.invoice.update({ where: { id: inv.id }, data: { avisoAtrasoAt: hoje } });
+        if (saiu) await prisma.invoice.update({ where: { id: inv.id }, data: { avisoAtrasoAt: hoje } });
       }
     } catch (e) {
       console.warn(`[mensalidade wa] ${client.name} (${inv.competencia}): ${e.message}`);
@@ -3214,7 +3296,7 @@ async function rodadaAniversariantes() {
 
   for (const c of aniversariantesHoje) {
     try {
-      await waSend(c.phone, textoAniversario({ nome: c.name }));
+      await waSend(c.phone, textoAniversario({ nome: c.name }), { kind: "aniversario" });
       await prisma.client.update({
         where: { id: c.id },
         data: { aniversarioMsgAt: hoje },
@@ -4166,11 +4248,69 @@ app.get("/api/wa/webhook", (req, res) => {
   res.sendStatus(403);
 });
 
+/* ---------- ENTREGA: o que a Meta conta DEPOIS ----------
+
+   A resposta do envio só diz que a chamada foi aceita. Se a mensagem chegou,
+   quem conta é este webhook, minutos depois. Até 08/09/2026 esses avisos eram
+   descartados aqui sem uma linha de log — foi por isso que 88 cobranças de
+   setembro passaram por entregues sem nunca terem saído.
+
+   `sent` → `delivered` → `read` é a escada normal; `failed` traz o código do
+   erro (131047 = fora da janela de 24h). */
+const ORDEM_ENTREGA = { enviado: 0, entregue: 1, lido: 2, falhou: 3 };
+const NOME_ENTREGA = { sent: "enviado", delivered: "entregue", read: "lido", failed: "falhou" };
+
+async function processarStatusWa(statuses) {
+  for (const s of statuses) {
+    if (!s.wamid) continue;
+    const reg = await prisma.waMessage.findUnique({ where: { wamid: s.wamid } });
+    if (!reg) continue; // resposta dentro da conversa: não acompanhamos
+    const novo = NOME_ENTREGA[s.status] || s.status;
+    /* Os avisos chegam fora de ordem e repetidos. "Entregue" não pode voltar
+       para "enviado" — mas "falhou" sempre vale, venha quando vier. */
+    if (novo !== "falhou" && (ORDEM_ENTREGA[novo] ?? 0) <= (ORDEM_ENTREGA[reg.status] ?? 0)) continue;
+    await prisma.waMessage.update({
+      where: { wamid: s.wamid },
+      data: { status: novo, errorCode: s.errorCode, errorMsg: s.errorMsg },
+    });
+    if (novo === "falhou") {
+      console.warn(`[wa entrega] FALHOU ${reg.kind} para ${reg.phone} — ${s.errorCode || "?"} ${s.errorMsg || ""}`);
+      await liberarReenvioDaCobranca(reg);
+    } else if (novo === "entregue") {
+      console.log(`[wa entrega] ${reg.kind} para ${reg.phone}: entregue.`);
+    }
+  }
+}
+
+/* A cobrança não chegou: apaga a marca de "avisada" na mensalidade para a
+   rodada de amanhã tentar de novo. A marca existe para a escola não repetir o
+   recado — e repetir um recado que ninguém recebeu não é repetir.
+
+   Para na 3ª tentativa. Número errado não pode virar cobrança diária, e cada
+   template é pago; passado esse ponto a falha fica registrada em WaMessage,
+   para a escola resolver na mão. */
+const MAX_TENTATIVAS_AVISO = 3;
+async function liberarReenvioDaCobranca(reg) {
+  const campo =
+    reg.kind === "mensalidade_a_vencer" ? "avisoAVencerAt" :
+    reg.kind === "mensalidade_em_atraso" ? "avisoAtrasoAt" : null;
+  if (!campo || !reg.invoiceId) return;
+  const tentativas = await prisma.waMessage.count({ where: { invoiceId: reg.invoiceId, kind: reg.kind } });
+  if (tentativas >= MAX_TENTATIVAS_AVISO) {
+    console.warn(`[wa entrega] mensalidade ${reg.invoiceId}: ${tentativas} tentativas de ${reg.kind} sem entrega — parei de tentar.`);
+    return;
+  }
+  await prisma.invoice.update({ where: { id: reg.invoiceId }, data: { [campo]: null } });
+  console.warn(`[wa entrega] mensalidade ${reg.invoiceId}: ${reg.kind} desmarcado para nova tentativa (${tentativas}/${MAX_TENTATIVAS_AVISO}).`);
+}
+
 // Recebe mensagens e conduz o fluxo de agendamento.
 const waSeen = new Set(); // dedupe simples de message ids (a Meta reenvia)
 app.post("/api/wa/webhook", async (req, res) => {
   res.sendStatus(200); // ACK imediato — a Meta exige resposta rápida
   try {
+    const sts = parseStatuses(req.body);
+    if (sts.length) await processarStatusWa(sts);
     const msg = parseIncoming(req.body);
     if (!msg || waSeen.has(msg.id)) return;
     waSeen.add(msg.id);
@@ -4197,9 +4337,19 @@ function fmtSlotDia(s) {
   const [, m, day] = s.date.split("-");
   return `${DOW_PT[d.getDay()]} ${day}/${m}`;
 }
-async function waSend(to, text) {
-  try { await sendWaText(to, text); console.log(`[wa] respondido para ${to}`); }
-  catch (e) { console.error("[wa send]", e.message, e.body || ""); }
+/* `registro` só é passado quando a mensagem parte da ESCOLA ({ kind, invoiceId }).
+   Resposta dentro da conversa não entra em WaMessage: aquilo a Meta entrega
+   sempre, e encher a tabela com isso esconderia a falha que interessa.
+
+   Atenção ao ler o log: "[wa] respondido para X" significa que a Meta ACEITOU a
+   chamada, não que a aluna recebeu. Quem sabe da entrega é o webhook de status. */
+async function waSend(to, text, registro) {
+  try {
+    const r = await sendWaText(to, text);
+    console.log(`[wa] respondido para ${to}`);
+    if (registro) await registrarWaEnvio(r, { phone: to, ...registro });
+    return r;
+  } catch (e) { console.error("[wa send]", e.message, e.body || ""); return null; }
 }
 async function waButtons(to, body, buttons) {
   try { await sendWaButtons(to, body, buttons); console.log(`[wa] botões para ${to}`); }
@@ -6222,6 +6372,25 @@ const TABELAS_ESPERADAS = [
       \`remove\` BOOLEAN NOT NULL DEFAULT false,
       \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       UNIQUE INDEX \`Holiday_date_key\`(\`date\`),
+      PRIMARY KEY (\`id\`)
+    ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
+  /* Entrega das mensagens que a escola inicia (08/09/2026). Sem esta tabela o
+     webhook de status não tem onde escrever e a escola volta a ficar cega. */
+  ["WaMessage", `CREATE TABLE IF NOT EXISTS \`WaMessage\` (
+      \`id\` INTEGER NOT NULL AUTO_INCREMENT,
+      \`wamid\` VARCHAR(160) NOT NULL,
+      \`phone\` VARCHAR(20) NOT NULL,
+      \`kind\` VARCHAR(40) NOT NULL,
+      \`invoiceId\` INTEGER NULL,
+      \`status\` VARCHAR(20) NOT NULL DEFAULT 'enviado',
+      \`errorCode\` INTEGER NULL,
+      \`errorMsg\` VARCHAR(400) NULL,
+      \`sentAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      \`updatedAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      UNIQUE INDEX \`WaMessage_wamid_key\`(\`wamid\`),
+      INDEX \`WaMessage_phone_idx\`(\`phone\`),
+      INDEX \`WaMessage_invoiceId_idx\`(\`invoiceId\`),
+      INDEX \`WaMessage_status_idx\`(\`status\`),
       PRIMARY KEY (\`id\`)
     ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
   ["HolidayOverride", `CREATE TABLE IF NOT EXISTS \`HolidayOverride\` (
