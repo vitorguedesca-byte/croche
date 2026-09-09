@@ -16,6 +16,7 @@ import {
   mensalidadeDaComp, precoDaComp, situacaoMensalidade, clientOfBooking, ehPagamentoDeMatricula,
   clientMonthClasses, classifyClient, isNewLead,
   aniversariantes, diaMesNasc, diaMesLabel, faltamLabel,
+  proximaCobranca, fraseProximaCobranca,
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
@@ -680,25 +681,37 @@ export function Clientes({ params }) {
     toast("PIN resetado! A aluna criará um novo no próximo acesso.");
   };
 
+  /* Inativar e reativar dizem, nas duas pontas, o que acontece com a COBRANÇA:
+     ex-aluna não gera mensalidade nenhuma, e ao reativar a próxima volta a
+     nascer numa data que dá para ler antes de confirmar. Sem isso, a pergunta
+     "ela ainda vai ser cobrada?" só se responde olhando a aba Mensalidades. */
   const inativarAluna = async (c) => {
+    const prox = proximaCobranca(data, c);
     if (!(await confirmModal({
       title: "Inativar aluna",
       message: `Inativar ${c.name}?\n\n` +
         `• O cadastro será movido para a aba "Ex-Alunos"\n` +
         `• Todas as aulas futuras serão excluídas da grade sem deixar registros\n` +
-        `• As mensalidades dos próximos meses serão canceladas\n\n` +
-        `Você poderá reverter a qualquer momento usando Ctrl+Z ou clicando em "Restaurar" na aba Ex-Alunos.`,
+        `• As mensalidades em aberto serão canceladas\n` +
+        (prox
+          ? `• Nenhuma mensalidade nova será gerada enquanto ela estiver inativa — ao reativar, a próxima seria a ${fraseProximaCobranca(prox)}\n`
+          : `• Nenhuma cobrança nova será gerada enquanto ela estiver inativa\n`) +
+        `\nVocê poderá reverter a qualquer momento usando Ctrl+Z ou clicando em "Restaurar" na aba Ex-Alunos.`,
       confirmLabel: "Inativar e limpar grade",
       tone: "danger"
     }))) return;
     const res = await run(api.updateClient(c.id, { status: "cancelado" }));
-    toast(`Aluna ${c.name} inativada e movida para Ex-Alunos. ↩️ (Ctrl+Z para desfazer)`, "info");
+    toast(`Aluna ${c.name} inativada e movida para Ex-Alunos — sem cobrança nova até reativar. ↩️ (Ctrl+Z para desfazer)`, "info");
   };
 
   const reativar = async (c) => {
+    const prox = proximaCobranca(data, c);
     if (!(await confirmModal({
       title: "Restaurar aluna",
-      message: `Reativar ${c.name}?\n\nO cadastro voltará para a lista de alunos ativos e as aulas agendadas serão restauradas na grade da agenda.`,
+      message: `Reativar ${c.name}?\n\n` +
+        `• O cadastro voltará para a lista de alunos ativos\n` +
+        `• As aulas agendadas serão restauradas na grade da agenda\n` +
+        (prox ? `• A cobrança volta: ${fraseProximaCobranca(prox)}\n` : ""),
       confirmLabel: "Restaurar aluna",
       tone: "ok"
     }))) return;
@@ -878,9 +891,11 @@ export function Mensalistas() {
   const atual = compAtual();
   const ehMesAtual = comp === atual;
 
-  // mensalistas que já estavam matriculados nessa competência
+  // mensalistas que já estavam matriculados nessa competência.
+  // Alunas inativas só entram se tiverem mensalidade paga no mês (registro histórico de recebimento).
   const mensalistas = data.clients
     .filter((c) => c.plan === "mensalista")
+    .filter((c) => c.status !== "cancelado" || (data.invoices || []).some((i) => i.clientId === c.id && i.competencia === comp && i.status === "pago"))
     .filter((c) => { const ini = matriculaISO(c); return !ini || ini.slice(0, 7) <= comp; })
     .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -892,7 +907,13 @@ export function Mensalistas() {
 
   const gerar = async (c) => { setBusy(true); try { await run(api.gerarMensalidade(c.id, comp)); } finally { setBusy(false); } };
   const gerarTodos = async () => {
-    if (!(await confirmModal({ title: "Gerar mensalidades", message: `Gerar os boletos de ${compLabel(comp)} para todos os ${mensalistas.length} mensalistas?`, confirmLabel: "Gerar" }))) return;
+    /* A rodada do backend só gera para quem está ativa. */
+    const ativas = mensalistas.filter((c) => c.status !== "cancelado").length;
+    if (!(await confirmModal({
+      title: "Gerar mensalidades",
+      message: `Gerar os boletos de ${compLabel(comp)} para os ${ativas} mensalistas ativos?`,
+      confirmLabel: "Gerar",
+    }))) return;
     setBusy(true);
     try { const r = await run(api.gerarMensalidadesMes()); toast(`${r?.geradas ?? 0} boleto(s) gerado(s)/reaproveitado(s).`); }
     finally { setBusy(false); }
@@ -1034,7 +1055,7 @@ export function Mensalistas() {
                 <td className="c-main">
                   <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} />)}>
                     <span className="cli-av">{initials(c.name)}</span>
-                    <div><span className="cli-name">{c.name}</span><div className="cli-sub">{c.unit}{c.cpf ? "" : " · ⚠ sem CPF"}</div></div>
+                    <div><span className="cli-name">{c.name}</span><div className="cli-sub">{c.unit}{c.cpf ? "" : " · ⚠ sem CPF"}{c.status === "cancelado" ? " · 🚫 inativa" : ""}</div></div>
                   </div>
                 </td>
                 <td data-l="Mensalidade">
@@ -1074,7 +1095,12 @@ export function Mensalistas() {
                       escolhido — é o caminho de "dar desconto pra ela nesse mês". */}
                   <button className="btn ghost sm" title="Alterar o valor da mensalidade"
                     onClick={() => open(<AlterarMensalidade client={c} compInicial={comp} />)}>💰</button>
-                  {!inv && ehMesAtual && <button className="btn sm" disabled={busy} onClick={() => gerar(c)}>🧾 Gerar boleto</button>}
+                  {/* Ex-aluna não gera boleto novo — o backend recusa, e o
+                      botão diz o porquê em vez de deixar a Inêz descobrir pelo
+                      erro. Volta a aparecer quando a inscrição for reativada. */}
+                  {!inv && ehMesAtual && (c.status === "cancelado"
+                    ? <span className="badge b-muted" title="Inscrição inativa: reative a aluna na aba Ex-Alunos para voltar a gerar mensalidade.">🚫 inativa · sem cobrança</span>
+                    : <button className="btn sm" disabled={busy} onClick={() => gerar(c)}>🧾 Gerar boleto</button>)}
                   {inv && inv.status === "pendente" && <>
                     <button className="btn wa sm"
                       title={inv.encargos?.atrasada ? "Cobrar no WhatsApp da aluna" : "Lembrar no WhatsApp da aluna"}

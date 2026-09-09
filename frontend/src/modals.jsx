@@ -15,6 +15,7 @@ import {
   WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays, SEMANAS_PADRAO, MESES_PADRAO,
   tipoMensalista, TIPO_MENSALISTA_LABEL,
   validarCPF, formatarCPF,
+  proximaCobranca, fraseProximaCobranca,
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
@@ -3170,31 +3171,56 @@ function useClientForm(client, onDone) {
       monthlyValue: valorIndivNum,
     };
 
+    /* Próxima mensalidade JÁ com o que está sendo salvo: quem muda o dia de
+       vencimento na mesma gravação em que inativa/reativa espera ler a data
+       nova, não a antiga. */
+    const proxCobranca = client && proximaCobranca(data, {
+      ...client,
+      plan: querMensal ? "mensalista" : "avulso",
+      billingDay: payload.billingDay,
+    });
+
     /* Inativar não é só mudar um rótulo: derruba a agenda e a cobrança dela.
-       Por isso a confirmação diz em números o que vai acontecer. A mensalidade
-       do mês CORRENTE fica de fora — é dívida do mês que ela cursou. */
+       Por isso a confirmação diz em números o que vai acontecer. Todas as
+       mensalidades pendentes são canceladas automaticamente. */
     if (client && status === "cancelado" && client.status !== "cancelado") {
       const t = todayISO();
-      const comp = t.slice(0, 7);
       const aulas = (data.bookings || []).filter(
         (b) => b.clientName === client.name && b.date >= t && b.status !== "cancelada"
       ).length;
-      const futuras = (data.invoices || []).filter(
-        (i) => i.clientId === client.id && i.status === "pendente" && i.competencia > comp
-      ).length;
-      const doMes = (data.invoices || []).filter(
-        (i) => i.clientId === client.id && i.status === "pendente" && i.competencia <= comp
+      const pendentes = (data.invoices || []).filter(
+        (i) => i.clientId === client.id && i.status === "pendente"
       ).length;
       const ok = await confirmModal({
         title: "Inativar e encerrar inscrição",
         message: `${client.name} será movida para a aba "Ex-Alunos". Ao salvar:\n\n` +
           `• ${aulas} aula(s) futura(s) serão excluídas da grade sem deixar resíduos\n` +
-          `• ${futuras} mensalidade(s) dos próximos meses serão canceladas\n` +
-          (doMes
-            ? `• ${doMes} mensalidade(s) deste mês (ou anteriores) CONTINUAM em aberto — se quiser perdoar, cancele na aba Mensalidades\n`
-            : "") +
+          (pendentes
+            ? `• ${pendentes} mensalidade(s) em aberto serão canceladas\n`
+            : "• Nenhuma mensalidade pendente em aberto\n") +
+          /* A pergunta seguinte é sempre "e ela continua sendo cobrada?".
+             Ex-aluna não gera boleto nenhum, e a data diz para quando a
+             cobrança volta se você reativar. */
+          (proxCobranca
+            ? `• Nenhuma mensalidade nova será gerada enquanto ela estiver inativa — ao reativar, a próxima seria a ${fraseProximaCobranca(proxCobranca)}\n`
+            : "• Nenhuma cobrança nova será gerada enquanto ela estiver inativa\n") +
           "\nVocê poderá reverter com Ctrl+Z ou restaurar o cadastro e as aulas na aba Ex-Alunos.",
         confirmLabel: "Inativar e limpar grade", cancelLabel: "Voltar", tone: "danger",
+      });
+      if (!ok) return;
+    }
+
+    /* REATIVAR pela ficha (Inativa → Ativa). O contrário do bloco acima: a
+       cobrança volta, e a confirmação diz em que dia. */
+    if (client && status !== "cancelado" && client.status === "cancelado") {
+      const ok = await confirmModal({
+        title: "Reativar inscrição",
+        message: `${client.name} volta para a lista de alunas ativas.\n\n` +
+          (proxCobranca
+            ? `• A cobrança volta: ${fraseProximaCobranca(proxCobranca)}\n`
+            : "• Ela não é mensalista, então nenhuma mensalidade recorrente será gerada\n") +
+          "\nAs aulas guardadas no encerramento são restauradas pelo botão \"Restaurar\" da aba Ex-Alunos.",
+        confirmLabel: "Reativar", cancelLabel: "Voltar", tone: "ok",
       });
       if (!ok) return;
     }
@@ -3368,9 +3394,8 @@ function ClientFormFields({ f }) {
             ]}
           />
           <div className="help" style={{ marginTop: ".4rem" }}>
-            Ao salvar como <b>Inativa</b>, as aulas futuras dela são canceladas e as mensalidades
-            dos próximos meses também. A do mês corrente continua em aberto. Ela deixa de ganhar e
-            de usar créditos de reposição.
+            Ao salvar como <b>Inativa</b>, as aulas futuras dela e as mensalidades
+            em aberto são canceladas. Ela deixa de ganhar e de usar créditos de reposição.
           </div>
         </div>
       </div>

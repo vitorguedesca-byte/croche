@@ -455,6 +455,45 @@ export function compLabel(comp) {
   return capitalize(new Date(y, m - 1, 1).toLocaleDateString("pt-BR", { month: "long", year: "numeric" }));
 }
 
+/* ================= quando nasce a próxima mensalidade =================
+   ESPELHO de proximaCobranca no server (quem manda é ele). Existe aqui porque
+   as confirmações de inativar/reativar precisam dizer a data ANTES de chamar a
+   API — é a pergunta que vem logo depois de mexer no status: "e a cobrança
+   dela, para quando fica?".
+
+   A rodada gera o boleto de uma competência assim que faltam
+   ANTECEDENCIA_GERACAO dias para o vencimento; então ele nasce no vencimento
+   menos essa antecedência. Se a competência corrente já tem boleto, a próxima é
+   a do mês que vem; se a janela já abriu, é hoje mesmo.
+   Null para quem não é mensalista — não há cobrança recorrente a prever. */
+export const ANTECEDENCIA_GERACAO = 5;
+export function proximaCobranca(data, c, hoje = todayISO()) {
+  if (!c || c.plan !== "mensalista") return null;
+  const dia = Math.min(28, Math.max(1, c.billingDay || data?.meta?.vencimentoDia || 10));
+  const vencDa = (comp) => `${comp}-${String(dia).padStart(2, "0")}`;
+  let comp = compAtual();
+  const jaTem = (data?.invoices || []).some(
+    (i) => i.clientId === c.id && i.competencia === comp && i.status !== "cancelado"
+  );
+  if (jaTem) comp = addComp(comp, 1);
+  const vencimento = vencDa(comp);
+  const nasceEm = addDays(vencimento, -ANTECEDENCIA_GERACAO);
+  return {
+    competencia: comp,
+    vencimento,
+    geraEm: nasceEm < hoje ? hoje : nasceEm,
+    naProximaRodada: nasceEm <= hoje,
+  };
+}
+/* Uma frase pronta com a data — a mesma nas duas telas (inativar e reativar),
+   para a informação não mudar de forma dependendo de onde se lê. */
+export function fraseProximaCobranca(prox) {
+  if (!prox) return "";
+  return prox.naProximaRodada
+    ? `mensalidade de ${compLabel(prox.competencia)} — já está na janela de geração (vence ${fmtDate(prox.vencimento)})`
+    : `mensalidade de ${compLabel(prox.competencia)} — gerada em ${fmtDate(prox.geraEm)} (vence ${fmtDate(prox.vencimento)})`;
+}
+
 /* ---- aulas do mês de um aluno (usado na coluna "Aulas" da tela Alunos) ----
    Contagem real do mês corrente, não o total da vida inteira:
    • feitas  = marcação não cancelada, com data já passada (ou hoje), que não

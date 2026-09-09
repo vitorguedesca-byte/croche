@@ -2493,6 +2493,38 @@ const vencimentoDe = (c, comp = competenciaAtual()) => {
 // nascia no próprio dia do vencimento, o que dava zero prazo para a aluna.
 const ANTECEDENCIA_DIAS = 5;
 
+/* QUANDO nasce a próxima mensalidade desta aluna.
+   A rodada automática gera o boleto de uma competência assim que faltam
+   ANTECEDENCIA_DIAS para o vencimento — então a data em que ele nasce é o
+   vencimento menos essa antecedência. Se a competência corrente já tem boleto,
+   a próxima é a do mês que vem; se a janela já abriu, é a primeira rodada
+   (hoje).
+
+   Serve às telas de inativar/reativar: a pergunta que vem logo depois de mexer
+   no status é "e a cobrança dela, para quando fica?". Devolve null para quem
+   não é mensalista — não há cobrança recorrente a prever. */
+// 'YYYY-MM-DD' → 'DD/MM', para as mensagens que a tela mostra sem reformatar.
+const dataBR = (iso) => `${String(iso).slice(8, 10)}/${String(iso).slice(5, 7)}`;
+async function proximaCobranca(client, hoje = todayISO()) {
+  if (!client || client.plan !== "mensalista") return null;
+  let comp = competenciaAtual();
+  const jaTem = await prisma.invoice.findFirst({
+    where: { clientId: client.id, competencia: comp, status: { not: "cancelado" } },
+  });
+  if (jaTem) comp = somarComp(comp, 1);
+  const vencimento = vencimentoBruto(client, comp);
+  const nasceEm = addDays(vencimento, -ANTECEDENCIA_DIAS);
+  return {
+    competencia: comp,
+    vencimento,
+    geraEm: nasceEm < hoje ? hoje : nasceEm,
+    naProximaRodada: nasceEm <= hoje,
+    // Com a geração automática desligada, a data acima é quando ELA pode gerar
+    // pelo painel — nada nasce sozinho.
+    automatica: !!SETTINGS.geracaoAuto,
+  };
+}
+
 /**
  * Emite a cobrança Pix de uma mensalidade no Sicredi.
  * Fica separada de gerarMensalidade porque a reemissão (QR vencido) precisa
@@ -2522,6 +2554,16 @@ async function gerarMensalidade(clientId, competencia) {
   const client = await prisma.client.findUnique({ where: { id: clientId } });
   if (!client) throw Object.assign(new Error("Aluno não encontrado"), { code: 404 });
   if (client.plan !== "mensalista") throw Object.assign(new Error("Aluno não é mensalista"), { code: 400 });
+  /* Ex-aluna (inscrição cancelada) não gera cobrança nova. A rodada automática
+     já pula quem está assim; sem esta trava, o botão "gerar boleto" do painel
+     ainda emitia Pix para quem saiu do curso — e a aluna recebia cobrança pelo
+     portal de um mês que ela não vai cursar. A mensalidade volta a nascer quando
+     a inscrição for reativada. */
+  if (client.status === "cancelado")
+    throw Object.assign(
+      new Error(`${client.name} está inativa (ex-aluna) — reative a inscrição para gerar a mensalidade.`),
+      { code: 409, codigo: "ALUNA_INATIVA" }
+    );
   const comp = competencia || competenciaAtual();
   // já existe para essa competência? reaproveita
   const existing = await prisma.invoice.findFirst({ where: { clientId, competencia: comp } });
@@ -5456,9 +5498,9 @@ app.patch(
     if (trocouNome) console.log(`[nome] "${antes.name}" → "${data.name}" (aulas e lista de espera atualizadas)`);
 
     /* Virou INATIVA agora: a agenda e a cobrança dela param junto. Sem isso, a
-       aluna que sai continua ocupando vaga nas turmas e recebendo boleto todo
-       mês. A mensalidade do mês CORRENTE não é cancelada de propósito — é dívida
-       do mês que ela cursou; cancelar seria perdoar sem você decidir. */
+       aluna que sai continua ocupando vaga nas turmas e recebendo cobranças.
+       Todas as aulas futuras são removidas da grade e todas as mensalidades
+       pendentes são canceladas automaticamente. */
     let encerrado = null;
     if (data.status === "cancelado" && antes && antes.status !== "cancelado") {
       encerrado = await encerrarAluna(client);
@@ -5466,7 +5508,17 @@ app.patch(
     if (data.mensalistaTipo === "escala" && antes && antes.mensalistaTipo !== "escala") {
       await limparGradeRecorrenteAoVirarEscala(client);
     }
-    res.json({ ...client, encerrado });
+    /* Mexeu no status: a tela precisa dizer o que acontece com a cobrança.
+       Inativou → nenhuma mensalidade nova nasce enquanto ela estiver assim, e
+       `cobranca` diz qual seria a próxima quando reativar. Reativou → é a data
+       em que a cobrança volta de fato. */
+    const mudouStatus = data.status !== undefined && antes && data.status !== antes.status;
+    const cobranca = mudouStatus ? await proximaCobranca(client) : undefined;
+    res.json({
+      ...client,
+      encerrado,
+      ...(mudouStatus ? { cobranca, cobrancaSuspensa: client.status === "cancelado" } : {}),
+    });
   })
 );
 
@@ -5509,13 +5561,13 @@ async function encerrarAluna(client) {
     where: { clientName: client.name, date: { gte: t } },
   });
 
-  // 3. Cancela mensalidades futuras (competências posteriores ao mês atual)
-  const mensalidadesFuturas = await prisma.invoice.findMany({
-    where: { clientId: client.id, status: "pendente", competencia: { gt: competenciaAtual() } },
+  // 3. Cancela todas as mensalidades pendentes da aluna (mês atual e futuros)
+  const mensalidadesPendentes = await prisma.invoice.findMany({
+    where: { clientId: client.id, status: "pendente" },
   });
-  if (mensalidadesFuturas.length > 0) {
+  if (mensalidadesPendentes.length > 0) {
     await prisma.invoice.updateMany({
-      where: { id: { in: mensalidadesFuturas.map((i) => i.id) } },
+      where: { id: { in: mensalidadesPendentes.map((i) => i.id) } },
       data: { status: "cancelado" },
     });
   }
@@ -5524,7 +5576,7 @@ async function encerrarAluna(client) {
   undoManager.saveClientBackup(client.id, {
     client: { ...client },
     bookings: aulasParaRemover,
-    invoiceIds: mensalidadesFuturas.map((i) => i.id),
+    invoiceIds: mensalidadesPendentes.map((i) => i.id),
   });
 
   undoManager.pushAction({
@@ -5532,14 +5584,14 @@ async function encerrarAluna(client) {
     description: `Inativação de ${client.name}`,
     client: { ...client },
     bookings: aulasParaRemover,
-    invoiceIds: mensalidadesFuturas.map((i) => i.id),
+    invoiceIds: mensalidadesPendentes.map((i) => i.id),
   });
 
   // Aula extra comprada e ainda não usada fica pendurada — o valor foi pago e
   // não é devolvido, então quem decide o que fazer com ela é a Inêz.
   const extrasPagas = await prisma.extraPass.count({ where: { clientId: client.id, status: "pago" } });
-  console.log(`[encerramento] ${client.name}: ${deletadas.count} aula(s) excluídas da grade sem deixar registro e ${mensalidadesFuturas.length} mensalidade(s) canceladas.`);
-  return { aulas: deletadas.count, mensalidades: mensalidadesFuturas.length, extrasPagas, canUndo: true };
+  console.log(`[encerramento] ${client.name}: ${deletadas.count} aula(s) excluídas da grade sem deixar registro e ${mensalidadesPendentes.length} mensalidade(s) canceladas.`);
+  return { aulas: deletadas.count, mensalidades: mensalidadesPendentes.length, extrasPagas, canUndo: true };
 }
 
 async function reativarAlunaComManutencao(clientId) {
@@ -5606,11 +5658,20 @@ async function reativarAlunaComManutencao(clientId) {
     }
   }
 
+  /* A cobrança volta junto com o cadastro. Dizer QUANDO é o que fecha a conta
+     para quem reativa: enquanto ela estava inativa nada nascia, e a pergunta
+     seguinte é sempre "e a mensalidade dela, cai quando?". */
+  const cobranca = await proximaCobranca(atualizada);
   return {
     ok: true,
     client: atualizada,
     aulasRestauradas,
-    message: `${client.name} reativada com sucesso! ${aulasRestauradas} aula(s) restauradas na agenda.`,
+    cobranca,
+    message:
+      `${client.name} reativada com sucesso! ${aulasRestauradas} aula(s) restauradas na agenda.` +
+      (cobranca
+        ? ` Mensalidade de ${compPorExtenso(cobranca.competencia)}: ${cobranca.naProximaRodada ? "pode ser gerada agora" : `gerada em ${dataBR(cobranca.geraEm)}`}.`
+        : ""),
   };
 }
 
