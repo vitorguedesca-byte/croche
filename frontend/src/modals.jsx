@@ -2034,29 +2034,40 @@ export function ReajusteGeral() {
    Usado no perfil da aluna (MensalidadesPanel) e na aba Mensalistas — o mesmo
    ato precisa ter o mesmo efeito nos dois lugares. */
 export const NOTA_BAIXA_MANUAL =
-  "Ao dar baixa, a próxima mensalidade (a vencer) nasce sem Pix: nenhum código é enviado para o WhatsApp da aluna nem aparece no portal dela. Use quando ela acertar por fora (dinheiro, transferência, combinado).";
+  "Registrar pagamento manual (dinheiro, transferência ou acerto). A baixa quita a mensalidade do mês sem interferir nos meses seguintes.";
 
-export async function baixarMensalidade(inv, run, nome = "") {
-  const prox = compLabel(addComp(inv.competencia, 1));
+export async function baixarMensalidade(inv, run, nome = "", clientInvoices = []) {
+  const comp = inv.competencia;
+  const mesAtual = compAtual();
+  const compAnt = addComp(comp, -1);
+  const antPaga = (clientInvoices || []).some(
+    (i) => i.clientId === inv.clientId && i.competencia === compAnt && i.status === "pago"
+  );
+  const ehMesSeguinte = comp > mesAtual || (antPaga && comp >= mesAtual);
+
+  let msg;
+  if (comp > mesAtual || antPaga) {
+    msg =
+      `ℹ️ A mensalidade anterior (${compLabel(compAnt)}) já está paga.\n\n` +
+      `Confirmar a baixa da mensalidade de ${compLabel(comp)}${nome ? ` de ${nome}` : ""} (mês seguinte) como PAGA?\n\n` +
+      `Ela sai de "a receber" e entra no recebido do mês, no Financeiro.`;
+  } else {
+    msg =
+      `Marcar a mensalidade de ${compLabel(comp)}${nome ? ` de ${nome}` : ""} como PAGA?\n\n` +
+      `Ela sai de "a receber" e entra no recebido do mês, no Financeiro.\n\n` +
+      `A mensalidade do próximo mês será gerada normalmente com Pix.`;
+  }
+
   const ok = await confirmModal({
     title: "Dar baixa na mensalidade",
-    message:
-      `Marcar a mensalidade de ${compLabel(inv.competencia)}${nome ? ` de ${nome}` : ""} como PAGA?\n\n` +
-      `Ela sai de "a receber" e entra no recebido do mês, no Financeiro.\n\n` +
-      `⚠️ A mensalidade de ${prox} não terá Pix: a aluna não recebe o código no WhatsApp nem vê o QR no portal. ` +
-      `Se precisar do Pix desse mês mesmo assim, use o botão "Gerar Pix" na mensalidade dele.`,
+    message: msg,
     confirmLabel: "✓ Dar baixa",
     cancelLabel: "Voltar",
   });
   if (!ok) return false;
   try {
-    const r = await run(api.payInvoice(inv.id));
-    toast(
-      r?.proximaSemPix
-        ? `Baixa registrada. A mensalidade de ${compLabel(r.proximaSemPix)} ficou sem Pix.`
-        : "Baixa registrada. A próxima mensalidade nascerá sem Pix.",
-      "success"
-    );
+    await run(api.payInvoice(inv.id));
+    toast(`Baixa registrada com sucesso para a mensalidade de ${compLabel(comp)}.`, "success");
     return true;
   } catch {
     return false; // o erro já foi mostrado pelo run
@@ -2132,10 +2143,10 @@ function MensalidadesPanel({ client }) {
 
   const baixar = async (inv) => {
     setBusy(true);
-    try { await baixarMensalidade(inv, run, client.name); }
+    try { await baixarMensalidade(inv, run, client.name, data.invoices); }
     finally { setBusy(false); }
   };
-  /* Saída da supressão: pedir o Pix limpa a marca no backend e emite o QR. */
+  /* Gerar Pix da mensalidade caso ainda não tenha QR gerado */
   const gerarPix = async (inv) => {
     setBusy(true);
     try {
@@ -2164,16 +2175,6 @@ function MensalidadesPanel({ client }) {
         </button>
       </div>
 
-      {/* O aviso fica na tela, e não só na confirmação: quem chega aqui para dar
-          baixa precisa saber da consequência antes de mirar no botão. */}
-      {temAberto && (
-        <div className="cfg-warn" style={{ marginBottom: ".6rem" }}>
-          ⚠️ <b>Baixar</b> marca a mensalidade como paga por fora. A próxima mensalidade
-          (a vencer) <b>não terá Pix</b> — nenhum código é enviado para o WhatsApp da aluna
-          nem aparece no portal dela. Se precisar do Pix desse mês, use <b>💠 Gerar Pix</b> nele.
-        </div>
-      )}
-
       <div>
         {linhas.map((comp) => {
           const inv = invs.find((i) => i.competencia === comp);
@@ -2199,18 +2200,13 @@ function MensalidadesPanel({ client }) {
                   : inv.status === "cancelado" ? <span className="badge b-danger">cancelado</span>
                   : inv.encargos?.atrasada ? <span className="badge b-danger">⚠️ {inv.encargos.dias} dia(s) de atraso</span>
                   : <span className="badge b-warn">⏳ vence {fmtDate(inv.dueDate)}</span>}
-                {inv?.status === "pendente" && inv.semPix && (
-                  <span className="badge b-muted ml" title="A mensalidade anterior teve baixa manual, então esta nasceu sem Pix. O botão ao lado gera o código assim mesmo.">
-                    💠 sem Pix
-                  </span>
-                )}
               </span>
               {inv && inv.status === "pendente" && (
                 <span className="hist-act">
                   <button className="btn ghost sm" disabled={busy} title="Corrigir ou alterar a data de vencimento deste boleto" onClick={() => open(<AlterarVencimentoModal invoice={inv} clientName={client.name} />)}>
                     ✏️ Vencimento
                   </button>
-                  {inv.semPix && (
+                  {!inv.pixCode && (
                     <button className="btn sec sm" disabled={busy} onClick={() => gerarPix(inv)}>💠 Gerar Pix</button>
                   )}
                   <button className="btn sm" disabled={busy} onClick={() => baixar(inv)}>✓ Baixar</button>

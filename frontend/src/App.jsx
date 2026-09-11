@@ -3,7 +3,7 @@ import { api, getToken, setToken, isInstrutora, getNome } from "./api.js";
 import AdminLogin from "./AdminLogin.jsx";
 import { useStore } from "./store.jsx";
 import { useModal } from "./ui.jsx";
-import { Dashboard, Agenda, Marcacoes, Clientes, Mensalistas, Recebimentos, Depoimentos, Aniversariantes } from "./views.jsx";
+import { Dashboard, Agenda, Marcacoes, Clientes, Financeiro, Depoimentos, Aniversariantes } from "./views.jsx";
 import { SlotForm, BookingForm, ClientForm } from "./modals.jsx";
 import ClienteApp from "./ClienteApp.jsx";
 import Config from "./Config.jsx";
@@ -38,9 +38,9 @@ const NAV = [
   { view: "marcacoes", ic: "📝", label: "Marcações" },
   { sep: "Relacionamento" },
   { view: "clientes", ic: "👩", label: "Alunos" },
-  { view: "mensalistas", ic: "📅", label: "Mensalistas" },
   { view: "aniversariantes", ic: "🎂", label: "Aniversariantes" },
-  { view: "recebimentos", ic: "💰", label: "Recebimentos" },
+  { sep: "Financeiro" },
+  { view: "financeiro", ic: "💰", label: "Financeiro" },
   { sep: "Site" },
   { view: "depoimentos", ic: "⭐", label: "Depoimentos" },
   { sep: "Sistema" },
@@ -57,9 +57,10 @@ const TITLES = {
   agenda:       ["Agenda",        "Horários e ocupação por unidade"],
   marcacoes:    ["Marcações",     "Novos e alunas com acesso — confirmações e remarcações"],
   clientes:     ["Alunos",        "Alunos, leads e novatos — CRM e contato direto"],
-  mensalistas:  ["Mensalistas",   "Mensalidades e boletos dos alunos mensalistas"],
   aniversariantes: ["Aniversariantes", "Quem faz aniversário na semana e no mês"],
-  recebimentos: ["Recebimentos",  "Visão de receita por dia, semana e mês"],
+  financeiro:   ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
+  mensalistas:  ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
+  recebimentos: ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
   depoimentos:  ["Depoimentos",   "Gerencie os depoimentos exibidos no site"],
   config:       ["Configurações", "Padrões do sistema, unidades e profissionais"],
 };
@@ -137,6 +138,8 @@ export default function App() {
   const go = (v, params = {}) => {
     // A instrutora só tem a Agenda: qualquer atalho de outra tela cai nela.
     if (instrutora && v !== "agenda") v = "agenda";
+    if (v === "mensalistas") { v = "financeiro"; params = { tab: "operacao", ...params }; }
+    if (v === "recebimentos") { v = "financeiro"; params = { tab: "metricas", ...params }; }
     setView(v); setViewParams(params); setSidebarOpen(false);
   };
   const actions = instrutora ? {} : {
@@ -144,10 +147,21 @@ export default function App() {
     marcacoes: <button className="btn" onClick={() => open(<BookingForm />)}>＋ Nova marcação</button>,
     clientes: <button className="btn" onClick={() => open(<ClientForm />)}>＋ Novo aluno</button>,
   };
-  const Body = instrutora ? Agenda : { dashboard: Dashboard, agenda: Agenda, marcacoes: Marcacoes, clientes: Clientes, mensalistas: Mensalistas, aniversariantes: Aniversariantes, recebimentos: Recebimentos, depoimentos: Depoimentos, config: Config }[view];
+  const Body = instrutora ? Agenda : {
+    dashboard: Dashboard,
+    agenda: Agenda,
+    marcacoes: Marcacoes,
+    clientes: Clientes,
+    aniversariantes: Aniversariantes,
+    financeiro: Financeiro,
+    mensalistas: Financeiro,
+    recebimentos: Financeiro,
+    depoimentos: Depoimentos,
+    config: Config,
+  }[view] || Dashboard;
   const [tituloAtual, subtituloAtual] = instrutora
     ? ["Agenda", `Consulta de horários${getNome() ? " · " + getNome() : ""}`]
-    : TITLES[view];
+    : (TITLES[view] || TITLES.dashboard);
 
   return (
     <div className="app">

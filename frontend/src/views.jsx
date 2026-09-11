@@ -882,17 +882,47 @@ export function Clientes({ params }) {
   );
 }
 
-/* ============================= MENSALISTAS (mensalidades / boletos) ============================= */
-export function Mensalistas() {
+/* ============================= FINANCEIRO (mensalidades, cobranças e fluxo) ============================= */
+
+// Gráfico de barras nativo (sem dependência externa)
+function BarChart({ series, color = "var(--sage-deep)" }) {
+  const max = Math.max(1, ...series.map((s) => s.value));
+  const total = series.reduce((a, s) => a + s.value, 0);
+  return (
+    <div className="chart">
+      <div className="chart-bars">
+        {series.map((s, i) => {
+          const pct = Math.round((s.value / max) * 100);
+          return (
+            <div className="bar" key={i} title={`${s.full || s.label}: ${money(s.value)}`}>
+              <span className="bar-val">{s.value ? money(s.value).replace("R$ ", "") : ""}</span>
+              <div className="bar-track">
+                <div className="bar-fill" style={{ height: `${s.value ? Math.max(pct, 3) : 0}%`, background: color }} />
+              </div>
+              <span className="bar-label">{s.label}</span>
+            </div>
+          );
+        })}
+      </div>
+      {total === 0 && <div className="chart-empty">Sem recebimentos neste período.</div>}
+    </div>
+  );
+}
+
+/* ----------------- ABA 1: OPERAÇÃO DO MÊS (mensalidades e cobranças) ----------------- */
+function FinanceiroOperacao() {
   const { data, run } = useStore();
   const { open } = useModal();
   const [comp, setComp] = useState(compAtual());
   const [busy, setBusy] = useState(false);
+  const [filtroStatus, setFiltroStatus] = useState("todos"); // "todos" | "atraso" | "aberto" | "pago" | "semBoleto"
+  const [search, setSearch] = useState("");
+
   const atual = compAtual();
   const ehMesAtual = comp === atual;
 
-  // mensalistas que já estavam matriculados nessa competência.
-  // Alunas inativas só entram se tiverem mensalidade paga no mês (registro histórico de recebimento).
+  // Alunas mensalistas que já estavam matriculadas nessa competência.
+  // Inativas só entram se tiverem mensalidade paga no mês (registro histórico de quitação).
   const mensalistas = data.clients
     .filter((c) => c.plan === "mensalista")
     .filter((c) => c.status !== "cancelado" || (data.invoices || []).some((i) => i.clientId === c.id && i.competencia === comp && i.status === "pago"))
@@ -900,14 +930,16 @@ export function Mensalistas() {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const invOf = (c) => (data.invoices || []).find((i) => i.clientId === c.id && i.competencia === comp);
-  // Valor DESTA competência: um desconto ou promoção marcada para o mês vale
-  // mais do que o valor recorrente da aluna.
   const valorDe = (c) => mensalidadeDaComp(c, comp, data.meta, data.precos);
   const vencDe = (c) => Math.min(28, Math.max(1, c.billingDay || data.meta.vencimentoDia || 10));
 
-  const gerar = async (c) => { setBusy(true); try { await run(api.gerarMensalidade(c.id, comp)); } finally { setBusy(false); } };
+  const gerar = async (c) => {
+    setBusy(true);
+    try { await run(api.gerarMensalidade(c.id, comp)); }
+    finally { setBusy(false); }
+  };
+
   const gerarTodos = async () => {
-    /* A rodada do backend só gera para quem está ativa. */
     const ativas = mensalistas.filter((c) => c.status !== "cancelado").length;
     if (!(await confirmModal({
       title: "Gerar mensalidades",
@@ -915,35 +947,36 @@ export function Mensalistas() {
       confirmLabel: "Gerar",
     }))) return;
     setBusy(true);
-    try { const r = await run(api.gerarMensalidadesMes()); toast(`${r?.geradas ?? 0} boleto(s) gerado(s)/reaproveitado(s).`); }
-    finally { setBusy(false); }
+    try {
+      const r = await run(api.gerarMensalidadesMes());
+      toast(`${r?.geradas ?? 0} boleto(s) gerado(s)/reaproveitado(s).`, "success");
+    } finally { setBusy(false); }
   };
-  /* Mesma baixa do perfil da aluna — é o mesmo ato, então tem o mesmo efeito:
-     confirma, marca paga e deixa a mensalidade seguinte sem Pix. */
+
   const marcarPago = async (c, inv) => {
     setBusy(true);
-    try { await baixarMensalidade(inv, run, c.name); }
+    try { await baixarMensalidade(inv, run, c.name, data.invoices); }
     finally { setBusy(false); }
   };
-  const copyPix = (code) => { navigator.clipboard.writeText(code); toast("Código Pix copiado! 📋"); };
-  /* Refaz o QR e já entrega o código na área de transferência: quem clica aqui
-     está prestes a colar no WhatsApp da aluna. */
+
+  const copyPix = (code) => {
+    navigator.clipboard.writeText(code);
+    toast("Código Pix copiado! 📋", "success");
+  };
+
   const reemitir = async (inv) => {
     setBusy(true);
     try {
       const r = await run(api.reemitirPix(inv.id));
-      if (r?.pixCode) { navigator.clipboard.writeText(r.pixCode); toast("Pix atualizado e copiado! 📋", "success"); }
-      else toast("Pix gerado.", "success");
+      if (r?.pixCode) {
+        navigator.clipboard.writeText(r.pixCode);
+        toast("Pix atualizado e copiado! 📋", "success");
+      } else {
+        toast("Pix gerado.", "success");
+      }
     } finally { setBusy(false); }
   };
 
-  /* Cobrança pelo WhatsApp da aluna. Abre a conversa com o texto pronto — quem
-     aperta enviar é você. É de propósito: enviar sozinho pela API oficial exige
-     um template aprovado na Meta, que ainda não existe (ver o PDF do WhatsApp
-     Oficial na raiz do projeto). Assim funciona hoje, e você lê antes de mandar.
-
-     A mensagem inclui o Pix copia-e-cola quando ele existe E está atualizado —
-     um QR emitido antes da multa cobraria menos do que a conta acima dele. */
   const msgCobranca = (c, inv) => {
     const e = inv.encargos;
     const primeiro = (c.name || "").split(" ")[0];
@@ -972,36 +1005,51 @@ export function Mensalistas() {
     linhas.push("", "Qualquer dúvida, é só responder por aqui!");
     return linhas.join("\n");
   };
+
   const cobrarNoWa = (c, inv) => {
     if (!(c.phone || "").replace(/\D/g, "")) return toast(`${c.name} não tem telefone no cadastro.`, "error");
     openWa(c.phone, msgCobranca(c, inv));
   };
 
-  // ----- fechamento da competência -----
+  // Cálculos do fechamento da competência
   const invs = mensalistas.map(invOf);
   const pagosArr = invs.filter((i) => i && i.status === "pago");
   const pendArr = invs.filter((i) => i && i.status === "pendente");
+  const emAtrasoArr = pendArr.filter((i) => i.encargos && i.encargos.atrasada);
+  const noPrazoArr = pendArr.filter((i) => !i.encargos || !i.encargos.atrasada);
   const semBoleto = invs.filter((i) => !i).length;
-  const recebido = pagosArr.reduce((s, i) => s + i.amountCents / 100, 0);
-  // "A receber" é o que ela vai receber DE FATO: a vencida cobra multa e juros.
-  const aReceber = pendArr.reduce((s, i) => s + (i.encargos ? i.encargos.total : i.amountCents / 100), 0);
-  const emAtraso = pendArr.filter((i) => i.encargos && i.encargos.atrasada);
-  const previsto = mensalistas.reduce((s, c) => { const i = invOf(c); return s + (i ? i.amountCents / 100 : valorDe(c)); }, 0);
 
-  const [search, setSearch] = useState("");
+  const recebido = pagosArr.reduce((s, i) => s + i.amountCents / 100, 0);
+  const aReceber = noPrazoArr.reduce((s, i) => s + (i.amountCents / 100), 0);
+  const emAtrasoTotal = emAtrasoArr.reduce((s, i) => s + (i.encargos ? i.encargos.total : i.amountCents / 100), 0);
+  const previsto = mensalistas.reduce((s, c) => { const i = invOf(c); return s + (i ? i.amountCents / 100 : valorDe(c)); }, 0);
+  const emitido = recebido + aReceber + emAtrasoTotal;
+  const pctRecebido = emitido ? Math.round((recebido / emitido) * 100) : 0;
+
+  // Filtragem da lista
   const cleanSearch = search.trim();
   const searchDigits = cleanSearch.replace(/\D/g, "");
   const mensalistasFiltrados = mensalistas.filter((c) => {
-    if (!cleanSearch) return true;
-    const matchesName = (c.name || "").toLowerCase().includes(cleanSearch.toLowerCase());
-    const matchesPhone = (c.phone || "").includes(cleanSearch) || (searchDigits.length > 0 && (c.phone || "").replace(/\D/g, "").includes(searchDigits));
-    const clientCpfDigits = (c.cpf || "").replace(/\D/g, "");
-    const matchesCpf = (c.cpf || "").includes(cleanSearch) || (searchDigits.length > 0 && clientCpfDigits.includes(searchDigits));
-    return matchesName || matchesPhone || matchesCpf;
+    if (cleanSearch) {
+      const matchesName = (c.name || "").toLowerCase().includes(cleanSearch.toLowerCase());
+      const matchesPhone = (c.phone || "").includes(cleanSearch) || (searchDigits.length > 0 && (c.phone || "").replace(/\D/g, "").includes(searchDigits));
+      const clientCpfDigits = (c.cpf || "").replace(/\D/g, "");
+      const matchesCpf = (c.cpf || "").includes(cleanSearch) || (searchDigits.length > 0 && clientCpfDigits.includes(searchDigits));
+      if (!matchesName && !matchesPhone && !matchesCpf) return false;
+    }
+    if (filtroStatus === "todos") return true;
+    const inv = invOf(c);
+    if (filtroStatus === "semBoleto") return !inv;
+    if (!inv) return false;
+    if (filtroStatus === "pago") return inv.status === "pago";
+    if (filtroStatus === "atraso") return inv.status === "pendente" && !!inv.encargos?.atrasada;
+    if (filtroStatus === "aberto") return inv.status === "pendente" && !inv.encargos?.atrasada;
+    return true;
   });
 
   return (
     <div className="panel">
+      {/* Navegação de competência + Ação em lote */}
       <div className="ag-toolbar">
         <div className="ag-nav">
           <button className="navbtn" onClick={() => setComp(addComp(comp, -1))}>←</button>
@@ -1009,396 +1057,308 @@ export function Mensalistas() {
           <button className="navbtn" onClick={() => setComp(addComp(comp, 1))} disabled={comp >= atual}>→</button>
           {!ehMesAtual && <button className="btn ghost sm" onClick={() => setComp(atual)}>Mês atual</button>}
         </div>
-        <button className="btn" disabled={busy || !mensalistas.length || !ehMesAtual}
-          title={ehMesAtual ? "" : "Boletos só são gerados para o mês atual"} onClick={gerarTodos}>
+        <button
+          className="btn"
+          disabled={busy || !mensalistas.length || !ehMesAtual}
+          title={ehMesAtual ? "" : "Boletos só são gerados para o mês atual"}
+          onClick={gerarTodos}
+        >
           🧾 Gerar boletos do mês
         </button>
       </div>
 
-      <div className="filters" style={{ margin: "1rem 0" }}>
+      {/* Cards de Métricas da Competência com Filtro Interativo */}
+      <div className="fch-tot" style={{ marginTop: "1rem" }}>
+        <div
+          className="fch-card"
+          style={{
+            cursor: "pointer",
+            outline: filtroStatus === "pago" ? "2px solid var(--ok)" : "none",
+            background: filtroStatus === "pago" ? "rgba(46,125,50,0.06)" : undefined,
+          }}
+          title="Clique para filtrar apenas mensalidades recebidas"
+          onClick={() => setFiltroStatus(filtroStatus === "pago" ? "todos" : "pago")}
+        >
+          <div className="l">✓ Recebido</div>
+          <div className="v">{money(recebido)}</div>
+          <div className="cli-sub">{pagosArr.length} pago(s) · {pctRecebido}% do emitido</div>
+        </div>
+
+        <div
+          className="fch-card"
+          style={{
+            cursor: "pointer",
+            outline: filtroStatus === "aberto" ? "2px solid var(--warn)" : "none",
+            background: filtroStatus === "aberto" ? "rgba(217,119,6,0.06)" : undefined,
+          }}
+          title="Clique para filtrar mensalidades a receber no prazo"
+          onClick={() => setFiltroStatus(filtroStatus === "aberto" ? "todos" : "aberto")}
+        >
+          <div className="l">⏳ A receber</div>
+          <div className="v warn">{money(aReceber)}</div>
+          <div className="cli-sub">{noPrazoArr.length} dentro do prazo</div>
+        </div>
+
+        <div
+          className="fch-card"
+          style={{
+            cursor: "pointer",
+            outline: filtroStatus === "atraso" ? "2px solid var(--danger)" : "none",
+            background: filtroStatus === "atraso" ? "rgba(220,53,69,0.06)" : undefined,
+          }}
+          title="Clique para filtrar apenas cobranças em atraso"
+          onClick={() => setFiltroStatus(filtroStatus === "atraso" ? "todos" : "atraso")}
+        >
+          <div className="l">⚠️ Em atraso</div>
+          <div className="v" style={{ color: "var(--danger)" }}>{money(emAtrasoTotal)}</div>
+          <div className="cli-sub">{emAtrasoArr.length} vencida(s){emAtrasoArr.length ? " · com encargos" : ""}</div>
+        </div>
+
+        <div
+          className="fch-card"
+          style={{
+            cursor: "pointer",
+            outline: filtroStatus === "semBoleto" ? "2px solid var(--terracota)" : "none",
+            background: filtroStatus === "semBoleto" ? "rgba(199,92,62,0.06)" : undefined,
+          }}
+          title="Clique para filtrar alunas sem boleto emitido"
+          onClick={() => setFiltroStatus(filtroStatus === "semBoleto" ? "todos" : "semBoleto")}
+        >
+          <div className="l">📄 Sem boleto</div>
+          <div className="v terra">{semBoleto}</div>
+          <div className="cli-sub">de {mensalistas.length} aluno(s)</div>
+        </div>
+
+        <div
+          className="fch-card"
+          style={{
+            cursor: "pointer",
+            outline: filtroStatus === "todos" && !cleanSearch ? "2px solid var(--line)" : "none",
+          }}
+          title="Clique para ver a lista completa"
+          onClick={() => setFiltroStatus("todos")}
+        >
+          <div className="l">📊 Previsto no mês</div>
+          <div className="v">{money(previsto)}</div>
+          <div className="cli-sub">{previsto ? Math.round((recebido / previsto) * 100) : 0}% fechado</div>
+        </div>
+      </div>
+
+      {/* Barra de composição visual do mês */}
+      {emitido > 0 && (
+        <div
+          style={{ display: "flex", height: 10, borderRadius: 6, overflow: "hidden", margin: ".3rem 0 1rem", background: "var(--line)" }}
+          title={`Recebido ${money(recebido)} · A receber ${money(aReceber)} · Em atraso ${money(emAtrasoTotal)}`}
+        >
+          <div style={{ width: `${(recebido / emitido) * 100}%`, background: "var(--ok)" }} />
+          <div style={{ width: `${(aReceber / emitido) * 100}%`, background: "var(--warn)" }} />
+          <div style={{ width: `${(emAtrasoTotal / emitido) * 100}%`, background: "var(--danger)" }} />
+        </div>
+      )}
+
+      {/* Filtros rápidos e busca */}
+      <div className="filters" style={{ margin: "1rem 0", display: "flex", flexWrap: "wrap", gap: ".5rem", alignItems: "center" }}>
         <input
           className="grow"
           placeholder="🔍 Buscar mensalista por nome, CPF ou telefone..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        {search && <button className="btn ghost sm" onClick={() => setSearch("")}>Limpar</button>}
+        {search && <button className="btn ghost sm" onClick={() => setSearch("")}>Limpar busca</button>}
+
+        <div style={{ display: "flex", gap: ".3rem", flexWrap: "wrap" }}>
+          <button className={`btn sm ${filtroStatus === "todos" ? "" : "ghost"}`} onClick={() => setFiltroStatus("todos")}>
+            Todos ({mensalistas.length})
+          </button>
+          <button className={`btn sm ${filtroStatus === "atraso" ? "" : "ghost"}`} style={filtroStatus === "atraso" ? { background: "var(--danger)", color: "#fff", borderColor: "var(--danger)" } : { color: "var(--danger)" }} onClick={() => setFiltroStatus("atraso")}>
+            ⚠️ Atraso ({emAtrasoArr.length})
+          </button>
+          <button className={`btn sm ${filtroStatus === "aberto" ? "" : "ghost"}`} style={filtroStatus === "aberto" ? { background: "var(--warn)", color: "#fff", borderColor: "var(--warn)" } : { color: "var(--warn)" }} onClick={() => setFiltroStatus("aberto")}>
+            ⏳ No prazo ({noPrazoArr.length})
+          </button>
+          <button className={`btn sm ${filtroStatus === "pago" ? "" : "ghost"}`} style={filtroStatus === "pago" ? { background: "var(--ok)", color: "#fff", borderColor: "var(--ok)" } : { color: "var(--ok)" }} onClick={() => setFiltroStatus("pago")}>
+            ✓ Pago ({pagosArr.length})
+          </button>
+          <button className={`btn sm ${filtroStatus === "semBoleto" ? "" : "ghost"}`} style={filtroStatus === "semBoleto" ? { background: "var(--terracota)", color: "#fff", borderColor: "var(--terracota)" } : { color: "var(--terracota)" }} onClick={() => setFiltroStatus("semBoleto")}>
+            📄 Sem boleto ({semBoleto})
+          </button>
+        </div>
+
         <span className="count">{mensalistasFiltrados.length} de {mensalistas.length}</span>
       </div>
 
-      <div className="fch-tot">
-        <div className="fch-card"><div className="l">✓ Recebido</div><div className="v">{money(recebido)}</div><div className="cli-sub">{pagosArr.length} pago(s)</div></div>
-        <div className="fch-card"><div className="l">⏳ A receber</div><div className="v warn">{money(aReceber)}</div>
-          <div className="cli-sub">{pendArr.length} pendente(s){emAtraso.length ? ` · ${emAtraso.length} em atraso` : ""}</div></div>
-        <div className="fch-card"><div className="l">📄 Sem boleto</div><div className="v terra">{semBoleto}</div><div className="cli-sub">de {mensalistas.length} aluno(s)</div></div>
-        <div className="fch-card"><div className="l">📊 Previsto no mês</div><div className="v">{money(previsto)}</div><div className="cli-sub">{previsto ? Math.round((recebido / previsto) * 100) : 0}% fechado</div></div>
-      </div>
-
-      {!ehMesAtual && <div className="seg-hint">📅 Mês fechado — os boletos são gerados apenas para o mês atual. Meses anteriores sem boleto aparecem como “não gerado”.</div>}
-
-      {/* A consequência do "Baixar" fica escrita antes do botão, não só na
-          confirmação: é uma decisão que muda o mês seguinte. */}
-      {pendArr.length > 0 && (
+      {!ehMesAtual && (
         <div className="seg-hint">
-          ⚠️ <b>Baixar</b> registra que a mensalidade foi paga por fora. A mensalidade seguinte
-          nasce <b>sem Pix</b> — nada é enviado para o WhatsApp da aluna nem aparece no portal dela.
-          Precisando do código naquele mês, use <b>💠 Gerar Pix</b> nele.
+          📅 Mês fechado — os boletos são gerados apenas para o mês atual. Meses anteriores sem boleto aparecem como “não gerado”.
         </div>
       )}
 
+      {/* Tabela de mensalistas da competência */}
       {mensalistasFiltrados.length ? (
-        <table><thead><tr><th>Aluno</th><th>Mensalidade</th><th>Vencimento</th><th>Status do mês</th><th></th></tr></thead><tbody>
-          {mensalistasFiltrados.map((c) => {
-            const inv = invOf(c);
-            return (
-              <tr key={c.id}>
-                <td className="c-main">
-                  <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} />)}>
-                    <span className="cli-av">{initials(c.name)}</span>
-                    <div><span className="cli-name">{c.name}</span><div className="cli-sub">{c.unit}{c.cpf ? "" : " · ⚠ sem CPF"}{c.status === "cancelado" ? " · 🚫 inativa" : ""}</div></div>
-                  </div>
-                </td>
-                <td data-l="Mensalidade">
-                  {money(inv ? inv.amountCents / 100 : valorDe(c))}
-                  {(() => {
-                    const combinado = precoDaComp(data.precos, c.id, comp);
-                    if (combinado) return (
-                      <span className="cli-sub" title={combinado.motivo || `Valor combinado só para ${compLabel(comp)} — o normal dela é ${money(mensalidadeDe(c, data.meta))}`}>
-                        {" "}{combinado.origem === "promocao" ? "🎁 promoção" : "🎁 desconto"}
-                      </span>
-                    );
-                    if (c.monthlyValue != null) return <span className="cli-sub"> (individual)</span>;
-                    return null;
-                  })()}
-                  {/* Vencida: mostra o total que o Pix está cobrando hoje */}
-                  {inv?.encargos?.atrasada && (
-                    <div className="cli-sub" title={`Multa ${money(inv.encargos.multa)} + juros ${money(inv.encargos.juros)} (${inv.encargos.dias} dia(s))`}>
-                      + encargos = <b style={{ color: "var(--danger)" }}>{money(inv.encargos.total)}</b>
-                    </div>
-                  )}
-                </td>
-                <td data-l="Vencimento">{inv ? fmtDate(inv.dueDate) : "dia " + vencDe(c)}</td>
-                <td data-l="Status do mês">
-                  {!inv ? <span className="badge b-muted">não gerado</span>
-                    : inv.status === "pago" ? <span className="badge b-ok" title={inv.baixaManual ? "Baixa dada no painel — recebido por fora do Pix" : "Confirmado pelo Sicredi"}>
-                        ✓ pago{inv.paidAt ? " em " + fmtDate(String(inv.paidAt).slice(0, 10)) : ""}{inv.baixaManual ? " · baixa manual" : ""}
-                      </span>
-                    : inv.status === "cancelado" ? <span className="badge b-danger">cancelado</span>
-                    : inv.encargos?.atrasada ? <span className="badge b-danger">⚠️ em atraso há {inv.encargos.dias} dia(s)</span>
-                    : <span className="badge b-warn">⏳ pendente · vence {fmtDate(inv.dueDate)}</span>}
-                  {inv?.status === "pendente" && inv.semPix && (
-                    <div className="cli-sub" title="O mês anterior teve baixa manual, então esta mensalidade nasceu sem Pix.">💠 sem Pix · baixa manual no mês anterior</div>
-                  )}
-                </td>
-                <td className="td-actions">
-                  {/* Alterar o valor a partir daqui já chega com o mês da tela
-                      escolhido — é o caminho de "dar desconto pra ela nesse mês". */}
-                  <button className="btn ghost sm" title="Alterar o valor da mensalidade"
-                    onClick={() => open(<AlterarMensalidade client={c} compInicial={comp} />)}>💰</button>
-                  {/* Ex-aluna não gera boleto novo — o backend recusa, e o
-                      botão diz o porquê em vez de deixar a Inêz descobrir pelo
-                      erro. Volta a aparecer quando a inscrição for reativada. */}
-                  {!inv && ehMesAtual && (c.status === "cancelado"
-                    ? <span className="badge b-muted" title="Inscrição inativa: reative a aluna na aba Ex-Alunos para voltar a gerar mensalidade.">🚫 inativa · sem cobrança</span>
-                    : <button className="btn sm" disabled={busy} onClick={() => gerar(c)}>🧾 Gerar boleto</button>)}
-                  {inv && inv.status === "pendente" && <>
-                    <button className="btn wa sm"
-                      title={inv.encargos?.atrasada ? "Cobrar no WhatsApp da aluna" : "Lembrar no WhatsApp da aluna"}
-                      onClick={() => cobrarNoWa(c, inv)}>
-                      <WaIcon /> {inv.encargos?.atrasada ? "Cobrar" : "Lembrar"}
-                    </button>
-                    {inv.boletoUrl && <a className="btn sec sm" href={inv.boletoUrl} target="_blank" rel="noreferrer">📄 Boleto</a>}
-                    {inv.pixCode
-                      ? <button className="btn sec sm" onClick={() => copyPix(inv.pixCode)}>💠 Pix</button>
-                      /* Sem QR: nasceu sem Pix por baixa manual do mês anterior,
-                         o valor foi alterado (o antigo cobrava o preço velho) ou
-                         o Sicredi falhou. Um clique refaz — e, no primeiro caso,
-                         é a saída deliberada da supressão. */
-                      : <button className="btn sec sm" disabled={busy} onClick={() => reemitir(inv)}
-                          title={inv.semPix ? "Esta mensalidade nasceu sem Pix (o mês anterior teve baixa manual). Gerar aqui libera o código." : ""}>
-                          💠 Gerar Pix
-                        </button>}
-                    <button className="btn sm" disabled={busy} onClick={() => marcarPago(c, inv)}>✓ Baixar</button>
-                  </>}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody></table>
-      ) : <div className="empty"><div className="ic">📅</div><p>{search ? "Nenhum mensalista encontrado para esta busca." : "Nenhum mensalista nessa competência."}</p></div>}
-    </div>
-  );
-}
-
-/* ============================= RECEBIMENTOS (só leitura) ============================= */
-// Gráfico de barras nativo (sem dependência)
-function BarChart({ series, color = "var(--sage-deep)" }) {
-  const max = Math.max(1, ...series.map((s) => s.value));
-  const total = series.reduce((a, s) => a + s.value, 0);
-  return (
-    <div className="chart">
-      <div className="chart-bars">
-        {series.map((s, i) => {
-          const pct = Math.round((s.value / max) * 100);
-          return (
-            <div className="bar" key={i} title={`${s.full || s.label}: ${money(s.value)}`}>
-              <span className="bar-val">{s.value ? money(s.value).replace("R$ ", "") : ""}</span>
-              <div className="bar-track">
-                <div className="bar-fill" style={{ height: `${s.value ? Math.max(pct, 3) : 0}%`, background: color }} />
-              </div>
-              <span className="bar-label">{s.label}</span>
-            </div>
-          );
-        })}
-      </div>
-      {total === 0 && <div className="chart-empty">Sem recebimentos neste período.</div>}
-    </div>
-  );
-}
-
-/* Painel dos Pix da competência: as mensalidades emitidas no mês, separadas em
-   recebido, a receber e em atraso. É a mesma conta da aba Mensalistas, vista
-   pelo lado do dinheiro — aqui você olha quanto entrou e quanto falta entrar,
-   lá você age em cima de cada aluna. */
-function PixDoMes() {
-  const { data } = useStore();
-  const { open } = useModal();
-  const [comp, setComp] = useState(compAtual());
-  const [filtroGrupo, setFiltroGrupo] = useState("todos"); // "todos" | "atraso" | "aberto" | "pago"
-  const atual = compAtual();
-
-  const cliOf = (inv) => data.clients.find((c) => c.id === inv.clientId);
-  const invs = (data.invoices || [])
-    .filter((i) => i.competencia === comp && i.status !== "cancelado")
-    .map((i) => ({ ...i, cli: cliOf(i) }))
-    .sort((a, b) => (a.dueDate || "").localeCompare(b.dueDate || ""));
-
-  const pagas = invs.filter((i) => i.status === "pago");
-  const abertas = invs.filter((i) => i.status === "pendente");
-  const atrasadas = abertas.filter((i) => i.encargos?.atrasada);
-  const noPrazo = abertas.filter((i) => !i.encargos?.atrasada);
-
-  const soma = (arr, f) => arr.reduce((s, i) => s + f(i), 0);
-  const valorHoje = (i) => (i.encargos ? i.encargos.total : i.amountCents / 100);
-  const recebido = soma(pagas, (i) => i.amountCents / 100);
-  const aReceber = soma(noPrazo, valorHoje);
-  const emAtraso = soma(atrasadas, valorHoje);
-  const emitido = recebido + aReceber + emAtraso;
-  const pctRecebido = emitido ? Math.round((recebido / emitido) * 100) : 0;
-  // Pix sem código emitido: a mensalidade existe, mas não há QR para mandar.
-  const semPix = abertas.filter((i) => !i.pixCode).length;
-
-  const msgCobranca = (c, inv) => {
-    const e = inv.encargos;
-    const primeiro = (c?.name || "").split(" ")[0] || "aluna";
-    const linhas = [
-      `Olá ${primeiro}! 💚 Passando para lembrar da sua mensalidade de ${compLabel(inv.competencia)}, aqui na Fios que Curam.`,
-      "",
-      `Vencimento: ${fmtDate(inv.dueDate)}`,
-    ];
-    if (e && e.atrasada) {
-      linhas.push(
-        `Está em atraso há ${e.dias} ${e.dias === 1 ? "dia" : "dias"}.`,
-        "",
-        `Mensalidade: ${money(inv.amountCents / 100)}`,
-        `Multa: ${money(e.multa)}`,
-        `Juros (${e.dias} ${e.dias === 1 ? "dia" : "dias"}): ${money(e.juros)}`,
-        `*Total: ${money(e.total)}*`,
-      );
-    } else {
-      linhas.push("", `*Valor: ${money(inv.amountCents / 100)}*`);
-    }
-    if (inv.pixCode && inv.pixAtualizado !== false) {
-      linhas.push("", "Segue o Pix copia-e-cola:", inv.pixCode);
-    } else {
-      linhas.push("", "Me avisa por aqui que eu te mando o Pix atualizado. 💚");
-    }
-    linhas.push("", "Qualquer dúvida, é só responder por aqui!");
-    return linhas.join("\n");
-  };
-
-  const cobrarNoWa = (c, inv) => {
-    if (!c?.phone) return toast((c?.name || "Aluna") + " não tem telefone cadastrado.", "error");
-    openWa(c.phone, msgCobranca(c, inv));
-  };
-
-  const GRUPOS = [
-    { k: "atraso", tit: "⚠️ Em atraso", cls: "b-danger", lista: atrasadas },
-    { k: "aberto", tit: "⏳ A receber", cls: "b-warn", lista: noPrazo },
-    { k: "pago", tit: "✓ Recebido", cls: "b-ok", lista: pagas },
-  ];
-
-  const gruposExibidos = filtroGrupo === "todos" ? GRUPOS : GRUPOS.filter((g) => g.k === filtroGrupo);
-
-  return (
-    <div className="panel" style={{ marginBottom: "1.2rem" }}>
-      <div className="ag-toolbar">
-        <div className="ag-nav">
-          <button className="navbtn" onClick={() => setComp(addComp(comp, -1))}>←</button>
-          <span className="ag-period">💠 Pix de {compLabel(comp)}</span>
-          <button className="navbtn" onClick={() => setComp(addComp(comp, 1))} disabled={comp >= atual}>→</button>
-          {comp !== atual && <button className="btn ghost sm" onClick={() => setComp(atual)}>Mês atual</button>}
-          {filtroGrupo !== "todos" && (
-            <button className="btn ghost sm" onClick={() => setFiltroGrupo("todos")}>
-              ✕ Limpar filtro ({filtroGrupo === "atraso" ? "em atraso" : filtroGrupo})
-            </button>
-          )}
-        </div>
-        <span className="cli-sub">{invs.length} mensalidade(s) emitida(s){semPix ? ` · ${semPix} sem Pix gerado` : ""}</span>
-      </div>
-
-      <div className="fch-tot">
-        <div
-          className="fch-card"
-          style={{ cursor: "pointer", outline: filtroGrupo === "pago" ? "2px solid var(--ok)" : "none" }}
-          title="Clique para filtrar apenas recebidos"
-          onClick={() => setFiltroGrupo(filtroGrupo === "pago" ? "todos" : "pago")}
-        >
-          <div className="l">✓ Recebido</div>
-          <div className="v">{money(recebido)}</div>
-          <div className="cli-sub">{pagas.length} paga(s) · {pctRecebido}% do emitido</div>
-        </div>
-        <div
-          className="fch-card"
-          style={{ cursor: "pointer", outline: filtroGrupo === "aberto" ? "2px solid var(--warn)" : "none" }}
-          title="Clique para filtrar apenas a receber no prazo"
-          onClick={() => setFiltroGrupo(filtroGrupo === "aberto" ? "todos" : "aberto")}
-        >
-          <div className="l">⏳ A receber</div>
-          <div className="v warn">{money(aReceber)}</div>
-          <div className="cli-sub">{noPrazo.length} dentro do prazo</div>
-        </div>
-        <div
-          className="fch-card"
-          style={{ cursor: "pointer", outline: filtroGrupo === "atraso" ? "2px solid var(--danger)" : "none", background: filtroGrupo === "atraso" ? "rgba(220,53,69,0.06)" : undefined }}
-          title="Clique para filtrar apenas em atraso"
-          onClick={() => setFiltroGrupo(filtroGrupo === "atraso" ? "todos" : "atraso")}
-        >
-          <div className="l">⚠️ Em atraso</div>
-          <div className="v" style={{ color: "var(--danger)" }}>{money(emAtraso)}</div>
-          <div className="cli-sub">{atrasadas.length} vencida(s){atrasadas.length ? " · com multa e juros" : ""}</div>
-        </div>
-        <div
-          className="fch-card"
-          style={{ cursor: "pointer", outline: filtroGrupo === "todos" ? "2px solid var(--terracota)" : "none" }}
-          title="Clique para ver todas as mensalidades emitidas"
-          onClick={() => setFiltroGrupo("todos")}
-        >
-          <div className="l">💠 Emitido no mês</div>
-          <div className="v terra">{money(emitido)}</div>
-          <div className="cli-sub">{invs.length} Pix</div>
-        </div>
-      </div>
-
-      {/* Barra de composição: o mês inteiro numa linha só. */}
-      {emitido > 0 && (
-        <div style={{ display: "flex", height: 10, borderRadius: 6, overflow: "hidden", margin: ".2rem 0 1rem", background: "var(--line)" }}
-          title={`Recebido ${money(recebido)} · A receber ${money(aReceber)} · Em atraso ${money(emAtraso)}`}>
-          <div style={{ width: `${(recebido / emitido) * 100}%`, background: "var(--ok)" }} />
-          <div style={{ width: `${(aReceber / emitido) * 100}%`, background: "var(--warn)" }} />
-          <div style={{ width: `${(emAtraso / emitido) * 100}%`, background: "var(--danger)" }} />
-        </div>
-      )}
-
-      {invs.length ? (
-        <table><thead><tr><th>Aluno</th><th>Vencimento</th><th>Valor</th><th>Situação</th><th>Pix</th><th>WhatsApp</th></tr></thead><tbody>
-          {gruposExibidos.filter((g) => g.lista.length).map((g) => (
-            <Fragment key={g.k}>
-              <tr className="grp"><td colSpan={6} style={{ paddingTop: ".9rem" }}>
-                <b className="cli-sub" style={{ textTransform: "uppercase", letterSpacing: ".04em" }}>{g.tit} · {g.lista.length}</b>
-              </td></tr>
-              {g.lista.map((i) => (
-                <tr key={i.id}>
+        <table>
+          <thead>
+            <tr>
+              <th>Aluno</th>
+              <th>Mensalidade</th>
+              <th>Vencimento</th>
+              <th>Status do mês</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {mensalistasFiltrados.map((c) => {
+              const inv = invOf(c);
+              return (
+                <tr key={c.id}>
                   <td className="c-main">
-                    {i.cli
-                      ? <span className="cli-name row-click" onClick={() => open(<ClientProfile client={i.cli} />)}>{i.cli.name}</span>
-                      : <span className="cli-name">aluno #{i.clientId}</span>}
-                    {i.cli?.unit ? <div className="cli-sub">{i.cli.unit}</div> : null}
+                    <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} />)}>
+                      <span className="cli-av">{initials(c.name)}</span>
+                      <div>
+                        <span className="cli-name">{c.name}</span>
+                        <div className="cli-sub">
+                          {c.unit}
+                          {c.cpf ? "" : " · ⚠ sem CPF"}
+                          {c.status === "cancelado" ? " · 🚫 inativa" : ""}
+                        </div>
+                      </div>
+                    </div>
                   </td>
-                  <td data-l="Vencimento">
-                    {i.status === "pendente" ? (
-                      <span
-                        className="row-click"
-                        style={{ cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}
-                        title="Clique para alterar a data de vencimento deste boleto"
-                        onClick={() => open(<AlterarVencimentoModal invoice={i} clientName={i.cli?.name} />)}
-                      >
-                        {fmtDate(i.dueDate)} ✏️
-                      </span>
-                    ) : (
-                      fmtDate(i.dueDate)
-                    )}
-                    {i.status === "pago" && i.paidAt ? <div className="cli-sub">pago em {fmtDate(String(i.paidAt).slice(0, 10))}</div> : null}
-                  </td>
-                  <td data-l="Valor">
-                    <b>{money(valorHoje(i))}</b>
-                    {i.encargos?.atrasada && (
-                      <div className="cli-sub" title={`Multa ${money(i.encargos.multa)} + juros ${money(i.encargos.juros)}`}>
-                        {money(i.amountCents / 100)} + encargos
+                  <td data-l="Mensalidade">
+                    {money(inv ? inv.amountCents / 100 : valorDe(c))}
+                    {(() => {
+                      const combinado = precoDaComp(data.precos, c.id, comp);
+                      if (combinado) return (
+                        <span className="cli-sub" title={combinado.motivo || `Valor combinado só para ${compLabel(comp)} — o normal dela é ${money(mensalidadeDe(c, data.meta))}`}>
+                          {" "}{combinado.origem === "promocao" ? "🎁 promoção" : "🎁 desconto"}
+                        </span>
+                      );
+                      if (c.monthlyValue != null) return <span className="cli-sub"> (individual)</span>;
+                      return null;
+                    })()}
+                    {inv?.encargos?.atrasada && (
+                      <div className="cli-sub" title={`Multa ${money(inv.encargos.multa)} + juros ${money(inv.encargos.juros)} (${inv.encargos.dias} dia(s))`}>
+                        + encargos = <b style={{ color: "var(--danger)" }}>{money(inv.encargos.total)}</b>
                       </div>
                     )}
                   </td>
-                  <td data-l="Situação">
-                    <span className={`badge ${g.cls}`}>{g.tit}</span>
-                    {i.encargos?.atrasada && <div className="cli-sub">há {i.encargos.dias} dia(s)</div>}
-                  </td>
-                  <td data-l="Pix">
-                    {i.status === "pago" ? <span className="cli-sub">—</span>
-                      : i.pixCode
-                        ? <button className="btn sec sm" title="Copiar o Pix copia-e-cola"
-                            onClick={() => { navigator.clipboard.writeText(i.pixCode); toast("Código Pix copiado! 📋"); }}>
-                            💠 Copiar{i.pixAtualizado === false ? " (desatualizado)" : ""}
-                          </button>
-                        : <span className="badge b-muted">sem Pix</span>}
-                  </td>
-                  <td data-l="WhatsApp">
-                    {i.status === "pago" ? (
-                      <span className="cli-sub">—</span>
+                  <td data-l="Vencimento">
+                    {inv ? (
+                      inv.status === "pendente" ? (
+                        <span
+                          className="row-click"
+                          style={{ cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}
+                          title="Clique para alterar a data de vencimento deste boleto"
+                          onClick={() => open(<AlterarVencimentoModal invoice={inv} clientName={c.name} />)}
+                        >
+                          {fmtDate(inv.dueDate)} ✏️
+                        </span>
+                      ) : (
+                        fmtDate(inv.dueDate)
+                      )
                     ) : (
-                      <button
-                        className="btn wa sm"
-                        title={i.encargos?.atrasada ? "Cobrar pelo WhatsApp do atendimento (sem Meta)" : "Lembrar pelo WhatsApp do atendimento"}
-                        onClick={() => cobrarNoWa(i.cli, i)}
-                      >
-                        <WaIcon /> {i.encargos?.atrasada ? "Cobrar" : "Lembrar"}
-                      </button>
+                      "dia " + vencDe(c)
+                    )}
+                    {inv?.status === "pago" && inv.paidAt ? (
+                      <div className="cli-sub">pago em {fmtDate(String(inv.paidAt).slice(0, 10))}</div>
+                    ) : null}
+                  </td>
+                  <td data-l="Status do mês">
+                    {!inv ? (
+                      <span className="badge b-muted">não gerado</span>
+                    ) : inv.status === "pago" ? (
+                      <span className="badge b-ok" title={inv.baixaManual ? "Baixa dada no painel — recebido por fora do Pix" : "Confirmado pelo Sicredi"}>
+                        ✓ pago{inv.paidAt ? " em " + fmtDate(String(inv.paidAt).slice(0, 10)) : ""}{inv.baixaManual ? " · baixa manual" : ""}
+                      </span>
+                    ) : inv.status === "cancelado" ? (
+                      <span className="badge b-danger">cancelado</span>
+                    ) : inv.encargos?.atrasada ? (
+                      <span className="badge b-danger">⚠️ em atraso há {inv.encargos.dias} dia(s)</span>
+                    ) : (
+                      <span className="badge b-warn">⏳ pendente · vence {fmtDate(inv.dueDate)}</span>
+                    )}
+                  </td>
+                  <td className="td-actions">
+                    <button
+                      className="btn ghost sm"
+                      title="Alterar o valor da mensalidade"
+                      onClick={() => open(<AlterarMensalidade client={c} compInicial={comp} />)}
+                    >
+                      💰
+                    </button>
+
+                    {!inv && ehMesAtual && (
+                      c.status === "cancelado" ? (
+                        <span className="badge b-muted" title="Inscrição inativa: reative a aluna na aba Ex-Alunos para voltar a gerar mensalidade.">
+                          🚫 inativa · sem cobrança
+                        </span>
+                      ) : (
+                        <button className="btn sm" disabled={busy} onClick={() => gerar(c)}>
+                          🧾 Gerar boleto
+                        </button>
+                      )
+                    )}
+
+                    {inv && inv.status === "pendente" && (
+                      <>
+                        <button
+                          className="btn wa sm"
+                          title={inv.encargos?.atrasada ? "Cobrar no WhatsApp da aluna" : "Lembrar no WhatsApp da aluna"}
+                          onClick={() => cobrarNoWa(c, inv)}
+                        >
+                          <WaIcon /> {inv.encargos?.atrasada ? "Cobrar" : "Lembrar"}
+                        </button>
+                        {inv.boletoUrl && (
+                          <a className="btn sec sm" href={inv.boletoUrl} target="_blank" rel="noreferrer">
+                            📄 Boleto
+                          </a>
+                        )}
+                        {inv.pixCode ? (
+                          <button className="btn sec sm" onClick={() => copyPix(inv.pixCode)} title="Copiar código Pix">
+                            💠 Pix
+                          </button>
+                        ) : (
+                          <button className="btn sec sm" disabled={busy} onClick={() => reemitir(inv)} title="Gerar código Pix desta mensalidade">
+                            💠 Gerar Pix
+                          </button>
+                        )}
+                        <button className="btn sm" disabled={busy} onClick={() => marcarPago(c, inv)}>
+                          ✓ Baixar
+                        </button>
+                      </>
                     )}
                   </td>
                 </tr>
-              ))}
-            </Fragment>
-          ))}
-        </tbody></table>
+              );
+            })}
+          </tbody>
+        </table>
       ) : (
-        <div className="empty"><div className="ic">💠</div>
-          <p>Nenhuma mensalidade emitida em {compLabel(comp)}.</p>
-          <div className="cli-sub">Os Pix são gerados na aba Mensalistas.</div>
+        <div className="empty">
+          <div className="ic">📅</div>
+          <p>{search || filtroStatus !== "todos" ? "Nenhum mensalista encontrado para este filtro." : "Nenhum mensalista nessa competência."}</p>
         </div>
       )}
     </div>
   );
 }
 
-export function Recebimentos() {
+/* ----------------- ABA 2: MÉTRICAS & FLUXO (gráficos e histórico) ----------------- */
+function FinanceiroMetricas() {
   const { data } = useStore();
-  // compAtual() usa o fuso de São Paulo. new Date().toISOString() usa UTC e
-  // virava o mês 3h antes da meia-noite daqui — no dia 31 à noite, "mês atual"
-  // já era o mês seguinte.
+  const { open } = useModal();
+  const [histSearch, setHistSearch] = useState("");
   const month = compAtual();
 
-  /* O dinheiro da escola é a MENSALIDADE, não a aula. A aula não tem preço
-     próprio (o R$ 20 por reserva saiu do sistema em 30/08/2026), então todos os
-     números daqui saem das mensalidades emitidas — as mesmas do bloco de Pix. */
   const cliOf = (i) => data.clients.find((c) => c.id === i.clientId);
   const invs = (data.invoices || []).filter((i) => i.status !== "cancelado");
   const valorHoje = (i) => (i.encargos ? i.encargos.total : i.amountCents / 100);
   const diaPgto = (i) => String(i.paidAt || "").slice(0, 10);
 
-  const pagos = invs.filter((i) => i.status === "pago")
+  const pagos = invs
+    .filter((i) => i.status === "pago")
     .map((i) => ({ ...i, cli: cliOf(i) }))
     .sort((a, b) => diaPgto(b).localeCompare(diaPgto(a)));
-  // "A receber" é o que está em aberto na competência corrente — não o passivo
-  // histórico inteiro, que juntaria anos de pendência num número só.
+
   const pend = invs.filter((i) => i.status === "pendente" && i.competencia === month);
   const atrasadas = pend.filter((i) => i.encargos?.atrasada).length;
 
@@ -1430,62 +1390,164 @@ export function Recebimentos() {
     const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
     const from = d.toISOString().slice(0, 10);
     const to = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10);
-    return { label: capitalize(d.toLocaleDateString("pt-BR", { month: "short" }).replace(".", "")), full: capitalize(d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" })), value: sumBetween(from, to) };
+    return {
+      label: capitalize(d.toLocaleDateString("pt-BR", { month: "short" }).replace(".", "")),
+      full: capitalize(d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" })),
+      value: sumBetween(from, to),
+    };
   });
 
-  return (<>
-    {/* Os Pix das mensalidades vêm primeiro: é a receita recorrente da escola —
-        e, desde 30/08/2026, a única. A aula em si não se cobra. */}
-    <PixDoMes />
+  // Filtragem do histórico
+  const cleanHist = histSearch.trim().toLowerCase();
+  const pagosFiltrados = pagos.filter((i) => {
+    if (!cleanHist) return true;
+    const nome = (i.cli?.name || "").toLowerCase();
+    const unidade = (i.cli?.unit || "").toLowerCase();
+    const compNome = compLabel(i.competencia).toLowerCase();
+    return nome.includes(cleanHist) || unidade.includes(cleanHist) || compNome.includes(cleanHist);
+  });
 
-    <div className="grid stats" style={{ marginBottom: "1.2rem" }}>
-      {/* Os dois primeiros cards são do MÊS; "total" e "ticket" são vitalícios.
-          O rótulo de cada um diz qual é qual, para não comparar coisa diferente. */}
-      <div className="card stat"><div className="lbl">💰 Recebido no mês</div><div className="val">{money(recMes)}</div><div className="foot">{compLabel(month)}</div></div>
-      <div className="card stat" title={`Mensalidades de ${compLabel(month)} ainda em aberto, já com multa e juros das vencidas.`}>
-        <div className="lbl">⏳ A receber no mês</div>
-        <div className="val warn">{money(totalPend)}</div>
-        <div className="foot">{pend.length} mensalidade(s) · {compLabel(month)}</div>
-        {atrasadas ? <div className="cli-sub" style={{ fontSize: ".68rem" }}>{atrasadas} em atraso · com encargos</div> : null}
+  return (
+    <>
+      <div className="grid stats" style={{ marginBottom: "1.2rem" }}>
+        <div className="card stat">
+          <div className="lbl">💰 Recebido no mês</div>
+          <div className="val">{money(recMes)}</div>
+          <div className="foot">{compLabel(month)}</div>
+        </div>
+        <div className="card stat" title={`Mensalidades de ${compLabel(month)} ainda em aberto, com multa e juros das vencidas.`}>
+          <div className="lbl">⏳ A receber no mês</div>
+          <div className="val warn">{money(totalPend)}</div>
+          <div className="foot">{pend.length} mensalidade(s) · {compLabel(month)}</div>
+          {atrasadas ? <div className="cli-sub" style={{ fontSize: ".68rem" }}>{atrasadas} em atraso · com encargos</div> : null}
+        </div>
+        <div className="card stat">
+          <div className="lbl">📈 Recebido total</div>
+          <div className="val terra">{money(recTotal)}</div>
+          <div className="foot">{pagos.length} mensalidade(s) paga(s)</div>
+        </div>
+        <div className="card stat">
+          <div className="lbl">🎟️ Ticket médio</div>
+          <div className="val">{money(ticket)}</div>
+          <div className="foot">por mensalidade paga</div>
+        </div>
       </div>
-      <div className="card stat"><div className="lbl">📈 Recebido total</div><div className="val terra">{money(recTotal)}</div><div className="foot">{pagos.length} mensalidade(s) paga(s)</div></div>
-      <div className="card stat"><div className="lbl">🎟️ Ticket médio</div><div className="val">{money(ticket)}</div><div className="foot">por mensalidade paga</div></div>
-    </div>
 
-    <div className="panel">
-      <div className="panel-h"><h2>📅 Recebido por dia <span className="muted-note">· últimos 14 dias</span></h2></div>
-      <BarChart series={porDia} color="var(--sage-deep)" />
-    </div>
-    <div className="dash-cols">
+      <div className="panel" style={{ marginBottom: "1.2rem" }}>
+        <div className="panel-h">
+          <h2>📅 Recebido por dia <span className="muted-note">· últimos 14 dias</span></h2>
+        </div>
+        <BarChart series={porDia} color="var(--sage-deep)" />
+      </div>
+
+      <div className="dash-cols" style={{ marginBottom: "1.2rem" }}>
+        <div className="panel">
+          <div className="panel-h">
+            <h2>📆 Por semana <span className="muted-note">· 8 semanas</span></h2>
+          </div>
+          <BarChart series={porSemana} color="var(--terracota)" />
+        </div>
+        <div className="panel">
+          <div className="panel-h">
+            <h2>🗓 Por mês <span className="muted-note">· 6 meses</span></h2>
+          </div>
+          <BarChart series={porMes} color="var(--green-deep)" />
+        </div>
+      </div>
+
       <div className="panel">
-        <div className="panel-h"><h2>📆 Por semana <span className="muted-note">· 8 semanas</span></h2></div>
-        <BarChart series={porSemana} color="var(--terracota)" />
-      </div>
-      <div className="panel">
-        <div className="panel-h"><h2>🗓 Por mês <span className="muted-note">· 6 meses</span></h2></div>
-        <BarChart series={porMes} color="var(--green-deep)" />
-      </div>
-    </div>
+        <div className="panel-h" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: ".8rem" }}>
+          <div>
+            <h2>✅ Recebimentos confirmados</h2>
+            <span className="cli-sub">{pagos.length} registro(s) histórico(s)</span>
+          </div>
+          <input
+            style={{ maxWidth: 300 }}
+            placeholder="🔍 Filtrar por aluno ou unidade..."
+            value={histSearch}
+            onChange={(e) => setHistSearch(e.target.value)}
+          />
+        </div>
 
-    <div className="panel">
-      <div className="panel-h"><h2>✅ Recebimentos confirmados</h2><span className="cli-sub">{pagos.length} registro(s)</span></div>
-      {pagos.length ? (
-        <table><thead><tr><th>Aluno</th><th>Unidade</th><th>Competência</th><th>Vencimento</th><th>Data pgto.</th><th>Valor</th></tr></thead><tbody>
-          {pagos.map((i) => (
-            <tr key={i.id}>
-              <td className="cli-name c-main">{i.cli?.name || `aluno #${i.clientId}`}</td>
-              <td data-l="Unidade">{i.cli?.unit ? <span className="chip">{i.cli.unit}</span> : "—"}</td>
-              <td data-l="Competência"><span className="badge b-sage">{compLabel(i.competencia)}</span></td>
-              <td data-l="Vencimento">{i.dueDate ? fmtDate(i.dueDate) : "—"}</td>
-              <td data-l="Data pgto.">{diaPgto(i) ? fmtDate(diaPgto(i)) : "—"}</td>
-              <td data-l="Valor"><b>{money(i.amountCents / 100)}</b></td>
-            </tr>
-          ))}
-        </tbody></table>
-      ) : <div className="empty"><div className="ic">💰</div><p>Nenhuma mensalidade paga ainda.</p></div>}
-    </div>
-  </>);
+        {pagosFiltrados.length ? (
+          <table>
+            <thead>
+              <tr>
+                <th>Aluno</th>
+                <th>Unidade</th>
+                <th>Competência</th>
+                <th>Vencimento</th>
+                <th>Data pgto.</th>
+                <th>Valor</th>
+                <th>Origem</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pagosFiltrados.map((i) => (
+                <tr key={i.id}>
+                  <td className="cli-name c-main">
+                    {i.cli ? (
+                      <span className="row-click" onClick={() => open(<ClientProfile client={i.cli} />)}>
+                        {i.cli.name}
+                      </span>
+                    ) : (
+                      `aluno #${i.clientId}`
+                    )}
+                  </td>
+                  <td data-l="Unidade">{i.cli?.unit ? <span className="chip">{i.cli.unit}</span> : "—"}</td>
+                  <td data-l="Competência"><span className="badge b-sage">{compLabel(i.competencia)}</span></td>
+                  <td data-l="Vencimento">{i.dueDate ? fmtDate(i.dueDate) : "—"}</td>
+                  <td data-l="Data pgto.">{diaPgto(i) ? fmtDate(diaPgto(i)) : "—"}</td>
+                  <td data-l="Valor"><b>{money(i.amountCents / 100)}</b></td>
+                  <td data-l="Origem">
+                    {i.baixaManual ? (
+                      <span className="badge b-warn" title="Baixa manual registrada no painel">baixa manual</span>
+                    ) : (
+                      <span className="badge b-ok" title="Recebido via Pix Sicredi">Pix Sicredi</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty">
+            <div className="ic">💰</div>
+            <p>{histSearch ? "Nenhum pagamento encontrado para este filtro." : "Nenhuma mensalidade paga ainda."}</p>
+          </div>
+        )}
+      </div>
+    </>
+  );
 }
+
+/* ----------------- COMPONENTE PRINCIPAL FINANCEIRO ----------------- */
+export function Financeiro({ go, params }) {
+  const [tab, setTab] = useState(params?.tab || "operacao");
+
+  useEffect(() => {
+    if (params?.tab) setTab(params.tab);
+  }, [params?.tab]);
+
+  return (
+    <>
+      <div className="seg seg-tabs" style={{ marginBottom: "1.2rem" }}>
+        <button className={tab === "operacao" ? "on" : ""} onClick={() => setTab("operacao")}>
+          📋 Operação do Mês
+        </button>
+        <button className={tab === "metricas" ? "on" : ""} onClick={() => setTab("metricas")}>
+          📊 Métricas & Fluxo
+        </button>
+      </div>
+
+      {tab === "operacao" ? <FinanceiroOperacao /> : <FinanceiroMetricas />}
+    </>
+  );
+}
+
+// Aliases para compatibilidade reversa
+export const Mensalistas = Financeiro;
+export const Recebimentos = Financeiro;
 
 /* ===================== DEPOIMENTOS ===================== */
 const EMPTY_FORM = { name: "", role: "", text: "", active: true, order: 0 };

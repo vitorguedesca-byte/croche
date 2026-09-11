@@ -1050,20 +1050,7 @@ function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago 
         </div>
       )}
 
-      {/* Mensalidade combinada direto com a escola: o mês anterior teve baixa
-          manual, então esta nasceu sem Pix. Nada de QR nem de botão que falharia —
-          a aluna vê o combinado dela e o caminho do WhatsApp. */}
-      {atual && atual.semPix ? (
-        <>
-          <p className="pt-hint" style={{ marginTop: ".8rem" }}>
-            Esta mensalidade está combinada direto com a escola — não há Pix para ela.
-            Qualquer dúvida sobre o pagamento, é só chamar a gente. 💚
-          </p>
-          <a className="pt-btn pt-btn-wa" href={waLink(WA_ESCOLA, `Olá! Queria falar sobre a minha mensalidade de ${atual ? compLabel(atual.competencia) : ""}. 💚`)} target="_blank" rel="noreferrer">
-            <WaIcon size={20} /> Falar com a escola
-          </a>
-        </>
-      ) : atual && (pixCode ? (<>
+      {atual && (pixCode ? (<>
         <PixQR code={pixCode} size={kiosk ? 300 : 230} legenda="Aponte a câmera do seu celular para pagar" />
         <details className="pt-pix-det">
           <summary>Prefiro copiar o código</summary>

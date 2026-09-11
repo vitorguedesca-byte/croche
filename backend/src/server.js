@@ -2573,18 +2573,8 @@ async function gerarMensalidade(clientId, competencia) {
   if (!valor) throw Object.assign(new Error("Defina o valor da mensalidade (no aluno ou nas Configurações)."), { code: 400 });
   const dueDate = vencimentoDe(client, comp);
   const valorCents = Math.round(valor * 100);
-  /* Mês anterior baixado na mão = a aluna acerta fora do sistema. A mensalidade
-     seguinte nasce SEM Pix: ela não recebe QR nenhum, nem pelo portal nem pela
-     cobrança do painel. É uma marca de um mês só — o mês depois deste volta ao
-     normal, a não ser que também leve baixa manual. */
-  const anterior = await prisma.invoice.findFirst({
-    where: { clientId, competencia: somarComp(comp, -1) },
-  });
-  const semPix = !!anterior?.baixaManual;
   let txid = null, pixCode = null, pixExpiresOn = null;
-  if (semPix) {
-    console.log(`[mensalidade] ${client.name} (${comp}): sem Pix — ${anterior.competencia} teve baixa manual.`);
-  } else if (sicrediConfigured()) {
+  if (sicrediConfigured()) {
     // Se o Sicredi falhar, a mensalidade ainda precisa existir aqui — senão a aluna
     // fica sem cobrança nenhuma. Fica sem Pix e a tela oferece gerar de novo.
     try {
@@ -2600,7 +2590,7 @@ async function gerarMensalidade(clientId, competencia) {
     }
   }
   return prisma.invoice.create({
-    data: { clientId, competencia: comp, amountCents: valorCents, dueDate, status: "pendente", txid, pixCode, pixExpiresOn, semPix },
+    data: { clientId, competencia: comp, amountCents: valorCents, dueDate, status: "pendente", txid, pixCode, pixExpiresOn, semPix: false },
   });
 }
 
@@ -2647,16 +2637,7 @@ const SEQ_LIMITE_REEMISSAO = 90;
  */
 async function pixPagavelDaMensalidade(invoice) {
   const hoje = todayISO();
-  /* Mensalidade marcada para não emitir Pix (veio depois de uma baixa manual:
-     a aluna acerta fora do sistema). Nada de QR — nem aqui, nem no portal. Quem
-     precisar do código passa pelo botão "Gerar Pix" do painel, que limpa a marca
-     antes de chamar esta função. */
-  if (invoice.semPix) {
-    throw Object.assign(
-      new Error("Esta mensalidade está marcada para não emitir Pix — a anterior teve baixa manual."),
-      { code: 409, codigo: "SEM_PIX" }
-    );
-  }
+
   const devido = encargosHoje(invoice, hoje);
   const valorMudou = invoice.pixCode
     ? (totalDoPixAtual(invoice) !== devido.totalCents || (invoice.encargosAte && !devido.atrasada))
@@ -2711,37 +2692,15 @@ app.post("/api/clients/:id/invoice", wrap(async (req, res) => {
 }));
 
 /* Marcar mensalidade como paga (baixa manual).
-
-   Toda baixa dada pelo painel é manual por definição: o Sicredi confirma sozinho
-   pelo webhook (confirmarPagamentoPorTxid), sem passar por aqui. Então quem
-   clica está dizendo "recebi por fora" — e quem paga por fora não usa Pix.
-   Por isso a mensalidade SEGUINTE nasce sem QR (ver gerarMensalidade).
-
-   `manual: false` no corpo existe para conciliação/importação: registra o
-   pagamento sem carimbar a marca que suprime o Pix do mês que vem. */
+   Registra o pagamento manual da mensalidade (dinheiro, transferência, etc).
+   Não afeta de forma alguma o Pix ou as cobranças dos meses seguintes. */
 app.post("/api/invoices/:id/pay", wrap(async (req, res) => {
   const manual = req.body?.manual !== false;
   const inv = await prisma.invoice.update({
     where: { id: Number(req.params.id) },
     data: { status: "pago", paidAt: req.body?.paidAt || todayISO(), baixaManual: manual },
   });
-  /* Se a mensalidade do mês seguinte JÁ existe, a marca chega tarde para o
-     gerarMensalidade — então aplica direto aqui. O QR que ela porventura tenha
-     é apagado: continuar oferecendo cobrança a quem paga por fora é o que a
-     baixa manual existe para evitar. */
-  let proximaSemPix = null;
-  if (manual) {
-    const prox = await prisma.invoice.findFirst({
-      where: { clientId: inv.clientId, competencia: somarComp(inv.competencia, 1), status: "pendente" },
-    });
-    if (prox) {
-      proximaSemPix = await prisma.invoice.update({
-        where: { id: prox.id },
-        data: { semPix: true, pixCode: null, txid: null, pixExpiresOn: null, encargosAte: null },
-      });
-    }
-  }
-  res.json({ ...inv, proximaSemPix: proximaSemPix ? proximaSemPix.competencia : null });
+  res.json(inv);
 }));
 
 // Cancelar mensalidade
@@ -3268,7 +3227,7 @@ async function rodadaAvisosMensalidade() {
   ultimoDiaAvisos = hoje;
 
   const abertas = await prisma.invoice.findMany({
-    where: { status: "pendente", semPix: false },
+    where: { status: "pendente" },
   });
   for (const inv of abertas) {
     const client = await prisma.client.findUnique({ where: { id: inv.clientId } });
