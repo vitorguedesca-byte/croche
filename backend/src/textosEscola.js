@@ -252,7 +252,10 @@ Pagando até o vencimento você não paga multa nem juros. O Pix está logo abai
 
 Se algum valor ou data acima estiver diferente do que você combinou, responda *atendente* que uma pessoa da equipe assume a conversa. 🧶`;
 
-// Um dia depois do vencimento. Direto, mas sem constrangimento.
+/* Cobrança de atraso — usada nas DUAS rodadas (1º e 2º aviso, ver
+   AVISO_ATRASO_1/2 no server.js). Direta, mas sem constrangimento. "ontem" só
+   sai se algum dia a 1ª rodada disparar com exatamente 1 dia; a 2ª, com 5, cai
+   sempre no "há X dias". */
 export const textoMensalidadeEmAtraso = ({ nome, mes, valor, dias }) =>
 `Oi, ${String(nome || "").split(" ")[0]}! Sua mensalidade de ${mes} venceu ${dias === 1 ? "ontem" : `há ${dias} dias`} e ainda consta em aberto.
 

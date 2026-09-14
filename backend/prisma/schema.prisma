@@ -153,17 +153,20 @@ model Invoice {
   // não oferece QR e a rodada automática não emite. O botão "Gerar Pix" do
   // painel limpa a marca — é a saída para quando a aluna pedir o código.
   semPix        Boolean  @default(false)
-  /* Quando cada aviso automático de WhatsApp saiu ('YYYY-MM-DD'). São duas datas
-     e não um booleano porque o que interessa é *quando* falamos com a aluna —
-     e porque assim o reenvio acidental fica visível no banco.
+  /* Quando cada aviso automático de WhatsApp saiu ('YYYY-MM-DD'). Datas, e não
+     booleanos, porque o que interessa é *quando* falamos com a aluna — e
+     porque assim o reenvio acidental fica visível no banco.
 
-     Os prazos moram em AVISO_ANTES / AVISO_ATRASO no server.js — conferir lá
-     antes de acreditar em número escrito aqui. Hoje: 3 e 2.
+     Os prazos moram em AVISO_ANTES / AVISO_ATRASO_1 / AVISO_ATRASO_2 no
+     server.js — conferir lá antes de acreditar em número escrito aqui.
+     Hoje: 3 dias antes, 1 dia depois, 5 dias depois (Vitor, 13/09/2026).
 
      A marca é PROVISÓRIA. Se o webhook de status disser que a mensagem não foi
      entregue, ela é apagada e a rodada seguinte tenta de novo (até 3 vezes). */
   avisoAVencerAt String? @db.VarChar(10) // lembrete amigável, no dia exato de AVISO_ANTES dias antes
-  avisoAtrasoAt  String? @db.VarChar(10) // cobrança, a partir de AVISO_ATRASO dias de atraso
+  avisoAtrasoAt  String? @db.VarChar(10) // 1ª cobrança, a partir de AVISO_ATRASO_1 dias de atraso
+  // 2ª cobrança, só dispara se a 1ª já saiu E a mensalidade continua sem pagar
+  avisoAtraso2At String? @db.VarChar(10) // a partir de AVISO_ATRASO_2 dias de atraso
   createdAt     DateTime @default(now())
 
   @@index([clientId])

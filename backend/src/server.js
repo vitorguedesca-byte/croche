@@ -2725,6 +2725,7 @@ app.patch("/api/invoices/:id", wrap(async (req, res) => {
       if (dd >= todayISO()) {
         data.avisoAVencerAt = null;
         data.avisoAtrasoAt = null;
+        data.avisoAtraso2At = null;
       }
       // Se a data de vencimento mudou, anula o Pix anterior para que um novo seja gerado com a data e encargos corretos
       if (cur.pixCode || cur.encargosAte) {
@@ -3076,37 +3077,46 @@ setTimeout(dispararRodada, 15_000); // e uma vez no boot, já com o banco de pé
 
 /* ---------- AVISOS DE MENSALIDADE PELO WHATSAPP ----------
 
-   Dois envios, e só dois, por mensalidade:
+   Três envios possíveis por mensalidade:
 
    1. LEMBRETE, no dia EXATO de AVISO_ANTES dias antes do vencimento. É
       lembrete, não cobrança: o tom é de quem avisa para a pessoa não pagar
       multa à toa. Foi assim que a Inêz pediu — "não como se fosse uma cobrança".
-   2. COBRANÇA, A PARTIR de AVISO_ATRASO dias de atraso, já com multa e juros na
-      conta e o Pix reemitido pelo valor novo.
+   2. 1ª COBRANÇA, A PARTIR de AVISO_ATRASO_1 dias de atraso, já com multa e
+      juros na conta e o Pix reemitido pelo valor novo.
+   3. 2ª COBRANÇA, A PARTIR de AVISO_ATRASO_2 dias de atraso — só dispara se a
+      1ª já saiu e a mensalidade CONTINUA sem pagar (Vitor, 13/09/2026: "avisar
+      1 dia depois e, se não houver pagamento, de novo 5 dias depois").
 
-   Os dois NÃO são simétricos, e é de propósito. O lembrete tem data única
-   (`hoje === vencimento - AVISO_ANTES`): se a rodada não rodar naquele dia —
-   servidor fora do ar, chave desligada, dia inteiro fora da janela de silêncio
-   — aquele lembrete se perde, porque no dia seguinte a condição já é falsa.
-   Avisar "faltam 3 dias" com 2 dias de antecedência seria mentira, então
-   perder é melhor do que corrigir. Já a cobrança usa `dias >= AVISO_ATRASO` e
-   se recupera sozinha: sai na primeira rodada que encontrar o atraso.
+   O lembrete tem data única (`hoje === vencimento - AVISO_ANTES`): se a rodada
+   não rodar naquele dia — servidor fora do ar, chave desligada, dia inteiro
+   fora da janela de silêncio — aquele lembrete se perde, porque no dia
+   seguinte a condição já é falsa. Avisar "faltam 3 dias" com 2 dias de
+   antecedência seria mentira, então perder é melhor do que corrigir.
 
-   As datas de envio ficam gravadas na própria mensalidade (avisoAVencerAt /
-   avisoAtrasoAt): é o que impede a rodada de repetir o recado a cada hora, e
-   deixa visível no banco quando a escola falou com a aluna.
+   As duas cobranças usam `dias >= AVISO_ATRASO_N` (não `===`) e por isso se
+   recuperam sozinhas: cada uma sai na primeira rodada que encontrar o atraso
+   correspondente, mesmo que a rodada tenha ficado parada alguns dias.
 
-   Mensalidade marcada como "sem Pix" (baixa manual no mês anterior) fica FORA
-   dos dois: quem acerta por fora não recebe cobrança automática. */
-const AVISO_ANTES = 3;  // dias antes do vencimento (dia exato)
-const AVISO_ATRASO = 2; // a partir de quantos dias de atraso
+   Os TRÊS templates de WhatsApp compartilham só dois nomes — `cobranca_mensalidade`
+   serve tanto a 1ª quanto a 2ª cobrança, porque o texto já é dinâmico em
+   "dias" e não precisa saber qual das duas é. O que diferencia uma da outra é
+   só o CAMPO gravado na mensalidade (avisoAtrasoAt / avisoAtraso2At) e o `kind`
+   interno em WaMessage — ver `avisoComPix` e `liberarReenvioDaCobranca`.
+
+   As datas de envio ficam gravadas na própria mensalidade: é o que impede a
+   rodada de repetir o recado a cada hora, e deixa visível no banco quando a
+   escola falou com a aluna. */
+const AVISO_ANTES = 3;    // dias antes do vencimento (dia exato)
+const AVISO_ATRASO_1 = 1; // 1ª cobrança: a partir de quantos dias de atraso
+const AVISO_ATRASO_2 = 5; // 2ª cobrança: a partir de quantos dias de atraso, se a 1ª não resolveu
 
 /* Dias de atraso da mensalidade, contados no calendário e SEM passar pela conta
    de multa e juros.
 
    Existe separado de propósito. O atraso vinha de `comEncargos().encargos.dias`,
    que cai em `semEncargos` — e devolve `dias: 0` fixo — quando a chave
-   `cobrarEncargos` está desligada. Com `dias` sempre 0, `dias >= AVISO_ATRASO`
+   `cobrarEncargos` está desligada. Com `dias` sempre 0, `dias >= AVISO_ATRASO_1`
    nunca era verdade: desligar multa e juros DESLIGAVA a cobrança de atraso
    inteira, em silêncio. São duas decisões diferentes (quanto se cobra × quando
    se fala com a aluna) e agora são dois cálculos diferentes. */
@@ -3174,7 +3184,15 @@ async function registrarWaEnvio(resp, { phone, kind, invoiceId = null }) {
   }
 }
 
-/* `template` é o template aprovado equivalente ao texto: { name, body }.
+/* `template` é o template aprovado equivalente ao texto: { name, body, kind? }.
+
+   `kind` é opcional e serve para as duas cobranças de atraso (13/09/2026): as
+   duas usam o MESMO template na Meta (`cobranca_mensalidade`, já dinâmico em
+   "dias") mas precisam de registros DIFERENTES em WaMessage — senão
+   `liberarReenvioDaCobranca` não sabe se uma falha de entrega é da 1ª ou da 2ª
+   cobrança, e desmarca o campo errado. Sem `kind`, cai no nome do template
+   (era o comportamento de sempre, para lembrete/matrícula/etc, que continuam
+   1 kind = 1 template).
 
    Aviso de mensalidade é mensagem que a ESCOLA inicia, quase sempre com a
    janela fechada — e fora dela só template é entregue. Com a janela aberta o
@@ -3186,7 +3204,7 @@ async function avisoComPix(client, inv, texto, template) {
     const r = aberta
       ? await sendWaText(client.phone, texto)
       : await sendWaTemplate(client.phone, template.name, { body: template.body });
-    await registrarWaEnvio(r, { phone: client.phone, kind: template.name, invoiceId: inv.id });
+    await registrarWaEnvio(r, { phone: client.phone, kind: template.kind || template.name, invoiceId: inv.id });
   } catch (e) {
     console.warn(`[mensalidade wa] ${client.name} (${inv.competencia}): ${e.message}`, e.body?.error?.message || "");
     return false; // não saiu: quem chamou NÃO pode marcar a mensalidade como avisada
@@ -3257,15 +3275,32 @@ async function rodadaAvisosMensalidade() {
          de encargos desligada o total é o valor original — mas a aluna continua
          sendo avisada de que a mensalidade venceu. */
       const dias = diasDeAtraso(inv, hoje);
-      if (!inv.avisoAtrasoAt && dias >= AVISO_ATRASO) {
-        const total = comEnc.encargos?.total ?? inv.amountCents / 100;
+      const total = comEnc.encargos?.total ?? inv.amountCents / 100;
+      /* 1ª cobrança. Mesmo template da 2ª (`cobranca_mensalidade`) — só o
+         `kind` interno muda, para o reenvio saber qual campo desmarcar se
+         falhar (ver `avisoComPix` e `liberarReenvioDaCobranca`). */
+      if (!inv.avisoAtrasoAt && dias >= AVISO_ATRASO_1) {
         const saiu = await avisoComPix(client, inv, textoMensalidadeEmAtraso({
           nome: client.name, mes, dias, valor: moedaBR(total),
         }), {
           name: "cobranca_mensalidade",
+          kind: "cobranca_mensalidade_1",
           body: [primeiroNome(client.name), mes, String(dias), reaisBR(total)],
         });
         if (saiu) await prisma.invoice.update({ where: { id: inv.id }, data: { avisoAtrasoAt: hoje } });
+        continue;
+      }
+      /* 2ª cobrança: só existe se a 1ª já saiu e a mensalidade CONTINUA sem
+         pagar até aqui — chegar a este ponto do loop já garante "pendente". */
+      if (inv.avisoAtrasoAt && !inv.avisoAtraso2At && dias >= AVISO_ATRASO_2) {
+        const saiu = await avisoComPix(client, inv, textoMensalidadeEmAtraso({
+          nome: client.name, mes, dias, valor: moedaBR(total),
+        }), {
+          name: "cobranca_mensalidade",
+          kind: "cobranca_mensalidade_2",
+          body: [primeiroNome(client.name), mes, String(dias), reaisBR(total)],
+        });
+        if (saiu) await prisma.invoice.update({ where: { id: inv.id }, data: { avisoAtraso2At: hoje } });
       }
     } catch (e) {
       console.warn(`[mensalidade wa] ${client.name} (${inv.competencia}): ${e.message}`);
@@ -4374,7 +4409,10 @@ const MAX_TENTATIVAS_AVISO = 3;
 async function liberarReenvioDaCobranca(reg) {
   const campo =
     reg.kind === "lembrete_mensalidade" ? "avisoAVencerAt" :
-    reg.kind === "cobranca_mensalidade" ? "avisoAtrasoAt" : null;
+    // as duas cobranças de atraso usam o mesmo template na Meta
+    // (cobranca_mensalidade) mas têm `kind` interno distinto — ver avisoComPix
+    reg.kind === "cobranca_mensalidade_1" ? "avisoAtrasoAt" :
+    reg.kind === "cobranca_mensalidade_2" ? "avisoAtraso2At" : null;
   if (!campo || !reg.invoiceId) return;
   const tentativas = await prisma.waMessage.count({ where: { invoiceId: reg.invoiceId, kind: reg.kind } });
   if (tentativas >= MAX_TENTATIVAS_AVISO) {
