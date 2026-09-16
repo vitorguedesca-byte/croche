@@ -2655,9 +2655,24 @@ function MakeupBlock({ client }) {
   const { open } = useModal();
   const t = todayISO();
   // o /api/state já traz todos os créditos; filtra os desta aluna
+  /* Crédito cuja aula de origem voltou para a agenda não vale mais: a aluna
+     tem a aula: não há o que repor. O backend é quem manda (ver
+     creditosComAulaDeVolta no server.js) — aqui a conta é repetida só para o
+     painel não oferecer um botão que a API vai recusar. */
+  const aulasAtivas = new Set(
+    (data.bookings || [])
+      .filter((b) => b.clientName === client.name && b.status !== "cancelada")
+      .map((b) => `${b.date} ${(b.time || "").slice(0, 5)}`)
+  );
   const creditos = (data.makeups || [])
     .filter((m) => m.clientId === client.id)
-    .map((m) => ({ ...m, situacao: m.usedBookingId ? "usado" : m.expiresOn < t ? "expirado" : "disponivel" }));
+    .map((m) => ({
+      ...m,
+      situacao: m.usedBookingId ? "usado"
+        : aulasAtivas.has(`${m.originDate} ${(m.originTime || "").slice(0, 5)}`) ? "revogado"
+        : m.expiresOn < t ? "expirado"
+        : "disponivel",
+    }));
   const saldo = creditos.filter((m) => m.situacao === "disponivel").length;
   // espelha elegivelReposicao do backend, só para a tela avisar antes de tentar
   const emAtraso = (data.invoices || []).some((i) => i.clientId === client.id && i.status === "pendente" && i.dueDate < t);
@@ -2672,7 +2687,12 @@ function MakeupBlock({ client }) {
     : emAtraso ? "Mensalidade em atraso — sem direito a reposição."
     : noLimite ? `Já são ${reposNoMes} reposições marcadas neste mês — o limite é 2.` : "";
 
-  const rotulo = { disponivel: ["b-ok", "disponível"], usado: ["b-muted", "usado"], expirado: ["b-danger", "expirou"] };
+  const rotulo = {
+    disponivel: ["b-ok", "disponível"],
+    usado: ["b-muted", "usado"],
+    expirado: ["b-danger", "expirou"],
+    revogado: ["b-muted", "aula voltou"],
+  };
 
   return (
     <div style={{ margin: "1rem 0" }}>

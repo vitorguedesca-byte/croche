@@ -434,6 +434,46 @@ const creditoValido = (t) => ({ usedBookingId: null, expiresOn: { gte: t }, orig
 // A partir de quando o crédito pode ser usado (dia seguinte ao da aula liberada)
 const creditoLiberaEm = (c) => addDays(c.originDate, 1);
 
+/* ============ O CRÉDITO MORRE SE A AULA DE ORIGEM VOLTAR ============
+   Vitor, 15/09/2026.
+
+   O crédito é a troca por uma aula que deixou de acontecer. Se a aula volta a
+   existir na agenda da aluna, não há o que repor: ela ficaria com a aula E com
+   o direito de marcar outra — foi o que aconteceu com 5 alunas até aqui (6
+   créditos, 2 deles já gastos em reposições que ela não tinha para gastar).
+
+   A aula volta por dois caminhos, e os dois são legítimos vistos de perto:
+
+   · a aluna remarca a MESMA aula que liberou. Marcar uma aula sozinha ignora a
+     linha cancelada de propósito (ver situacaoNaTurma) — é assim que ela se
+     arrepende. Só que ninguém olhava o crédito que a liberação tinha gerado.
+   · a grade dela é reconstruída em lote. O lote sabe não remarcar o que foi
+     liberado, mas lê isso da linha CANCELADA; quando a série é excluída, a
+     linha cancelada ia junto e a prova da liberação sumia.
+
+   Por isso a regra não mora em nenhum dos caminhos que criam aula: mora AQUI,
+   onde o crédito é lido e gasto. Não há como criar aula por uma porta nova e
+   escapar dela. `varrerCreditosRessuscitados` apaga o que a regra já esconde —
+   a tela para de oferecer na hora, o banco limpa na varredura. */
+const chaveAula = (date, time) => `${date} ${hhmm(time) || String(time || "").slice(0, 5)}`;
+
+/* Dos créditos EM ABERTO desta aluna, quais têm a aula de origem de pé de novo.
+   Devolve um Set de ids — quem chama decide se esconde ou se apaga. */
+async function creditosComAulaDeVolta(clientName, creditos) {
+  const abertos = (creditos || []).filter((c) => !c.usedBookingId);
+  if (!abertos.length) return new Set();
+  const bks = await prisma.booking.findMany({
+    where: {
+      clientName,
+      date: { in: [...new Set(abertos.map((c) => c.originDate))] },
+      status: { not: "cancelada" },
+    },
+    select: { date: true, time: true },
+  });
+  const ativas = new Set(bks.map((b) => chaveAula(b.date, b.time)));
+  return new Set(abertos.filter((c) => ativas.has(chaveAula(c.originDate, c.originTime))).map((c) => c.id));
+}
+
 // Quantas aulas de reposição a aluna já tem marcadas no mês 'YYYY-MM'.
 // Conta pela data da aula reposta (é assim que ela enxerga "duas por mês");
 // aula cancelada não conta, então liberar a reposição devolve a vaga do mês.
@@ -457,10 +497,13 @@ async function resumoReposicao(client) {
     prisma.makeupCredit.findMany({ where: { clientId: client.id }, orderBy: { createdAt: "desc" } }),
     reposicoesNoMes(client, compAtual),
   ]);
+  // A aula de origem voltou para a agenda? Então não há o que repor.
+  const voltaram = await creditosComAulaDeVolta(client.name, creditos);
   const marcados = creditos.map((c) => ({
     ...c,
     // "aguardando" = a aula liberada ainda não chegou; vira "disponivel" no dia seguinte
     situacao: c.usedBookingId ? "usado"
+      : voltaram.has(c.id) ? "revogado"
       : c.expiresOn < t ? "expirado"
       : c.originDate >= t ? "aguardando"
       : "disponivel",
@@ -532,17 +575,24 @@ async function marcarReposicao(client, slotId, { forcar = false } = {}) {
   const eleg = await elegivelReposicao(client);
   if (!eleg.ok) throw Object.assign(new Error(eleg.motivo), { code: 403 });
   const t = todayISO();
-  const credito = await prisma.makeupCredit.findFirst({
+  const candidatos = await prisma.makeupCredit.findMany({
     where: { clientId: client.id, ...creditoValido(t) },
     orderBy: { expiresOn: "asc" }, // gasta primeiro o que vence antes
   });
+  /* Crédito cuja aula de origem voltou não é crédito: a aluna tem a aula.
+     Filtrar aqui, e não na cláusula acima, é o que garante que nenhuma porta
+     nova de criação de aula escape da regra — ver creditosComAulaDeVolta. */
+  const revogados = await creditosComAulaDeVolta(client.name, candidatos);
+  const credito = candidatos.find((c) => !revogados.has(c.id)) || null;
   if (!credito) {
     // Distingue "não tem crédito" de "tem, mas a aula liberada ainda não chegou" —
     // são situações bem diferentes para quem está olhando a tela.
-    const esperando = await prisma.makeupCredit.findFirst({
+    const futuros = await prisma.makeupCredit.findMany({
       where: { clientId: client.id, usedBookingId: null, expiresOn: { gte: t }, originDate: { gte: t } },
       orderBy: { originDate: "asc" },
     });
+    const futurosRevogados = await creditosComAulaDeVolta(client.name, futuros);
+    const esperando = futuros.find((c) => !futurosRevogados.has(c.id)) || null;
     if (esperando)
       throw Object.assign(
         new Error(`Sua aula de ${fmtDiaBR(esperando.originDate)} ainda não aconteceu. A reposição pode ser marcada a partir de ${fmtDiaBR(creditoLiberaEm(esperando))}. 💚`),
@@ -646,6 +696,46 @@ async function varrerReposicoesOrfas({ corrigir = false } = {}) {
     }
   }
   return { orfas, removidas };
+}
+
+/* Detector do outro lado da mesma moeda: crédito em aberto cuja aula de origem
+   está de pé na agenda (ver creditosComAulaDeVolta). A regra de leitura já não
+   entrega esse crédito para ninguém; esta varredura existe para o banco não
+   guardar em silêncio um direito que a tela não mostra mais — e porque o teto
+   de 2 créditos por mês conta as linhas, então crédito revogado que fica na
+   tabela rouba a vaga de um crédito legítimo do mesmo mês.
+
+   Apaga, e não marca como usado: é o mesmo desfecho do crédito de feriado
+   (scripts/revogar-creditos-feriado.mjs), e crédito gasto NUNCA é tocado — a
+   aula de reposição dele existe, e apagá-lo deixaria essa aula órfã. */
+async function varrerCreditosRessuscitados({ corrigir = false } = {}) {
+  const t = todayISO();
+  const abertos = await prisma.makeupCredit.findMany({
+    where: { usedBookingId: null, expiresOn: { gte: t } },
+    orderBy: [{ clientId: "asc" }, { originDate: "asc" }],
+  });
+  if (!abertos.length) return { creditos: [], removidos: 0 };
+  const nomes = new Map(
+    (await prisma.client.findMany({
+      where: { id: { in: [...new Set(abertos.map((c) => c.clientId))] } },
+      select: { id: true, name: true },
+    })).map((c) => [c.id, c.name])
+  );
+  const achados = [];
+  for (const [clientId, nome] of nomes) {
+    const meus = abertos.filter((c) => c.clientId === clientId);
+    const voltaram = await creditosComAulaDeVolta(nome, meus);
+    for (const c of meus) if (voltaram.has(c.id)) achados.push({ ...c, clientName: nome });
+  }
+  let removidos = 0;
+  for (const c of achados) {
+    console.warn(`[reposição] crédito ${c.id} de ${c.clientName} — a aula de ${c.originDate} ${c.originTime} está de volta na agenda.`);
+    if (corrigir) {
+      await prisma.makeupCredit.delete({ where: { id: c.id } });
+      removidos++;
+    }
+  }
+  return { creditos: achados, removidos };
 }
 
 /* Aula extra: caminho separado da reposição — não consome nem gera crédito, e
@@ -1966,12 +2056,23 @@ app.delete(
     // ?series=1 ou ?match=1: exclui também as demais aulas da aluna neste mesmo dia da semana e horário, de hoje em diante
     if (req.query.series === "1" || req.query.match === "1") {
       const dow = new Date(bk.date + "T00:00").getDay();
+      /* A CANCELADA NÃO VAI JUNTO.
+
+         Excluir a série apaga as aulas que a escola montou errado. A linha
+         cancelada não é uma delas: é a aula que a ALUNA liberou, e é nela que
+         o lote lê "não remarque esta data" (ver situacaoNaTurma) e que o
+         crédito de reposição se apoia. Apagando a cancelada, a prova da
+         liberação sumia, o próximo agendamento em lote recriava a aula e a
+         aluna ficava com a aula e com o crédito — 15/09/2026, 6 créditos
+         assim. Quem quiser mesmo tirar a linha cancelada do caminho apaga
+         aquela aula sozinha, olhando para ela. */
       const futuras = await prisma.booking.findMany({
         where: {
           clientName: bk.clientName,
           unit: bk.unit,
           time: bk.time,
           date: { gte: todayISO() },
+          status: { not: "cancelada" },
         },
       });
       const matching = futuras.filter((b) => {
@@ -4240,6 +4341,19 @@ app.get("/api/makeup/duplicadas", wrap(async (req, res) => {
 app.post("/api/makeup/duplicadas/limpar", wrap(async (req, res) => {
   const { orfas, removidas } = await varrerReposicoesOrfas({ corrigir: true });
   res.json({ total: orfas.length, removidas });
+}));
+
+/* Créditos revogados pela volta da aula: lista (GET) e apaga (POST). Mesma
+   dupla da rota acima, e pelo mesmo motivo — a Inêz vê a lista antes de mexer,
+   porque são créditos que algumas alunas já viram no portal delas. */
+app.get("/api/makeup/aula-de-volta", wrap(async (_req, res) => {
+  const { creditos } = await varrerCreditosRessuscitados();
+  res.json({ total: creditos.length, creditos });
+}));
+
+app.post("/api/makeup/aula-de-volta/limpar", wrap(async (_req, res) => {
+  const { creditos, removidos } = await varrerCreditosRessuscitados({ corrigir: true });
+  res.json({ total: creditos.length, removidos });
 }));
 
 // Marcar aula extra avulsa pelo painel (admin) — body { slotId, forcar? }
@@ -6578,5 +6692,13 @@ ensureSchema()
           if (orfas.length) console.warn(`[reposição] ${orfas.length} aula(s) de reposição sem crédito — confira em GET /api/makeup/duplicadas.`);
         })
         .catch((e) => console.warn("[reposição] varredura falhou:", e.message));
+      /* A outra ponta: crédito em aberto cuja aula de origem voltou para a
+         agenda. A tela já não oferece esse crédito; aqui só avisa que ele
+         continua ocupando linha no banco. */
+      varrerCreditosRessuscitados()
+        .then(({ creditos }) => {
+          if (creditos.length) console.warn(`[reposição] ${creditos.length} crédito(s) com a aula de origem de volta — confira em GET /api/makeup/aula-de-volta.`);
+        })
+        .catch((e) => console.warn("[reposição] varredura de créditos falhou:", e.message));
     }, 15_000);
   });
