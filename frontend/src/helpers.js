@@ -159,6 +159,30 @@ export function nomeCurto(nome) {
   return ultimo ? `${partes[0]} ${ultimo[0].toUpperCase()}.` : partes[0];
 }
 
+/* ---- BUSCA GERAL: usada por TODOS os campos de pesquisa do sistema ----
+
+   Quem digita "joao" tem que achar "João"; "conceicao", "Conceição"; "ana
+   souza", "Ana Maria de Souza". Por isso a comparação ignora acento, cedilha,
+   maiúscula e pontuação, e cada palavra digitada pode aparecer em qualquer
+   ponto e em qualquer ordem. Campo de busca novo usa `contemBusca` — não
+   voltar a comparar com `toLowerCase().includes`, que exige o acento exato. */
+export const normalizarBusca = (s) =>
+  String(s ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "") // tira acentos (á → a, ç → c)
+    .toLowerCase()
+    .replace(/['’`´]/g, "") // D'Ávila → davila
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+// `campos`: texto ou lista de textos onde procurar (nome, unidade, telefone...).
+export function contemBusca(campos, busca) {
+  const termos = normalizarBusca(busca).split(" ").filter(Boolean);
+  if (!termos.length) return true;
+  const alvo = normalizarBusca([].concat(campos).filter((c) => c != null).join(" "));
+  return termos.every((t) => alvo.includes(t));
+}
+
 /* ---- derivados do estado (data = {clients, slots, bookings}) ---- */
 export const bookingsActive = (data) => data.bookings.filter((b) => b.status !== "cancelada");
 export const slotById = (data, id) => data.slots.find((s) => s.id === id);

@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
-import { STATUS } from "./helpers.js";
+import { STATUS, contemBusca } from "./helpers.js";
 
 /* ---------- Modal global ---------- */
 const ModalContext = createContext(null);
@@ -91,9 +91,7 @@ export function Select({
 
   const visible = useMemo(() => {
     if (!query.trim()) return options;
-    const q = query.trim().toLowerCase();
-    return options.filter((o) =>
-      `${o.label ?? ""} ${o.hint ?? ""}`.toLowerCase().includes(q));
+    return options.filter((o) => contemBusca([o.label, o.hint], query));
   }, [options, query]);
 
   const selected = options.find((o) => same(o.value, value));

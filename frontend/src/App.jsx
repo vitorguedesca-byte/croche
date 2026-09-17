@@ -7,6 +7,7 @@ import { Dashboard, Agenda, Marcacoes, Clientes, Financeiro, Depoimentos, Aniver
 import { SlotForm, BookingForm, ClientForm } from "./modals.jsx";
 import ClienteApp from "./ClienteApp.jsx";
 import Config from "./Config.jsx";
+import Disparo from "./Disparo.jsx";
 import { exportBookingsCsv } from "./exports.js";
 import ClientPortal from "./ClientPortal.jsx";
 import FirstClassBooking from "./FirstClassBooking.jsx";
@@ -39,6 +40,7 @@ const NAV = [
   { sep: "Relacionamento" },
   { view: "clientes", ic: "👩", label: "Alunos" },
   { view: "aniversariantes", ic: "🎂", label: "Aniversariantes" },
+  { view: "disparo", ic: "📣", label: "Disparo WhatsApp" },
   { sep: "Financeiro" },
   { view: "financeiro", ic: "💰", label: "Financeiro" },
   { sep: "Site" },
@@ -58,6 +60,7 @@ const TITLES = {
   marcacoes:    ["Marcações",     "Novos e alunas com acesso — confirmações e remarcações"],
   clientes:     ["Alunos",        "Alunos, leads e novatos — CRM e contato direto"],
   aniversariantes: ["Aniversariantes", "Quem faz aniversário na semana e no mês"],
+  disparo:      ["Disparo WhatsApp", "Mensagem para várias alunas de uma vez, pelo WhatsApp oficial"],
   financeiro:   ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
   mensalistas:  ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
   recebimentos: ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
@@ -153,6 +156,7 @@ export default function App() {
     marcacoes: Marcacoes,
     clientes: Clientes,
     aniversariantes: Aniversariantes,
+    disparo: Disparo,
     financeiro: Financeiro,
     mensalistas: Financeiro,
     recebimentos: Financeiro,

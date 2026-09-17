@@ -8,7 +8,7 @@ import {
   UNITS, PROFS, TAG_OPTIONS, VALOR_PADRAO, CAPACITY_PADRAO, STATUS, BOOKING_KINDS,
   unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize, faixaHorario, hhmm,
   slotById, slotBookings, slotBookingsAll, slotCapacity, slotWaitlist, clientAttendance, nomeCurto, irmasNaAgenda,
-  marcadoresDoAluno,
+  marcadoresDoAluno, contemBusca,
   bookingKind, bookingKindDe, feriadoDe, feriadoBaseDe, MARCAS_MATRICULA, ehPagamentoDeMatricula, situacaoMensalidade, clientOfBooking,
   competenciasDoAluno, compLabel, mensalidadeDe, matriculaISO,
   compAtual, addComp, precoDaComp, mensalidadeDaComp,
@@ -861,12 +861,9 @@ export function StudentSearchCombobox({ clients, selectedClient, onSelect, onCle
 
   const filtered = (clients || []).filter((c) => {
     if (!query.trim()) return true;
-    const q = query.toLowerCase().trim();
-    const qDigits = q.replace(/\D/g, "");
-    const nameMatch = (c.name || "").toLowerCase().includes(q);
+    const qDigits = query.replace(/\D/g, "");
     const phoneMatch = qDigits ? (c.phone || "").replace(/\D/g, "").includes(qDigits) : false;
-    const unitMatch = (c.unit || "").toLowerCase().includes(q);
-    return nameMatch || phoneMatch || unitMatch;
+    return contemBusca([c.name, c.unit], query) || phoneMatch;
   });
 
   if (selectedClient) {

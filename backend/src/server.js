@@ -69,7 +69,7 @@ import {
   textoMaterialPrimeiraAula,
 } from "./textosEscola.js";
 import { sicrediConfigured, sicrediMissing, createCharge, getCharge, isPaidStatus, extractPix } from "./sicredi.js";
-import { waConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, normalizePhone } from "./wa.js";
+import { waConfigured, waTemplatesConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, normalizePhone, listWaTemplates } from "./wa.js";
 import {
   CONVERSA_EXPIRA_H,
   conversaExpirou,
@@ -4555,6 +4555,204 @@ app.post("/api/wa/webhook", async (req, res) => {
     console.error("[wa webhook]", e.message, e.body || "");
   }
 });
+
+/* ---------- DISPARO EM MASSA (Inêz escolhe as alunas e manda) ----------
+
+   A mesma regra de tudo que a escola inicia vale aqui, e com mais força: fora
+   da janela de 24h só TEMPLATE APROVADO chega. Texto livre com a janela
+   fechada volta 200 e some — ver `janelaAbertaPara`. Por isso a tela oferece
+   dois modos, e nenhum deles "tenta texto e vê no que dá":
+
+     template → chega para todas (é pago por mensagem);
+     texto    → só sai para quem falou com a escola nas últimas 24h; as demais
+                são PULADAS e aparecem no resultado como "conversa fechada".
+
+   O envio roda em segundo plano (180 alunas não cabem numa requisição HTTP) e
+   cada mensagem fica em WaMessage com kind "disparo...", então a tela mostra a
+   entrega de verdade — entregue, lida, falhou — e não só "a Meta aceitou". */
+
+// Templates das rotinas automáticas: recibo, cobrança e matrícula levam dados
+// de UMA aluna e não fazem sentido em massa. Ficam fora da lista do disparo.
+const TEMPLATES_SO_DO_SISTEMA = new Set([
+  "lembrete_mensalidade", "cobranca_mensalidade", "cobranca_mensalidade_v2",
+  "mensalidade_a_vencer", "mensalidade_em_atraso",
+  "pagamento_confirmado", "pagamento_aula_extra", "pagamento_aula_avulsa",
+  "aula_extra_confirmada", "aula_avulsa_confirmada",
+  "matricula_confirmada", "confirmacao_reserva",
+]);
+
+/* Traduz o template da Meta para o que a tela precisa: o texto do corpo e
+   quantas variáveis ele pede. O disparo só preenche variáveis de texto do
+   cabeçalho e do corpo — template com mídia no cabeçalho, botão com URL
+   variável ou variável com nome ({{nome}} em vez de {{1}}) aparece na lista
+   marcado como não suportado, em vez de falhar na hora de mandar. */
+function descreverTemplateDisparo(t) {
+  const comp = (tipo) => (t.components || []).find((c) => c.type === tipo);
+  const header = comp("HEADER"), body = comp("BODY"), footer = comp("FOOTER"), botoes = comp("BUTTONS");
+  const varsDe = (txt) => [...String(txt || "").matchAll(/\{\{\s*([^}\s]+)\s*\}\}/g)].map((m) => m[1]);
+  const bodyVars = [...new Set(varsDe(body?.text))];
+  const headerVars = header?.format === "TEXT" ? [...new Set(varsDe(header.text))] : [];
+  let motivo = null;
+  if ([...bodyVars, ...headerVars].some((v) => !/^\d+$/.test(v))) motivo = "usa variáveis com nome";
+  else if (header && header.format && header.format !== "TEXT") motivo = "tem imagem/arquivo no cabeçalho";
+  else if ((botoes?.buttons || []).some((b) => b.type === "URL" && /\{\{/.test(b.url || ""))) motivo = "tem botão com link variável";
+  return {
+    name: t.name,
+    language: t.language,
+    category: t.category,
+    header: header?.format === "TEXT" ? header.text : null,
+    body: body?.text || "",
+    footer: footer?.text || null,
+    buttons: (botoes?.buttons || []).map((b) => b.text),
+    headerVars: headerVars.length,
+    bodyVars: bodyVars.length,
+    suportado: !motivo,
+    motivo,
+  };
+}
+
+// {nome} = primeiro nome, {nome_completo} = como está na ficha.
+function preencherDisparo(txt, cli) {
+  const nome = String(cli.name || "").trim();
+  return String(txt ?? "")
+    .replace(/\{nome_completo\}/gi, nome)
+    .replace(/\{nome\}/gi, nome.split(/\s+/)[0] || nome);
+}
+
+const disparos = new Map(); // id → andamento; some no restart, o histórico fica em WaMessage
+const PAUSA_ENTRE_ENVIOS_MS = 350;
+
+app.get("/api/wa/disparo/opcoes", wrap(async (_req, res) => {
+  let templates = [], erroTemplates = null;
+  if (!waTemplatesConfigured()) erroTemplates = "WA_WABA_ID/WA_TOKEN não configurados no servidor.";
+  else {
+    try {
+      const r = await listWaTemplates();
+      templates = (r.data || [])
+        .filter((t) => t.status === "APPROVED" && !TEMPLATES_SO_DO_SISTEMA.has(t.name))
+        .map(descreverTemplateDisparo)
+        .sort((a, b) => a.name.localeCompare(b.name));
+    } catch (e) {
+      erroTemplates = e?.body?.error?.message || e.message;
+    }
+  }
+  // Quem está com a conversa aberta agora — é quem recebe no modo texto.
+  const convs = await prisma.waConversation.findMany({
+    where: { lastInboundAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
+    select: { phone: true },
+  });
+  const abertas = new Set(convs.map((c) => chaveTelefone(c.phone)).filter(Boolean));
+  const clients = await prisma.client.findMany({ select: { id: true, phone: true } });
+  const janelaAberta = clients.filter((c) => abertas.has(chaveTelefone(c.phone))).map((c) => c.id);
+  const emAndamento = [...disparos.values()].find((d) => !d.fimEm);
+  res.json({
+    waConfigurado: waConfigured(),
+    templates,
+    erroTemplates,
+    janelaAberta,
+    horarioBom: podeMandarAgora(),
+    emAndamento: emAndamento ? emAndamento.id : null,
+  });
+}));
+
+app.post("/api/wa/disparo", wrap(async (req, res) => {
+  if (!waConfigured()) return res.status(400).json({ error: "WhatsApp não configurado no servidor." });
+  if ([...disparos.values()].some((d) => !d.fimEm)) {
+    return res.status(409).json({ error: "Já existe um disparo em andamento. Espere terminar." });
+  }
+  const { modo, template, texto } = req.body || {};
+  const ids = [...new Set((req.body?.clientIds || []).map(Number).filter(Boolean))];
+  if (!ids.length) return res.status(400).json({ error: "Escolha pelo menos uma aluna." });
+  if (!["template", "texto"].includes(modo)) return res.status(400).json({ error: "Modo inválido." });
+
+  let tpl = null;
+  if (modo === "template") {
+    const r = await listWaTemplates();
+    const achado = (r.data || []).find((t) => t.name === template?.name && t.status === "APPROVED");
+    if (!achado || TEMPLATES_SO_DO_SISTEMA.has(achado.name)) {
+      return res.status(400).json({ error: "Template não encontrado ou não aprovado." });
+    }
+    tpl = descreverTemplateDisparo(achado);
+    if (!tpl.suportado) return res.status(400).json({ error: `Este template não pode ser usado no disparo: ${tpl.motivo}.` });
+    const hv = template.header || [], bv = template.body || [];
+    if (hv.length !== tpl.headerVars || bv.length !== tpl.bodyVars || [...hv, ...bv].some((v) => !String(v || "").trim())) {
+      return res.status(400).json({ error: "Preencha todas as variáveis do template." });
+    }
+    tpl.valoresHeader = hv;
+    tpl.valoresBody = bv;
+  } else if (!String(texto || "").trim()) {
+    return res.status(400).json({ error: "Escreva a mensagem." });
+  }
+
+  const clients = await prisma.client.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, phone: true } });
+  const d = {
+    id: crypto.randomUUID(),
+    por: req.admin?.username || "painel",
+    modo,
+    template: tpl ? tpl.name : null,
+    inicioEm: new Date(),
+    fimEm: null,
+    itens: clients
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((c) => ({ clientId: c.id, nome: c.name, phone: c.phone || "", situacao: "na fila", motivo: null, wamid: null })),
+  };
+  disparos.set(d.id, d);
+  console.log(`[wa disparo] ${d.id} por ${d.por}: ${modo}${tpl ? " " + tpl.name : ""} para ${d.itens.length} aluna(s)`);
+  res.json({ id: d.id });
+
+  // Daqui em diante a requisição já respondeu: o envio segue sozinho.
+  (async () => {
+    for (const it of d.itens) {
+      const cli = { name: it.nome };
+      try {
+        if (!chaveTelefone(it.phone)) { it.situacao = "pulada"; it.motivo = "sem telefone válido"; continue; }
+        let r;
+        if (modo === "texto") {
+          if (!(await janelaAbertaPara(it.phone))) { it.situacao = "pulada"; it.motivo = "conversa fechada (só template chega)"; continue; }
+          r = await sendWaText(it.phone, preencherDisparo(texto, cli));
+        } else {
+          r = await sendWaTemplate(it.phone, tpl.name, {
+            lang: tpl.language,
+            header: tpl.valoresHeader.map((v) => preencherDisparo(v, cli)),
+            body: tpl.valoresBody.map((v) => preencherDisparo(v, cli)),
+          });
+        }
+        const kind = modo === "texto" ? "disparo_texto" : `disparo:${tpl.name}`.slice(0, 40);
+        await registrarWaEnvio(r, { phone: it.phone, kind });
+        it.wamid = r?.messages?.[0]?.id || null;
+        it.situacao = "enviado";
+        await new Promise((ok) => setTimeout(ok, PAUSA_ENTRE_ENVIOS_MS));
+      } catch (e) {
+        it.situacao = "erro";
+        it.motivo = String(e?.body?.error?.error_data?.details || e?.body?.error?.message || e.message).slice(0, 200);
+        console.warn(`[wa disparo] ${it.nome} (${it.phone}): ${it.motivo}`);
+      }
+    }
+    d.fimEm = new Date();
+    const n = (s) => d.itens.filter((i) => i.situacao === s).length;
+    console.log(`[wa disparo] ${d.id} terminou: ${n("enviado")} enviados, ${n("pulada")} pulados, ${n("erro")} com erro`);
+    // guarda só os últimos 20 disparos em memória
+    if (disparos.size > 20) disparos.delete(disparos.keys().next().value);
+  })().catch((e) => { d.fimEm = new Date(); console.error("[wa disparo]", e); });
+}));
+
+// Andamento + entrega real (o webhook de status atualiza WaMessage).
+app.get("/api/wa/disparo/:id", wrap(async (req, res) => {
+  const d = disparos.get(req.params.id);
+  if (!d) return res.status(404).json({ error: "Disparo não encontrado (o servidor pode ter reiniciado)." });
+  const wamids = d.itens.map((i) => i.wamid).filter(Boolean);
+  const regs = wamids.length
+    ? await prisma.waMessage.findMany({ where: { wamid: { in: wamids } }, select: { wamid: true, status: true, errorCode: true, errorMsg: true } })
+    : [];
+  const porWamid = new Map(regs.map((r) => [r.wamid, r]));
+  res.json({
+    ...d,
+    itens: d.itens.map((i) => {
+      const r = i.wamid ? porWamid.get(i.wamid) : null;
+      return { ...i, entrega: r?.status || null, erroEntrega: r?.errorCode ? `${r.errorCode} ${r.errorMsg || ""}`.trim() : null };
+    }),
+  });
+}));
 
 /* ---------- Fluxo de agendamento pelo WhatsApp ---------- */
 const DOW_PT = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];

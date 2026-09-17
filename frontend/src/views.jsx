@@ -16,7 +16,7 @@ import {
   mensalidadeDaComp, precoDaComp, situacaoMensalidade, clientOfBooking, ehPagamentoDeMatricula,
   clientMonthClasses, classifyClient, isNewLead,
   aniversariantes, diaMesNasc, diaMesLabel, faltamLabel,
-  proximaCobranca, fraseProximaCobranca,
+  proximaCobranca, fraseProximaCobranca, contemBusca,
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
@@ -543,7 +543,7 @@ export function Marcacoes() {
   if (filter === "ativas") list = list.filter((b) => b.status !== "cancelada");
   else if (filter === "cancelada") list = list.filter((b) => b.status === "cancelada");
   if (mensF !== "todas") list = list.filter((b) => sitDe(b).estado === mensF);
-  if (search) list = list.filter((b) => b.clientName.toLowerCase().includes(search.toLowerCase()));
+  if (search.trim()) list = list.filter((b) => contemBusca(b.clientName, search));
 
   return (
     <div className="panel">
@@ -664,7 +664,7 @@ export function Clientes({ params }) {
   const searchDigits = cleanSearch.replace(/\D/g, "");
   let list = (groups[tab] || []).filter((c) => {
     if (cleanSearch) {
-      const matchesName = (c.name || "").toLowerCase().includes(cleanSearch.toLowerCase());
+      const matchesName = contemBusca(c.name, cleanSearch);
       const matchesPhone = (c.phone || "").includes(cleanSearch) || (searchDigits.length > 0 && (c.phone || "").replace(/\D/g, "").includes(searchDigits));
       const clientCpfDigits = (c.cpf || "").replace(/\D/g, "");
       const matchesCpf = (c.cpf || "").includes(cleanSearch) || (searchDigits.length > 0 && clientCpfDigits.includes(searchDigits));
@@ -1031,7 +1031,7 @@ function FinanceiroOperacao() {
   const searchDigits = cleanSearch.replace(/\D/g, "");
   const mensalistasFiltrados = mensalistas.filter((c) => {
     if (cleanSearch) {
-      const matchesName = (c.name || "").toLowerCase().includes(cleanSearch.toLowerCase());
+      const matchesName = contemBusca(c.name, cleanSearch);
       const matchesPhone = (c.phone || "").includes(cleanSearch) || (searchDigits.length > 0 && (c.phone || "").replace(/\D/g, "").includes(searchDigits));
       const clientCpfDigits = (c.cpf || "").replace(/\D/g, "");
       const matchesCpf = (c.cpf || "").includes(cleanSearch) || (searchDigits.length > 0 && clientCpfDigits.includes(searchDigits));
@@ -1398,14 +1398,8 @@ function FinanceiroMetricas() {
   });
 
   // Filtragem do histórico
-  const cleanHist = histSearch.trim().toLowerCase();
-  const pagosFiltrados = pagos.filter((i) => {
-    if (!cleanHist) return true;
-    const nome = (i.cli?.name || "").toLowerCase();
-    const unidade = (i.cli?.unit || "").toLowerCase();
-    const compNome = compLabel(i.competencia).toLowerCase();
-    return nome.includes(cleanHist) || unidade.includes(cleanHist) || compNome.includes(cleanHist);
-  });
+  const pagosFiltrados = pagos.filter((i) =>
+    contemBusca([i.cli?.name, i.cli?.unit, compLabel(i.competencia)], histSearch));
 
   return (
     <>
@@ -1788,10 +1782,8 @@ export function Aniversariantes() {
     : per === "proximos" ? aniversariantes(data.clients, "proximos", t, 30)
     : aniversariantes(data.clients, "proximos", t, 366); // 'ano' — os 12 meses à frente
 
-  const q = search.trim().toLowerCase();
   const list = base.filter(({ c }) =>
-    (unitF === "Todas" || c.unit === unitF) &&
-    (!q || c.name.toLowerCase().includes(q) || (c.phone || "").includes(q))
+    (unitF === "Todas" || c.unit === unitF) && contemBusca([c.name, c.phone], search)
   );
 
   const TABS = [
