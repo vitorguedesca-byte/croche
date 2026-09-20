@@ -69,7 +69,7 @@ import {
   textoMaterialPrimeiraAula,
 } from "./textosEscola.js";
 import { sicrediConfigured, sicrediMissing, createCharge, getCharge, isPaidStatus, extractPix } from "./sicredi.js";
-import { waConfigured, waTemplatesConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, normalizePhone, listWaTemplates } from "./wa.js";
+import { waConfigured, waTemplatesConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, parseTemplateStatuses, normalizePhone, listWaTemplates } from "./wa.js";
 import {
   CONVERSA_EXPIRA_H,
   conversaExpirou,
@@ -4544,6 +4544,13 @@ app.post("/api/wa/webhook", async (req, res) => {
   try {
     const sts = parseStatuses(req.body);
     if (sts.length) await processarStatusWa(sts);
+    /* A Meta avisa quando aprova, recusa ou pausa um template. Invalidar o
+       cache aqui é o que faz a tela do disparo mostrar "aprovado" minutos
+       depois da submissão sem ninguém apertar nada. */
+    for (const t of parseTemplateStatuses(req.body)) {
+      cacheTemplates.em = 0;
+      console.log(`[wa templates] a Meta mudou ${t.name} para ${t.status}${t.reason ? ` (${t.reason})` : ""}.`);
+    }
     const msg = parseIncoming(req.body);
     if (!msg || waSeen.has(msg.id)) return;
     waSeen.add(msg.id);
@@ -4571,8 +4578,11 @@ app.post("/api/wa/webhook", async (req, res) => {
    cada mensagem fica em WaMessage com kind "disparo...", então a tela mostra a
    entrega de verdade — entregue, lida, falhou — e não só "a Meta aceitou". */
 
-// Templates das rotinas automáticas: recibo, cobrança e matrícula levam dados
-// de UMA aluna e não fazem sentido em massa. Ficam fora da lista do disparo.
+/* Templates das rotinas automáticas: recibo, cobrança e matrícula levam dados
+   de UMA aluna e não fazem sentido em massa — ficam fora da lista do disparo.
+   O STATUS deles, porém, aparece na tela: se a Meta recusar ou pausar
+   `cobranca_mensalidade`, quem descobre é esta tela, e não a escola estranhando
+   que ninguém respondeu a cobrança do mês. */
 const TEMPLATES_SO_DO_SISTEMA = new Set([
   "lembrete_mensalidade", "cobranca_mensalidade", "cobranca_mensalidade_v2",
   "mensalidade_a_vencer", "mensalidade_em_atraso",
@@ -4581,33 +4591,90 @@ const TEMPLATES_SO_DO_SISTEMA = new Set([
   "matricula_confirmada", "confirmacao_reserva",
 ]);
 
-/* Traduz o template da Meta para o que a tela precisa: o texto do corpo e
-   quantas variáveis ele pede. O disparo só preenche variáveis de texto do
-   cabeçalho e do corpo — template com mídia no cabeçalho, botão com URL
-   variável ou variável com nome ({{nome}} em vez de {{1}}) aparece na lista
-   marcado como não suportado, em vez de falhar na hora de mandar. */
+/* ---------- SINCRONIZAÇÃO DOS TEMPLATES COM A META ----------
+
+   A lista de templates não mora aqui: mora na conta do WhatsApp na Meta, que é
+   quem cria, aprova, recusa e pausa. Toda vez que a tela do disparo abre ela
+   pergunta para lá — inclusive pelos que ainda estão PENDING, que antes eram
+   filtrados fora e simplesmente sumiam, sem a escola entender por quê.
+
+   O cache de 5 minutos existe para a tela poder recarregar à vontade sem gastar
+   o rate limit da Graph API. Duas coisas furam o cache: o botão "sincronizar
+   agora" da tela (?sync=1) e o webhook `message_template_status_update`, que a
+   Meta manda no instante em que aprova ou recusa algo.
+
+   Quando a Meta está fora do ar, a lista antiga continua valendo, com a data da
+   última sincronização à vista — é melhor um template de dez minutos atrás do
+   que uma tela vazia dizendo que a escola não tem template nenhum. */
+const TEMPLATES_TTL_MS = 5 * 60_000;
+const cacheTemplates = { em: 0, lista: [], erro: null };
+
+async function sincronizarTemplates({ forcar = false } = {}) {
+  if (!waTemplatesConfigured()) {
+    return { em: 0, lista: [], erro: "WA_WABA_ID/WA_TOKEN não configurados no servidor." };
+  }
+  const fresco = cacheTemplates.em && !cacheTemplates.erro && Date.now() - cacheTemplates.em < TEMPLATES_TTL_MS;
+  if (fresco && !forcar) return cacheTemplates;
+  try {
+    const r = await listWaTemplates();
+    cacheTemplates.lista = r.data || [];
+    cacheTemplates.em = Date.now();
+    cacheTemplates.erro = null;
+    const aprovados = cacheTemplates.lista.filter((t) => t.status === "APPROVED").length;
+    console.log(`[wa templates] sincronizados com a Meta: ${cacheTemplates.lista.length} (${aprovados} aprovados).`);
+  } catch (e) {
+    cacheTemplates.erro = String(e?.body?.error?.message || e.message).slice(0, 300);
+    console.warn(`[wa templates] falha ao sincronizar: ${cacheTemplates.erro}`);
+  }
+  return cacheTemplates;
+}
+
+/* Traduz o template da Meta para o que a tela precisa: o texto do corpo, quantas
+   variáveis ele pede e em que pé está a aprovação. O disparo só preenche
+   variáveis de texto do cabeçalho e do corpo — template com mídia no cabeçalho,
+   botão com URL variável ou variável com nome ({{nome}} em vez de {{1}}) aparece
+   na lista marcado como não usável, em vez de falhar na hora de mandar.
+
+   `usavel` junta as duas perguntas que a tela faz: a Meta já liberou (APPROVED)
+   e o disparo dá conta do formato? Só quem responde sim às duas pode ser
+   escolhido; o resto aparece na mesma lista, apagado, com o motivo escrito. */
+const MOTIVO_STATUS = {
+  PENDING: "aguardando a aprovação da Meta",
+  IN_APPEAL: "em recurso na Meta",
+  REJECTED: "recusado pela Meta",
+  PAUSED: "pausado pela Meta por baixa qualidade",
+  DISABLED: "desativado pela Meta",
+  PENDING_DELETION: "marcado para exclusão",
+};
 function descreverTemplateDisparo(t) {
   const comp = (tipo) => (t.components || []).find((c) => c.type === tipo);
   const header = comp("HEADER"), body = comp("BODY"), footer = comp("FOOTER"), botoes = comp("BUTTONS");
   const varsDe = (txt) => [...String(txt || "").matchAll(/\{\{\s*([^}\s]+)\s*\}\}/g)].map((m) => m[1]);
   const bodyVars = [...new Set(varsDe(body?.text))];
   const headerVars = header?.format === "TEXT" ? [...new Set(varsDe(header.text))] : [];
+  const status = t.status || "UNKNOWN";
   let motivo = null;
   if ([...bodyVars, ...headerVars].some((v) => !/^\d+$/.test(v))) motivo = "usa variáveis com nome";
   else if (header && header.format && header.format !== "TEXT") motivo = "tem imagem/arquivo no cabeçalho";
   else if ((botoes?.buttons || []).some((b) => b.type === "URL" && /\{\{/.test(b.url || ""))) motivo = "tem botão com link variável";
+  // O status vem antes do formato: "ainda não aprovado" é a resposta mais útil.
+  const motivoStatus = status === "APPROVED" ? null : (MOTIVO_STATUS[status] || `status ${status} na Meta`);
   return {
     name: t.name,
     language: t.language,
     category: t.category,
+    status,
+    motivoRecusa: t.rejected_reason && t.rejected_reason !== "NONE" ? String(t.rejected_reason) : null,
+    doSistema: TEMPLATES_SO_DO_SISTEMA.has(t.name),
     header: header?.format === "TEXT" ? header.text : null,
     body: body?.text || "",
     footer: footer?.text || null,
     buttons: (botoes?.buttons || []).map((b) => b.text),
     headerVars: headerVars.length,
     bodyVars: bodyVars.length,
-    suportado: !motivo,
-    motivo,
+    suportado: !motivo, // o disparo dá conta do formato
+    usavel: status === "APPROVED" && !motivo,
+    motivo: motivoStatus || motivo,
   };
 }
 
@@ -4619,47 +4686,124 @@ function preencherDisparo(txt, cli) {
     .replace(/\{nome\}/gi, nome.split(/\s+/)[0] || nome);
 }
 
-const disparos = new Map(); // id → andamento; some no restart, o histórico fica em WaMessage
 const PAUSA_ENTRE_ENVIOS_MS = 350;
 
-app.get("/api/wa/disparo/opcoes", wrap(async (_req, res) => {
-  let templates = [], erroTemplates = null;
-  if (!waTemplatesConfigured()) erroTemplates = "WA_WABA_ID/WA_TOKEN não configurados no servidor.";
-  else {
-    try {
-      const r = await listWaTemplates();
-      templates = (r.data || [])
-        .filter((t) => t.status === "APPROVED" && !TEMPLATES_SO_DO_SISTEMA.has(t.name))
-        .map(descreverTemplateDisparo)
-        .sort((a, b) => a.name.localeCompare(b.name));
-    } catch (e) {
-      erroTemplates = e?.body?.error?.message || e.message;
-    }
-  }
-  // Quem está com a conversa aberta agora — é quem recebe no modo texto.
+/* Quem está com a janela de 24h aberta AGORA, e até que horas.
+
+   A janela é contada do lado de cá porque é do lado de cá que ela é conhecida:
+   quem abre é a aluna, mandando mensagem, e isso chega pelo webhook e fica em
+   WaConversation.lastInboundAt. A Meta não tem endpoint de "essa conversa está
+   aberta?" — o que ela faz é aceitar o envio e descartar depois, em silêncio,
+   que foi exatamente o buraco de setembro.
+
+   Devolve a hora em que cada janela FECHA, e não um sim/não, para a tela poder
+   avisar "fecha em 40 min" — a diferença entre mandar de graça agora e pagar um
+   template daqui a pouco. */
+async function janelasAbertas() {
+  const desde = new Date(Date.now() - 24 * 3600_000);
   const convs = await prisma.waConversation.findMany({
-    where: { lastInboundAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
-    select: { phone: true },
+    where: { lastInboundAt: { gte: desde } },
+    select: { phone: true, lastInboundAt: true },
   });
-  const abertas = new Set(convs.map((c) => chaveTelefone(c.phone)).filter(Boolean));
+  const ultima = new Map(); // chave do telefone → última entrada dela
+  for (const c of convs) {
+    const k = chaveTelefone(c.phone);
+    if (!k || !c.lastInboundAt) continue;
+    const t = c.lastInboundAt.getTime();
+    if (t > (ultima.get(k) || 0)) ultima.set(k, t);
+  }
   const clients = await prisma.client.findMany({ select: { id: true, phone: true } });
-  const janelaAberta = clients.filter((c) => abertas.has(chaveTelefone(c.phone))).map((c) => c.id);
-  const emAndamento = [...disparos.values()].find((d) => !d.fimEm);
+  const janelas = [];
+  for (const c of clients) {
+    const t = ultima.get(chaveTelefone(c.phone));
+    if (t) janelas.push({ id: c.id, fechaEm: new Date(t + 24 * 3600_000).toISOString() });
+  }
+  return janelas;
+}
+
+/* Resumo dos últimos disparos: quantas saíram, quantas chegaram e quantas ainda
+   estão pendentes de confirmação da Meta. A entrega mora em WaMessage (é lá que
+   o webhook escreve), então vem pelo `wamid`. */
+async function resumirDisparos(quantos = 6) {
+  const ds = await prisma.waDisparo.findMany({
+    orderBy: { inicioEm: "desc" },
+    take: quantos,
+    include: { itens: { select: { situacao: true, wamid: true } } },
+  });
+  const wamids = ds.flatMap((d) => d.itens.map((i) => i.wamid).filter(Boolean));
+  const regs = wamids.length
+    ? await prisma.waMessage.findMany({ where: { wamid: { in: wamids } }, select: { wamid: true, status: true } })
+    : [];
+  const porWamid = new Map(regs.map((r) => [r.wamid, r.status]));
+  // sem registro ainda é "enviado": a Meta aceitou, a confirmação vem depois
+  const entregaDe = (i) => (i.wamid ? porWamid.get(i.wamid) || "enviado" : null);
+  return ds.map((d) => {
+    const conta = (f) => d.itens.filter(f).length;
+    return {
+      id: d.id,
+      por: d.por,
+      modo: d.modo,
+      template: d.template,
+      inicioEm: d.inicioEm,
+      fimEm: d.fimEm,
+      total: d.itens.length,
+      enviadas: conta((i) => i.situacao === "enviado"),
+      puladas: conta((i) => i.situacao === "pulada"),
+      erros: conta((i) => i.situacao === "erro"),
+      entregues: conta((i) => ["entregue", "lido"].includes(entregaDe(i))),
+      aguardando: conta((i) => i.situacao === "na fila" || entregaDe(i) === "enviado"),
+      naoChegaram: conta((i) => i.situacao === "erro" || entregaDe(i) === "falhou"),
+    };
+  });
+}
+
+/* O servidor reiniciou no meio de um disparo: o laço de envio morreu junto com o
+   processo. Sem fechar o registro, a tela ficaria para sempre em "já existe um
+   disparo em andamento" — e, pior, quem não chegou a receber ficaria
+   eternamente "na fila", que é mentira. Vira erro com o motivo escrito, para a
+   escola poder selecionar essas alunas e mandar de novo. */
+async function fecharDisparosInterrompidos() {
+  const abertos = await prisma.waDisparo.findMany({ where: { fimEm: null }, select: { id: true } });
+  if (!abertos.length) return;
+  const ids = abertos.map((d) => d.id);
+  const r = await prisma.waDisparoItem.updateMany({
+    where: { disparoId: { in: ids }, situacao: "na fila" },
+    data: { situacao: "erro", motivo: "o servidor reiniciou antes de enviar — não recebeu nada" },
+  });
+  await prisma.waDisparo.updateMany({ where: { id: { in: ids } }, data: { fimEm: new Date() } });
+  console.warn(`[wa disparo] ${ids.length} disparo(s) interrompido(s) por reinício — ${r.count} aluna(s) ficaram sem mensagem.`);
+}
+
+app.get("/api/wa/disparo/opcoes", wrap(async (req, res) => {
+  const cache = await sincronizarTemplates({ forcar: req.query.sync === "1" });
+  const todos = cache.lista
+    .map(descreverTemplateDisparo)
+    .sort((a, b) => Number(b.usavel) - Number(a.usavel) || a.name.localeCompare(b.name));
+  const emAndamento = await prisma.waDisparo.findFirst({ where: { fimEm: null }, orderBy: { inicioEm: "desc" }, select: { id: true } });
   res.json({
     waConfigurado: waConfigured(),
-    templates,
-    erroTemplates,
-    janelaAberta,
+    wabaConfigurada: waTemplatesConfigured(),
+    // o que dá para disparar — e o que está esperando a Meta, apagado na lista
+    templates: todos.filter((t) => !t.doSistema),
+    // as automações: não entram no disparo, mas a escola precisa ver se estão de pé
+    templatesSistema: todos.filter((t) => t.doSistema).map((t) => ({
+      name: t.name, status: t.status, category: t.category, motivoRecusa: t.motivoRecusa,
+    })),
+    sincronizadoEm: cache.em ? new Date(cache.em).toISOString() : null,
+    erroTemplates: cache.erro,
+    janelas: await janelasAbertas(),
+    agora: new Date().toISOString(),
     horarioBom: podeMandarAgora(),
-    emAndamento: emAndamento ? emAndamento.id : null,
+    emAndamento: emAndamento?.id || null,
+    ultimos: await resumirDisparos(),
   });
 }));
 
 app.post("/api/wa/disparo", wrap(async (req, res) => {
   if (!waConfigured()) return res.status(400).json({ error: "WhatsApp não configurado no servidor." });
-  if ([...disparos.values()].some((d) => !d.fimEm)) {
-    return res.status(409).json({ error: "Já existe um disparo em andamento. Espere terminar." });
-  }
+  const aberto = await prisma.waDisparo.findFirst({ where: { fimEm: null }, select: { id: true } });
+  if (aberto) return res.status(409).json({ error: "Já existe um disparo em andamento. Espere terminar.", id: aberto.id });
+
   const { modo, template, texto } = req.body || {};
   const ids = [...new Set((req.body?.clientIds || []).map(Number).filter(Boolean))];
   if (!ids.length) return res.status(400).json({ error: "Escolha pelo menos uma aluna." });
@@ -4667,13 +4811,15 @@ app.post("/api/wa/disparo", wrap(async (req, res) => {
 
   let tpl = null;
   if (modo === "template") {
-    const r = await listWaTemplates();
-    const achado = (r.data || []).find((t) => t.name === template?.name && t.status === "APPROVED");
+    // sincroniza na hora: um template pausado pela Meta há 3 minutos não sai daqui
+    const { lista, erro } = await sincronizarTemplates({ forcar: true });
+    if (erro && !lista.length) return res.status(502).json({ error: `Não consegui falar com a Meta para conferir o template: ${erro}` });
+    const achado = lista.find((t) => t.name === template?.name);
     if (!achado || TEMPLATES_SO_DO_SISTEMA.has(achado.name)) {
-      return res.status(400).json({ error: "Template não encontrado ou não aprovado." });
+      return res.status(400).json({ error: "Template não encontrado na conta do WhatsApp." });
     }
     tpl = descreverTemplateDisparo(achado);
-    if (!tpl.suportado) return res.status(400).json({ error: `Este template não pode ser usado no disparo: ${tpl.motivo}.` });
+    if (!tpl.usavel) return res.status(400).json({ error: `Este template não pode ser usado no disparo: ${tpl.motivo}.` });
     const hv = template.header || [], bv = template.body || [];
     if (hv.length !== tpl.headerVars || bv.length !== tpl.bodyVars || [...hv, ...bv].some((v) => !String(v || "").trim())) {
       return res.status(400).json({ error: "Preencha todas as variáveis do template." });
@@ -4685,73 +4831,117 @@ app.post("/api/wa/disparo", wrap(async (req, res) => {
   }
 
   const clients = await prisma.client.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, phone: true } });
-  const d = {
-    id: crypto.randomUUID(),
-    por: req.admin?.username || "painel",
-    modo,
-    template: tpl ? tpl.name : null,
-    inicioEm: new Date(),
-    fimEm: null,
-    itens: clients
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((c) => ({ clientId: c.id, nome: c.name, phone: c.phone || "", situacao: "na fila", motivo: null, wamid: null })),
-  };
-  disparos.set(d.id, d);
-  console.log(`[wa disparo] ${d.id} por ${d.por}: ${modo}${tpl ? " " + tpl.name : ""} para ${d.itens.length} aluna(s)`);
-  res.json({ id: d.id });
+  if (!clients.length) return res.status(400).json({ error: "Nenhuma das alunas escolhidas existe mais." });
+  const id = crypto.randomUUID();
+  const por = req.admin?.username || "painel";
+  await prisma.waDisparo.create({
+    data: {
+      id,
+      por,
+      modo,
+      template: tpl ? tpl.name : null,
+      texto: modo === "texto" ? String(texto).slice(0, 4000) : null,
+      itens: {
+        create: clients
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((c) => ({ clientId: c.id, nome: c.name.slice(0, 120), phone: String(c.phone || "").slice(0, 30) })),
+      },
+    },
+  });
+  console.log(`[wa disparo] ${id} por ${por}: ${modo}${tpl ? " " + tpl.name : ""} para ${clients.length} aluna(s)`);
+  res.json({ id });
 
-  // Daqui em diante a requisição já respondeu: o envio segue sozinho.
-  (async () => {
-    for (const it of d.itens) {
-      const cli = { name: it.nome };
-      try {
-        if (!chaveTelefone(it.phone)) { it.situacao = "pulada"; it.motivo = "sem telefone válido"; continue; }
-        let r;
-        if (modo === "texto") {
-          if (!(await janelaAbertaPara(it.phone))) { it.situacao = "pulada"; it.motivo = "conversa fechada (só template chega)"; continue; }
-          r = await sendWaText(it.phone, preencherDisparo(texto, cli));
-        } else {
-          r = await sendWaTemplate(it.phone, tpl.name, {
-            lang: tpl.language,
-            header: tpl.valoresHeader.map((v) => preencherDisparo(v, cli)),
-            body: tpl.valoresBody.map((v) => preencherDisparo(v, cli)),
-          });
-        }
-        const kind = modo === "texto" ? "disparo_texto" : `disparo:${tpl.name}`.slice(0, 40);
-        await registrarWaEnvio(r, { phone: it.phone, kind });
-        it.wamid = r?.messages?.[0]?.id || null;
-        it.situacao = "enviado";
-        await new Promise((ok) => setTimeout(ok, PAUSA_ENTRE_ENVIOS_MS));
-      } catch (e) {
-        it.situacao = "erro";
-        it.motivo = String(e?.body?.error?.error_data?.details || e?.body?.error?.message || e.message).slice(0, 200);
-        console.warn(`[wa disparo] ${it.nome} (${it.phone}): ${it.motivo}`);
-      }
-    }
-    d.fimEm = new Date();
-    const n = (s) => d.itens.filter((i) => i.situacao === s).length;
-    console.log(`[wa disparo] ${d.id} terminou: ${n("enviado")} enviados, ${n("pulada")} pulados, ${n("erro")} com erro`);
-    // guarda só os últimos 20 disparos em memória
-    if (disparos.size > 20) disparos.delete(disparos.keys().next().value);
-  })().catch((e) => { d.fimEm = new Date(); console.error("[wa disparo]", e); });
+  // Daqui em diante a requisição já respondeu: o envio segue sozinho, gravando
+  // aluna por aluna — quem acompanha (e quem abrir a tela depois) lê do banco.
+  rodarDisparo(id, { modo, texto, tpl }).catch((e) => console.error("[wa disparo]", e));
 }));
 
-// Andamento + entrega real (o webhook de status atualiza WaMessage).
+async function rodarDisparo(id, { modo, texto, tpl }) {
+  try {
+    const itens = await prisma.waDisparoItem.findMany({ where: { disparoId: id }, orderBy: { id: "asc" } });
+    for (const it of itens) {
+      const cli = { name: it.nome };
+      let dados;
+      try {
+        if (!chaveTelefone(it.phone)) {
+          dados = { situacao: "pulada", motivo: "sem telefone válido" };
+        } else if (modo === "texto" && !(await janelaAbertaPara(it.phone))) {
+          dados = { situacao: "pulada", motivo: "conversa fechada (só template chega)" };
+        } else {
+          const r = modo === "texto"
+            ? await sendWaText(it.phone, preencherDisparo(texto, cli))
+            : await sendWaTemplate(it.phone, tpl.name, {
+                lang: tpl.language,
+                header: tpl.valoresHeader.map((v) => preencherDisparo(v, cli)),
+                body: tpl.valoresBody.map((v) => preencherDisparo(v, cli)),
+              });
+          const kind = modo === "texto" ? "disparo_texto" : `disparo:${tpl.name}`.slice(0, 40);
+          await registrarWaEnvio(r, { phone: it.phone, kind });
+          dados = { situacao: "enviado", wamid: r?.messages?.[0]?.id || null };
+          await new Promise((ok) => setTimeout(ok, PAUSA_ENTRE_ENVIOS_MS));
+        }
+      } catch (e) {
+        dados = {
+          situacao: "erro",
+          motivo: String(e?.body?.error?.error_data?.details || e?.body?.error?.message || e.message).slice(0, 200),
+        };
+        console.warn(`[wa disparo] ${it.nome} (${it.phone}): ${dados.motivo}`);
+      }
+      await prisma.waDisparoItem.update({ where: { id: it.id }, data: dados });
+    }
+  } finally {
+    await prisma.waDisparo.update({ where: { id }, data: { fimEm: new Date() } }).catch(() => {});
+    const r = (await resumirDisparos(3).catch(() => [])).find((d) => d.id === id);
+    if (r) console.log(`[wa disparo] ${id} terminou: ${r.enviadas} enviadas, ${r.puladas} puladas, ${r.erros} com erro`);
+  }
+}
+
+/* Andamento + ENTREGA de verdade.
+
+   `situacao` é o que o servidor fez (mandou, pulou, deu erro) e sai do próprio
+   registro do disparo; `entrega` é o que a Meta confirmou depois, e vem de
+   WaMessage, que o webhook de status atualiza. "Aceita pela Meta" não é
+   "chegou": a tela mostra os dois separados justamente porque confundir um com
+   o outro foi o que deixou 88 cobranças invisíveis em setembro. */
 app.get("/api/wa/disparo/:id", wrap(async (req, res) => {
-  const d = disparos.get(req.params.id);
-  if (!d) return res.status(404).json({ error: "Disparo não encontrado (o servidor pode ter reiniciado)." });
+  const d = await prisma.waDisparo.findUnique({
+    where: { id: req.params.id },
+    include: { itens: { orderBy: { id: "asc" } } },
+  });
+  if (!d) return res.status(404).json({ error: "Disparo não encontrado." });
   const wamids = d.itens.map((i) => i.wamid).filter(Boolean);
   const regs = wamids.length
     ? await prisma.waMessage.findMany({ where: { wamid: { in: wamids } }, select: { wamid: true, status: true, errorCode: true, errorMsg: true } })
     : [];
   const porWamid = new Map(regs.map((r) => [r.wamid, r]));
   res.json({
-    ...d,
+    id: d.id,
+    por: d.por,
+    modo: d.modo,
+    template: d.template,
+    texto: d.texto,
+    inicioEm: d.inicioEm,
+    fimEm: d.fimEm,
+    sincronizadoEm: new Date().toISOString(),
     itens: d.itens.map((i) => {
       const r = i.wamid ? porWamid.get(i.wamid) : null;
-      return { ...i, entrega: r?.status || null, erroEntrega: r?.errorCode ? `${r.errorCode} ${r.errorMsg || ""}`.trim() : null };
+      return {
+        clientId: i.clientId,
+        nome: i.nome,
+        phone: i.phone,
+        situacao: i.situacao,
+        motivo: i.motivo,
+        // sem registro ainda é "enviado": a Meta aceitou, a confirmação vem depois
+        entrega: i.wamid ? (r?.status || "enviado") : null,
+        erroEntrega: r?.errorCode ? `${r.errorCode} ${r.errorMsg || ""}`.trim() : null,
+      };
     }),
   });
+}));
+
+// Histórico: os últimos disparos, para reabrir o de ontem e ver quem ficou faltando.
+app.get("/api/wa/disparos", wrap(async (_req, res) => {
+  res.json({ disparos: await resumirDisparos(12) });
 }));
 
 /* ---------- Fluxo de agendamento pelo WhatsApp ---------- */
@@ -6843,6 +7033,34 @@ const TABELAS_ESPERADAS = [
       INDEX \`WaMessage_status_idx\`(\`status\`),
       PRIMARY KEY (\`id\`)
     ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
+  /* Disparo em massa (20/09/2026). Antes vivia só na memória do processo: um
+     deploy no meio levava junto "quem recebeu e quem não". */
+  ["WaDisparo", `CREATE TABLE IF NOT EXISTS \`WaDisparo\` (
+      \`id\` VARCHAR(40) NOT NULL,
+      \`por\` VARCHAR(60) NOT NULL,
+      \`modo\` VARCHAR(12) NOT NULL,
+      \`template\` VARCHAR(80) NULL,
+      \`texto\` TEXT NULL,
+      \`inicioEm\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      \`fimEm\` DATETIME(3) NULL,
+      INDEX \`WaDisparo_inicioEm_idx\`(\`inicioEm\`),
+      PRIMARY KEY (\`id\`)
+    ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
+  ["WaDisparoItem", `CREATE TABLE IF NOT EXISTS \`WaDisparoItem\` (
+      \`id\` INTEGER NOT NULL AUTO_INCREMENT,
+      \`disparoId\` VARCHAR(40) NOT NULL,
+      \`clientId\` INTEGER NOT NULL,
+      \`nome\` VARCHAR(120) NOT NULL,
+      \`phone\` VARCHAR(30) NOT NULL DEFAULT '',
+      \`situacao\` VARCHAR(12) NOT NULL DEFAULT 'na fila',
+      \`motivo\` VARCHAR(200) NULL,
+      \`wamid\` VARCHAR(160) NULL,
+      INDEX \`WaDisparoItem_disparoId_idx\`(\`disparoId\`),
+      INDEX \`WaDisparoItem_wamid_idx\`(\`wamid\`),
+      PRIMARY KEY (\`id\`),
+      CONSTRAINT \`WaDisparoItem_disparoId_fkey\` FOREIGN KEY (\`disparoId\`)
+        REFERENCES \`WaDisparo\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
+    ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
   ["HolidayOverride", `CREATE TABLE IF NOT EXISTS \`HolidayOverride\` (
       \`id\` INTEGER NOT NULL AUTO_INCREMENT,
       \`date\` VARCHAR(10) NOT NULL,
@@ -6874,6 +7092,8 @@ async function ensureSchema() {
 const PORT = process.env.PORT || 4000;
 ensureSchema()
   .catch((e) => console.error("Falha ao garantir schema:", e.message))
+  .then(() => fecharDisparosInterrompidos())
+  .catch((e) => console.error("Falha ao fechar disparos interrompidos:", e.message))
   .then(() => loadSettings())
   .catch((e) => console.error("Falha ao carregar configurações:", e.message))
   .then(() => loadFeriados())

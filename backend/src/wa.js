@@ -160,10 +160,53 @@ export function sendWaTemplate(to, name, { lang = "pt_BR", header = [], body = [
    aluna ter recebido. Quem a escola inicia MANDA TEMPLATE, ponto — é o que
    `sendWaTemplate` faz. Não reintroduzir o "tenta texto primeiro". */
 
-// Lista os templates da conta e o status de aprovação de cada um.
-export function listWaTemplates() {
-  if (!WABA_ID) return Promise.reject(new Error("WA_WABA_ID não configurado"));
-  return graph("GET", `/${WABA_ID}/message_templates?limit=100&fields=name,status,language,category,components,rejected_reason`);
+/* Lista os templates da conta e o status de aprovação de cada um.
+
+   Devolve { data: [...] } com TODOS os status — APPROVED, PENDING, REJECTED,
+   PAUSED, DISABLED. Quem filtra é quem chama: a tela do disparo precisa ver o
+   que ainda está esperando a Meta, senão um template recusado simplesmente
+   some da lista e ninguém entende por quê.
+
+   Pagina até o fim (a Meta devolve 100 por vez) porque template que fica na
+   segunda página é template invisível. */
+export async function listWaTemplates() {
+  if (!WABA_ID) throw new Error("WA_WABA_ID não configurado");
+  const fields = "name,status,language,category,components,rejected_reason";
+  let after = "", data = [];
+  for (let pagina = 0; pagina < 5; pagina++) {
+    const r = await graph("GET", `/${WABA_ID}/message_templates?limit=100&fields=${fields}${after ? `&after=${encodeURIComponent(after)}` : ""}`);
+    data = data.concat(r.data || []);
+    after = r.paging?.next ? r.paging?.cursors?.after || "" : "";
+    if (!after) break;
+  }
+  return { data };
+}
+
+/* Mudanças de status de template avisadas pela própria Meta.
+
+   O campo `message_template_status_update` do webhook chega quando ela aprova,
+   recusa ou pausa um template — em minutos ou horas, sem ninguém pedir. É o
+   que permite a tela dizer "aprovado agora há pouco" sem ficar batendo na
+   Graph API de minuto em minuto.
+
+   Exige que o campo esteja assinado no app da Meta (Webhooks → WhatsApp
+   Business Account → message_template_status_update). Sem a assinatura nada
+   quebra: o cache de templates continua expirando pelo relógio. */
+export function parseTemplateStatuses(body) {
+  try {
+    const changes = body?.entry?.[0]?.changes || [];
+    return changes
+      .filter((c) => c.field === "message_template_status_update")
+      .map((c) => ({
+        name: c.value?.message_template_name || "",
+        language: c.value?.message_template_language || "",
+        status: c.value?.event || "", // APPROVED | REJECTED | PAUSED | ...
+        reason: c.value?.reason && c.value.reason !== "NONE" ? String(c.value.reason) : null,
+      }))
+      .filter((t) => t.name);
+  } catch {
+    return [];
+  }
 }
 
 /* Submete um template para aprovação.

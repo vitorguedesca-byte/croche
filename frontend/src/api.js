@@ -121,13 +121,17 @@ export const api = {
 
   updateSettings: (data) => req("PUT", "/api/settings", data),
 
-  /* Disparo em massa no WhatsApp. `opcoes` traz os templates aprovados e quem
-     está com a conversa aberta; `enviar` devolve o id e o envio segue no
-     servidor; `status` acompanha envio e entrega. */
+  /* Disparo em massa no WhatsApp. `opcoes` sincroniza com a Meta — templates
+     (aprovados E os que ainda esperam aprovação) e a janela de 24h de cada
+     aluna; `enviar` devolve o id e o envio segue no servidor; `status`
+     acompanha envio e entrega, e continua valendo depois de recarregar a tela
+     porque o disparo fica gravado. */
   disparo: {
-    opcoes: () => req("GET", "/api/wa/disparo/opcoes"),
+    // `sync` fura o cache de 5 min e pergunta na hora para a Meta (botão da tela)
+    opcoes: (sync) => req("GET", `/api/wa/disparo/opcoes${sync ? "?sync=1" : ""}`),
     enviar: (data) => req("POST", "/api/wa/disparo", data),
     status: (id) => req("GET", `/api/wa/disparo/${encodeURIComponent(id)}`),
+    historico: () => req("GET", "/api/wa/disparos"),
   },
 
   /* Feriados: em feriado a escola não abre. `list` traz o calendário já

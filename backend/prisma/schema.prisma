@@ -420,3 +420,41 @@ model WaMessage {
   @@index([invoiceId])
   @@index([status])
 }
+
+/* Um disparo em massa (a Inêz escolhe as alunas e manda de uma vez).
+
+   Mora no banco, e não só na memória do processo, por um motivo prático: o
+   disparo continua acontecendo DEPOIS que a tela fecha — a entrega de verdade
+   chega pelo webhook da Meta minutos depois, e um deploy no meio do caminho
+   levaria junto a única resposta que interessa ("quem recebeu e quem não"). */
+model WaDisparo {
+  id        String    @id @db.VarChar(40) // uuid
+  por       String    @db.VarChar(60) // admin que mandou
+  modo      String    @db.VarChar(12) // template | texto
+  template  String?   @db.VarChar(80) // nome do template, no modo template
+  texto     String?   @db.Text // mensagem, no modo texto
+  inicioEm  DateTime  @default(now())
+  fimEm     DateTime? // nulo = ainda enviando
+  itens     WaDisparoItem[]
+
+  @@index([inicioEm])
+}
+
+/* Uma aluna dentro de um disparo. `situacao` é o ENVIO (o que o servidor fez);
+   a ENTREGA (chegou? foi lida?) vem de WaMessage pelo `wamid`, porque é o
+   webhook da Meta quem conta isso, e sempre depois. */
+model WaDisparoItem {
+  id        Int       @id @default(autoincrement())
+  disparoId String    @db.VarChar(40)
+  disparo   WaDisparo @relation(fields: [disparoId], references: [id], onDelete: Cascade)
+  clientId  Int
+  nome      String    @db.VarChar(120)
+  phone     String    @default("") @db.VarChar(30)
+  // na fila | enviado | pulada | erro
+  situacao  String    @default("na fila") @db.VarChar(12)
+  motivo    String?   @db.VarChar(200) // por que pulou ou deu erro
+  wamid     String?   @db.VarChar(160) // chave para a entrega em WaMessage
+
+  @@index([disparoId])
+  @@index([wamid])
+}
