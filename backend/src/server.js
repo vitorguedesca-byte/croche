@@ -69,6 +69,7 @@ import {
   textoMaterialPrimeiraAula,
 } from "./textosEscola.js";
 import { sicrediConfigured, sicrediMissing, createCharge, getCharge, isPaidStatus, extractPix } from "./sicredi.js";
+import { enviarEventoMeta, contextoDoNavegador, guardarContexto, contextoGuardado } from "./metaCapi.js";
 import { waConfigured, waTemplatesConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, parseTemplateStatuses, normalizePhone, listWaTemplates } from "./wa.js";
 import {
   CONVERSA_EXPIRA_H,
@@ -2003,6 +2004,20 @@ app.post(
       }
     }
 
+    /* Anúncios: a 1ª aula marcada pelo site é o "Lead" da campanha. O mesmo
+       event_id sai do navegador (Pixel) em FirstClassBooking.jsx. */
+    if (!painel && b.firstClass && criadas[0]) {
+      const ctx = contextoDoNavegador(req);
+      guardarContexto(criadas[0].id, ctx);
+      enviarEventoMeta({
+        eventName: "Lead",
+        eventId: `lead-${criadas[0].id}`,
+        pessoa: { nome: b.clientName, telefone: b.phone, email: b.email, nascimento: b.birthday, cidade: unit, id: String(b.phone || "").replace(/\D/g, "") },
+        ctx,
+        custom: { content_name: b.plan === "avulso" ? "aula avulsa" : "matricula", currency: "BRL" },
+      });
+    }
+
     // compatibilidade: sem replicação, devolve a marcação criada (como antes)
     if (!replicando) return res.json(criadas[0]);
     res.json({ created: criadas, pulos, feriados: feriadosPulados });
@@ -2433,6 +2448,17 @@ async function confirmarPagamentoPorTxid(txid) {
     });
     await registrarMatriculaPaga({ ...booking, paymentDate: todayISO() });
     console.log(`[sicredi] pagamento confirmado — reserva ${booking.id}`);
+    // Anúncios: a venda confirmada pelo banco. Dedup com o Pixel pelo event_id.
+    if (booking.paymentMethod === "Aula Avulsa" || ehPagamentoDeMatricula(booking.paymentMethod)) {
+      const cli = await prisma.client.findFirst({ where: { name: booking.clientName } });
+      enviarEventoMeta({
+        eventName: "Purchase",
+        eventId: `purchase-${booking.id}`,
+        pessoa: { nome: booking.clientName, telefone: booking.phone, email: cli?.email, nascimento: cli?.birthday, cidade: booking.unit, id: String(booking.phone || "").replace(/\D/g, "") },
+        ctx: contextoGuardado(booking.id),
+        custom: { value: Number(booking.value) || 0, currency: "BRL" },
+      });
+    }
     // O agradecimento + regras é o fecho do fluxo do WhatsApp. Fora dele (site,
     // painel) não há conversa aberta, e avisarMatriculaConfirmada sai em silêncio.
     await avisarMatriculaConfirmada(booking);

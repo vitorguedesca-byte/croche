@@ -322,6 +322,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
         weeklyFreq: isAvulso ? null : freq,
         mensalistaTipo: isAvulso ? null : tipo,
       });
+      if (!booking) window.metaTrack?.("Lead", { content_name: isAvulso ? "aula avulsa" : "matricula", value: total, currency: "BRL" }, `lead-${b.id}`);
       setBooking(b);
       try {
         const inv = await api.createInvoice(b.id, { cpf: cpf.trim(), name: name.trim(), email: email.trim() });
@@ -359,9 +360,14 @@ export default function FirstClassBooking({ onBack, fromSite }) {
     }
   };
 
+  // Anúncios: pagamento aprovado = Purchase. O backend manda o mesmo eventID (metaCapi.js).
+  useEffect(() => {
+    if (step === "done" && booking?.id) window.metaTrack?.("Purchase", { value: total, currency: "BRL" }, `purchase-${booking.id}`);
+  }, [step, booking?.id]);
+
   // Polling suave a cada 5s enquanto o Pix estiver na tela para reconhecer o pagamento automático
   useEffect(() => {
-    if (step !== "plan" || !pix || !booking?.id) return;
+    if (step !== "pay" || !pix || !booking?.id) return;
     let vivo = true;
     const t = setInterval(async () => {
       if (!vivo) return;
