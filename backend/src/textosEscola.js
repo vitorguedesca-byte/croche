@@ -304,13 +304,35 @@ export const textoAniversario = ({ nome }) =>
 Toda a equipe da Fios que Curam deseja um dia maravilhoso e muito abençoado pra você! Que este novo ciclo venha repleto de saúde, paz, muitas alegrias e lindos projetos de crochê. É um prazer enorme ter você com a gente! ✨🧶`;
 
 
+/* Endereço de cada unidade — o mesmo da landing (seção "Localização e
+   contato"). Mudou lá, muda aqui. Unidade nova cadastrada nas Configurações
+   sem entrada aqui simplesmente sai sem endereço na mensagem. */
+export const ENDERECOS_UNIDADES = {
+  Ipatinga: {
+    endereco: "Rua Berilo, 100 — Iguaçu, Ipatinga/MG, 35162-031",
+    mapa: "https://www.google.com/maps/search/?api=1&query=Rua%20Berilo%2C%20100%2C%20Igua%C3%A7u%2C%20Ipatinga%20-%20MG%2C%2035162-031",
+  },
+  "Timóteo": {
+    endereco: "Praça Primeiro de Maio, 290, loja 14 — Centro, Timóteo/MG, 35180-018",
+    mapa: "https://www.google.com/maps/search/?api=1&query=Pra%C3%A7a%20Primeiro%20de%20Maio%2C%20290%2C%20loja%2014%2C%20Centro%2C%20Tim%C3%B3teo%20-%20MG%2C%2035180-018",
+  },
+};
+// "Timoteo", "TIMÓTEO" e "Timóteo" são a mesma unidade
+const chaveUnidade = (u) => String(u || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+export const enderecoDaUnidade = (unidade) => {
+  const k = chaveUnidade(unidade);
+  const nome = Object.keys(ENDERECOS_UNIDADES).find((u) => chaveUnidade(u) === k);
+  return nome ? ENDERECOS_UNIDADES[nome] : null;
+};
+
 /* Material da primeira aula. Texto da Inêz (08/09/2026), com os erros de
    digitação do original corrigidos — é mensagem que vai para a aluna.
 
-   Fica em uma mensagem só e sem variável nenhuma: não depende de nada da ficha,
-   e assim cabe num template se um dia precisar sair fora da janela de 24h. */
-export const textoMaterialPrimeiraAula = () =>
-`Parte do aprendizado é saber o que comprar para a peça que você vai produzir.
+   Desde 21/09/2026 leva também o endereço da unidade em que ela se matriculou
+   (pedido do Vitor), com o link do mapa. Sem unidade conhecida, sai como antes. */
+export const textoMaterialPrimeiraAula = ({ unidade } = {}) => {
+  const end = enderecoDaUnidade(unidade);
+  return `Parte do aprendizado é saber o que comprar para a peça que você vai produzir.
 
 Para a compra ser certeira, dentro da nossa metodologia pedimos sempre um *fio de malha premium 35 mm* e uma *agulha número 8*.
 
@@ -319,5 +341,10 @@ A segunda opção é um *fio de malha premium 25 mm* e uma *agulha número 7*.
 Fica bem em conta, fique tranquila. 💚
 
 Se você já faz crochê e tem material em casa, pode trazer o que tiver — mas comprar dentro dessas especificações é a sua melhor opção.
-
+${end ? `
+📍 *Endereço da unidade ${unidade}:*
+${end.endereco}
+${end.mapa}
+` : ""}
 Até mais! 🧶`;
+};

@@ -67,6 +67,7 @@ import {
   textoAulaExtraPaga,
   textoAniversario,
   textoMaterialPrimeiraAula,
+  enderecoDaUnidade,
 } from "./textosEscola.js";
 import { sicrediConfigured, sicrediMissing, createCharge, getCharge, isPaidStatus, extractPix } from "./sicredi.js";
 import { enviarEventoMeta, contextoDoNavegador, guardarContexto, contextoGuardado } from "./metaCapi.js";
@@ -2181,12 +2182,29 @@ async function registrarMatriculaPaga(booking) {
    não há conversa aberta e o envio sai em silêncio. */
 /* O texto não tem variável nenhuma, então o template é idêntico ao texto livre
    — a aluna recebe a mesma coisa dentro ou fora da janela de 24h. */
-async function enviarMaterialPrimeiraAula(phone) {
+/* Desde 21/09/2026 a mensagem leva o endereço da unidade. Fora da janela isso
+   exige o template NOVO `material_primeira_aula_endereco` ({{1}} unidade,
+   {{2}} endereço) — o antigo não tem variável e não dá para editar sem tirá-lo
+   do ar (ver memória do WhatsApp). Enquanto o novo não estiver aprovado, a Meta
+   recusa na hora (132001) e cai no antigo, sem endereço: melhor o material
+   sem endereço do que nenhuma mensagem. */
+const TEMPLATE_MATERIAL_COM_ENDERECO = "material_primeira_aula_endereco";
+async function enviarMaterialPrimeiraAula(phone, unidade) {
   if (!phone) return;
   try {
     if (await janelaAbertaPara(phone)) {
-      await waSend(phone, textoMaterialPrimeiraAula(), { kind: "material" });
+      await waSend(phone, textoMaterialPrimeiraAula({ unidade }), { kind: "material" });
       return;
+    }
+    const end = enderecoDaUnidade(unidade);
+    if (end) {
+      try {
+        const r = await sendWaTemplate(phone, TEMPLATE_MATERIAL_COM_ENDERECO, { body: [unidade, end.endereco] });
+        await registrarWaEnvio(r, { phone, kind: TEMPLATE_MATERIAL_COM_ENDERECO });
+        return;
+      } catch (e) {
+        console.warn(`[wa] ${TEMPLATE_MATERIAL_COM_ENDERECO} indisponível (${e.body?.error?.code || e.message}) — mandando o material sem endereço`);
+      }
     }
     const r = await sendWaTemplate(phone, "material_primeira_aula", {});
     await registrarWaEnvio(r, { phone, kind: "material_primeira_aula" });
@@ -2248,7 +2266,7 @@ async function avisarMatriculaConfirmada(booking) {
 
        Vale para a avulsa também: ela também tem uma primeira aula para a qual
        precisa levar material. */
-    await enviarMaterialPrimeiraAula(booking.phone);
+    await enviarMaterialPrimeiraAula(booking.phone, booking.unit);
   } catch (e) {
     console.warn(`[wa] confirmação da matrícula/aula de ${booking.clientName} não saiu: ${e.message}`);
   }
