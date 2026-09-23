@@ -549,11 +549,25 @@ export function competenciasDoAluno(c, ate = compAtual()) {
   while (comp <= ate && out.length < 240) { out.push(comp); comp = addComp(comp, 1); }
   return out.reverse();
 }
-// Mensalidade efetiva do aluno (individual → plano 1x/2x → padrão legado).
+/* Planos de mensalista. 3x e 4x (desde 23/09/2026) são só para mensalista
+   FIXO — a escala continua com 1x e 2x — e só o painel oferece: /agendar,
+   WhatsApp e portal seguem com 1x e 2x. ESPELHO de FREQS_PLANO no server. */
+export const PLANOS_MENSALISTA = [
+  { freq: 1, aulasMes: 4, padrao: 120 },
+  { freq: 2, aulasMes: 8, padrao: 200 },
+  { freq: 3, aulasMes: 12, padrao: 320, soFixo: true },
+  { freq: 4, aulasMes: 16, padrao: 400, soFixo: true },
+];
+export const FREQ_MAX_ESCALA = 2;
+// Preço de tabela do plano (Configurações), com o padrão de fábrica se faltar.
+export function valorPlanoMeta(meta, freq) {
+  const p = PLANOS_MENSALISTA.find((x) => x.freq === Number(freq)) || PLANOS_MENSALISTA[0];
+  return (meta && meta[`valorPlano${p.freq}x`]) ?? p.padrao;
+}
+// Mensalidade efetiva do aluno (individual → plano 1x a 4x → padrão legado).
 export function mensalidadeDe(c, meta) {
   if (c.monthlyValue != null) return c.monthlyValue || 0;
-  if (c.weeklyFreq === 1) return (meta && meta.valorPlano1x) || 0;
-  if (c.weeklyFreq === 2) return (meta && meta.valorPlano2x) || 0;
+  if (PLANOS_MENSALISTA.some((p) => p.freq === c.weeklyFreq)) return (meta && meta[`valorPlano${c.weeklyFreq}x`]) || 0;
   return (meta && meta.mensalidadeValor) || 0;
 }
 /* Valor combinado só para um mês (desconto/promoção), se houver.

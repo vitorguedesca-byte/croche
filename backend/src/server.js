@@ -871,7 +871,7 @@ const wrap = (fn) => (req, res) =>
 /* Taxa de matrícula: saiu em 28/08/2026 (diluída na mensalidade) e VOLTOU em
    01/09/2026, agora como parcela separada e visível — R$ 20 somados à 1ª
    mensalidade da aluna nova, uma vez só. Zerar o campo desliga a taxa. */
-const PRECOS_PADRAO = { valorPlano1x: 120, valorPlano2x: 200, valorAvulsa: 40, duracaoAulaMin: 120, taxaMatricula: 20 };
+const PRECOS_PADRAO = { valorPlano1x: 120, valorPlano2x: 200, valorPlano3x: 320, valorPlano4x: 400, valorAvulsa: 40, duracaoAulaMin: 120, taxaMatricula: 20 };
 let SETTINGS = { valorPadrao: VALOR_PADRAO, capacidadePadrao: CAPACITY_PADRAO, units: UNITS, profs: PROFS, horarioFunc: "", pixKey: "", pixName: "", mensalidadeValor: 0, vencimentoDia: 10, travaAtraso: false, pixExpira: false, cobrarEncargos: false, geracaoAuto: false, waAvisosAuto: false, ...PRECOS_PADRAO };
 async function loadSettings() {
   let s = await prisma.settings.findUnique({ where: { id: 1 } });
@@ -889,6 +889,8 @@ async function loadSettings() {
     vencimentoDia: s.vencimentoDia ?? 10,
     valorPlano1x: s.valorPlano1x ?? PRECOS_PADRAO.valorPlano1x,
     valorPlano2x: s.valorPlano2x ?? PRECOS_PADRAO.valorPlano2x,
+    valorPlano3x: s.valorPlano3x ?? PRECOS_PADRAO.valorPlano3x,
+    valorPlano4x: s.valorPlano4x ?? PRECOS_PADRAO.valorPlano4x,
     valorAvulsa: s.valorAvulsa ?? PRECOS_PADRAO.valorAvulsa,
     duracaoAulaMin: s.duracaoAulaMin ?? PRECOS_PADRAO.duracaoAulaMin,
     /* `?? padrão` só cobre a coluna AUSENTE (banco antigo). Taxa gravada como 0
@@ -947,8 +949,23 @@ function barrarFeriado(res, date, unit) {
   return true;
 }
 
+/* Planos de mensalista: 1x a 4x por semana (Vitor, 23/09/2026 — 3x e 4x
+   entraram nesse dia). 3x e 4x são SÓ para mensalista fixo: a escala continua
+   com 1x e 2x, porque as regras dela (janela de marcação, teto de 4/8 aulas no
+   mês) só foram desenhadas para esses dois. As telas públicas (/agendar,
+   WhatsApp, portal) também seguem oferecendo só 1x e 2x — 3x e 4x a Inêz
+   matricula pelo painel. */
+const FREQS_PLANO = [1, 2, 3, 4];
+const FREQ_MAX_ESCALA = 2;
+// Frequência válida do plano; qualquer outra coisa vira 1x (como sempre foi).
+const freqDoPlano = (v) => (FREQS_PLANO.includes(Number(v)) ? Number(v) : 1);
+const erroEscalaSoAte2x = (freq, tipo) =>
+  tipo === "escala" && freq > FREQ_MAX_ESCALA
+    ? Object.assign(new Error(`O plano de ${freq}x por semana é só para mensalista fixo. Na escala, os planos são 1x ou 2x por semana.`), { code: 400 })
+    : null;
+
 // Preços derivados do plano do aluno
-const valorDoPlano = (freq) => (Number(freq) === 2 ? SETTINGS.valorPlano2x : SETTINGS.valorPlano1x);
+const valorDoPlano = (freq) => SETTINGS[`valorPlano${freqDoPlano(freq)}x`];
 
 /* ===================== O PRIMEIRO PAGAMENTO DA ALUNA NOVA =====================
    Vitor, 01/09/2026: toda aluna nova paga a taxa de matrícula ALÉM da
@@ -2599,7 +2616,7 @@ app.post(
 
 /* ---------- MENSALIDADES (mensalistas) ---------- */
 const competenciaAtual = () => todayISO().slice(0, 7); // 'YYYY-MM'
-// Valor efetivo da mensalidade, na ordem: valor individual → plano 1x/2x →
+// Valor efetivo da mensalidade, na ordem: valor individual → plano 1x a 4x →
 // valor padrão legado das Configurações (alunos cadastrados antes dos planos).
 const mensalidadeValorDe = (c) => {
   if (c.monthlyValue != null) return c.monthlyValue || 0;
@@ -3108,8 +3125,10 @@ app.post("/api/mensalidades/reajuste/preview", wrap(async (req, res) => {
   });
   res.json({
     tabela: {
-      plano1x: { antes: SETTINGS.valorPlano1x, depois: calcularReajuste(SETTINGS.valorPlano1x, { tipo, valor }) },
-      plano2x: { antes: SETTINGS.valorPlano2x, depois: calcularReajuste(SETTINGS.valorPlano2x, { tipo, valor }) },
+      ...Object.fromEntries(FREQS_PLANO.map((f) => {
+        const antes = SETTINGS[`valorPlano${f}x`];
+        return [`plano${f}x`, { antes, depois: calcularReajuste(antes, { tipo, valor }) }];
+      })),
     },
     // Quem tem valor individual não é arrastada junto: a tela lista para você
     // marcar uma a uma quem entra no reajuste (pode haver desconto combinado).
@@ -3128,7 +3147,7 @@ app.post("/api/mensalidades/reajuste/preview", wrap(async (req, res) => {
  * body: {
  *   tipo: "percentual" | "reais",
  *   valor: number,
- *   atualizarTabela?: boolean,   // sobe plano 1x/2x → vale para quem entrar depois
+ *   atualizarTabela?: boolean,   // sobe planos 1x a 4x → vale para quem entrar depois
  *   individuais?: number[]       // ids das alunas com valor próprio que entram
  * }
  * Não mexe em mensalidade já gerada: o reajuste vale do próximo boleto em diante.
@@ -3140,12 +3159,11 @@ app.post("/api/mensalidades/reajuste", wrap(async (req, res) => {
 
   let tabela = null;
   if (atualizarTabela) {
-    const plano1x = calcularReajuste(SETTINGS.valorPlano1x, { tipo, valor: n });
-    const plano2x = calcularReajuste(SETTINGS.valorPlano2x, { tipo, valor: n });
-    const d = { valorPlano1x: plano1x, valorPlano2x: plano2x };
+    const d = Object.fromEntries(FREQS_PLANO.map((f) =>
+      [`valorPlano${f}x`, calcularReajuste(SETTINGS[`valorPlano${f}x`], { tipo, valor: n })]));
     await prisma.settings.upsert({ where: { id: 1 }, update: d, create: { id: 1, ...d } });
     await loadSettings(); // sem isto, mensalidadeValorDe seguiria com o preço velho
-    tabela = { plano1x, plano2x };
+    tabela = Object.fromEntries(FREQS_PLANO.map((f) => [`plano${f}x`, d[`valorPlano${f}x`]]));
   }
 
   const ids = [...new Set((individuais || []).map(Number).filter(Boolean))];
@@ -3661,6 +3679,10 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
       vencimentoDia: client.billingDay || SETTINGS.vencimentoDia,
       valorPlano1x: SETTINGS.valorPlano1x,
       valorPlano2x: SETTINGS.valorPlano2x,
+      // 3x/4x não são oferecidos no portal, mas a aluna já matriculada neles
+      // pelo painel precisa ver o valor do plano dela ao montar a grade
+      valorPlano3x: SETTINGS.valorPlano3x,
+      valorPlano4x: SETTINGS.valorPlano4x,
       valorAvulsa: SETTINGS.valorAvulsa,
       duracaoAulaMin: SETTINGS.duracaoAulaMin,
       // taxa somada ao 1º pagamento da aluna nova (0 = desligada)
@@ -4067,9 +4089,11 @@ async function criarGradeInicial12Meses(client, slotsBase) {
 // do mês corrente — é o caminho da tela pública da aluna nova.
 async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, billingDay, mensalistaTipo, mensalidadePaga, exigirGrade = false, monthlyValue }) {
   const jaMensalista = client.plan === "mensalista" && !!client.weeklyFreq;
-  const freq = jaMensalista ? (Number(client.weeklyFreq) === 2 ? 2 : 1) : (Number(weeklyFreq) === 2 ? 2 : 1);
+  const freq = freqDoPlano(jaMensalista ? client.weeklyFreq : weeklyFreq);
   const tipo = mensalistaTipo === "escala" ? "escala" : "fixo";
   const tipoEfetivo = jaMensalista ? (client.mensalistaTipo === "escala" ? "escala" : "fixo") : tipo;
+  const erroEscala = erroEscalaSoAte2x(freq, tipoEfetivo);
+  if (erroEscala) throw erroEscala;
   const jaTemGrade = jaMensalista ? await prisma.booking.count({
     where: { clientName: client.name, date: { gte: todayISO() }, status: { not: "cancelada" }, paymentMethod: PGTO_PLANO },
   }) > 0 : false;
@@ -4215,11 +4239,13 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
    Devolve o antes/depois pronto para a tela dizer à Inêz o que aconteceu. */
 async function trocarPlanoMensalista(client, { weeklyFreq, mensalistaTipo, billingDay, monthlyValue }) {
   const freqAntiga = Number(client.weeklyFreq) || 1;
-  const freqNova = Number(weeklyFreq) === 2 ? 2 : 1;
+  const freqNova = freqDoPlano(weeklyFreq);
   const tipoAntigo = client.mensalistaTipo === "escala" ? "escala" : "fixo";
   const tipoNovo = mensalistaTipo === undefined
     ? tipoAntigo
     : (mensalistaTipo === "escala" ? "escala" : "fixo");
+  const erroEscala = erroEscalaSoAte2x(freqNova, tipoNovo);
+  if (erroEscala) throw erroEscala;
 
   const compAtual = competenciaAtual();
   const desde = somarComp(compAtual, 1);
@@ -4234,8 +4260,17 @@ async function trocarPlanoMensalista(client, { weeklyFreq, mensalistaTipo, billi
   const temValorIndividual = novoValorIndividual != null;
   let fixouMesCorrente = null;
   if (mudouFreq && !temValorIndividual) {
+    /* O mês corrente já tem valor combinado? Ele manda. Pode ser uma troca
+       anterior neste mesmo mês (4x→2x e depois 2x→3x: o mês continua no preço
+       de 4x, que era o plano de quando ele começou) ou um desconto que a Inêz
+       combinou. Sobrescrever com o preço do plano "antigo" apagaria os dois. */
+    const jaCombinado = await prisma.monthlyPrice.findUnique({
+      where: { clientId_competencia: { clientId: client.id, competencia: compAtual } },
+    });
     const valorAntigo = valorDoPlano(freqAntiga) || 0;
-    if (valorAntigo > 0) {
+    if (jaCombinado) {
+      fixouMesCorrente = jaCombinado.amountCents / 100;
+    } else if (valorAntigo > 0) {
       await prisma.monthlyPrice.upsert({
         where: { clientId_competencia: { clientId: client.id, competencia: compAtual } },
         update: { amountCents: Math.round(valorAntigo * 100), origem: "ajuste", motivo: `Plano trocado para ${freqNova}x — este mês mantém o valor do plano anterior` },
@@ -4251,7 +4286,12 @@ async function trocarPlanoMensalista(client, { weeklyFreq, mensalistaTipo, billi
       weeklyFreq: freqNova,
       mensalistaTipo: tipoNovo,
       ...(monthlyValue !== undefined ? { monthlyValue: novoValorIndividual } : {}),
-      ...(mudouFreq ? { weeklyFreqAnterior: freqAntiga, weeklyFreqDesde: desde } : {}),
+      /* Segunda troca no mesmo mês: o "de antes" continua sendo o plano com que
+         o mês começou, não o intermediário que durou alguns dias. */
+      ...(mudouFreq ? {
+        weeklyFreqAnterior: client.weeklyFreqDesde === desde && client.weeklyFreqAnterior ? client.weeklyFreqAnterior : freqAntiga,
+        weeklyFreqDesde: desde,
+      } : {}),
       ...(billingDay != null && billingDay !== ""
         ? { billingDay: Math.min(28, Math.max(1, parseInt(billingDay, 10) || 1)) }
         : {}),
@@ -6355,7 +6395,7 @@ app.post(
 
     if (isMensalista) {
       // Caso Mensalista / Matrícula
-      const valorPadrao = client.weeklyFreq === 2 ? (Number(SETTINGS.valorPlano2x) || 200) : (Number(SETTINGS.valorPlano1x) || 120);
+      const valorPadrao = Number(valorDoPlano(client.weeklyFreq)) || PRECOS_PADRAO[`valorPlano${freqDoPlano(client.weeklyFreq)}x`];
       if (valorFinal === null) valorFinal = valorPadrao;
 
       // Procura reserva de matrícula ou a mais recente
@@ -6803,7 +6843,7 @@ app.put(
     /* Tabela de preços — 0 é valor válido (ex.: mês de cortesia), por isso não
        usa ||. Em `taxaMatricula`, zero é mais que válido: é o botão de desligar
        a taxa, sem precisar de deploy. */
-    for (const k of ["valorPlano1x", "valorPlano2x", "valorAvulsa", "taxaMatricula"]) {
+    for (const k of ["valorPlano1x", "valorPlano2x", "valorPlano3x", "valorPlano4x", "valorAvulsa", "taxaMatricula"]) {
       if (b[k] !== undefined) { const n = Number(b[k]); data[k] = Number.isFinite(n) && n >= 0 ? n : SETTINGS[k]; }
     }
     if (b.duracaoAulaMin !== undefined) data.duracaoAulaMin = Math.min(600, Math.max(15, parseInt(b.duracaoAulaMin, 10) || SETTINGS.duracaoAulaMin));

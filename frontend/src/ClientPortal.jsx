@@ -759,13 +759,18 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
   const meta = data.meta || {};
   const gradeDoPlanoPago = data.client?.plan === "mensalista" && !!data.client?.weeklyFreq;
   const [freq, setFreq] = useState(gradeDoPlanoPago ? Number(data.client.weeklyFreq) : null);
-  const [slotsEscolhidos, setSlotsEscolhidos] = useState([]); // 1 ou 2 padrões semanais
+  const [slotsEscolhidos, setSlotsEscolhidos] = useState([]); // 1 a 4 padrões semanais
   const [resultado, setResultado] = useState(null);
   const t = todayISO();
 
+  /* A aluna só escolhe entre 1x e 2x aqui. 3x e 4x a Inêz matricula pelo
+     painel — mas essa aluna pode chegar aqui para montar a grade do plano que
+     já tem, e aí o plano dela precisa estar na lista. */
   const planos = [
     { freq: 1, valor: meta.valorPlano1x ?? 120, titulo: "1x por semana", detalhe: "4 aulas no mês" },
     { freq: 2, valor: meta.valorPlano2x ?? 200, titulo: "2x por semana", detalhe: "8 aulas no mês" },
+    ...(gradeDoPlanoPago && freq === 3 ? [{ freq: 3, valor: meta.valorPlano3x ?? 320, titulo: "3x por semana", detalhe: "12 aulas no mês" }] : []),
+    ...(gradeDoPlanoPago && freq === 4 ? [{ freq: 4, valor: meta.valorPlano4x ?? 400, titulo: "4x por semana", detalhe: "16 aulas no mês" }] : []),
   ];
   const byDay = {};
   (data.available || [])

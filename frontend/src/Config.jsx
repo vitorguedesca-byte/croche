@@ -221,6 +221,9 @@ export default function Config() {
   const [vencimentoDia] = useState(m.vencimentoDia || 10);
   const [plano1x, setPlano1x] = useState(m.valorPlano1x ?? 120);
   const [plano2x, setPlano2x] = useState(m.valorPlano2x ?? 200);
+  // 3x e 4x: só mensalista fixo, matriculada pelo painel
+  const [plano3x, setPlano3x] = useState(m.valorPlano3x ?? 320);
+  const [plano4x, setPlano4x] = useState(m.valorPlano4x ?? 400);
   const [avulsa, setAvulsa] = useState(m.valorAvulsa ?? 40);
   /* Taxa de matrícula: somada UMA vez à 1ª mensalidade da aluna nova (site e
      WhatsApp). Zerar aqui desliga a taxa — o 1º pagamento volta a ser só a
@@ -256,6 +259,8 @@ export default function Config() {
       vencimentoDia: Math.min(28, Math.max(1, parseInt(vencimentoDia, 10) || 10)),
       valorPlano1x: Number(plano1x) || 0,
       valorPlano2x: Number(plano2x) || 0,
+      valorPlano3x: Number(plano3x) || 0,
+      valorPlano4x: Number(plano4x) || 0,
       valorAvulsa: Number(avulsa) || 0,
       // `|| 0` é o certo aqui: zero DESLIGA a taxa, e é uma escolha válida
       taxaMatricula: Math.max(0, Number(taxaMatricula) || 0),
@@ -338,6 +343,13 @@ export default function Config() {
           <div className="field"><label>Plano 2x por semana (R$/mês)</label><input type="number" min="0" step="0.01" value={plano2x} onChange={(e) => setPlano2x(e.target.value)} /></div>
         </div>
         <div className="row2">
+          <div className="field"><label>Plano 3x por semana (R$/mês)</label><input type="number" min="0" step="0.01" value={plano3x} onChange={(e) => setPlano3x(e.target.value)} /></div>
+          <div className="field"><label>Plano 4x por semana (R$/mês)</label><input type="number" min="0" step="0.01" value={plano4x} onChange={(e) => setPlano4x(e.target.value)} /></div>
+        </div>
+        <div className="help" style={{ marginTop: "-.4rem", marginBottom: ".8rem" }}>
+          3x e 4x por semana são só para mensalista <b>fixo</b> e só são oferecidos aqui no painel — o site, o WhatsApp e o portal da aluna continuam com 1x e 2x.
+        </div>
+        <div className="row2">
           <div className="field"><label>Aula extra avulsa (R$)</label><input type="number" min="0" step="0.01" value={avulsa} onChange={(e) => setAvulsa(e.target.value)} /></div>
           <div className="field">
             <label>Taxa de matrícula (R$)</label>
@@ -366,7 +378,7 @@ export default function Config() {
             : null}
         </div>
         <div className="cfg-preview">
-          🏷️ 1x/semana <b>R$ {plano1x}</b> (4 aulas) · 2x/semana <b>R$ {plano2x}</b> (8 aulas) · extra <b>R$ {avulsa}</b> · aula de <b>{Math.floor(duracao / 60)}h{duracao % 60 ? String(duracao % 60).padStart(2, "0") : ""}</b>
+          🏷️ 1x/semana <b>R$ {plano1x}</b> (4 aulas) · 2x/semana <b>R$ {plano2x}</b> (8 aulas) · 3x/semana <b>R$ {plano3x}</b> (12 aulas) · 4x/semana <b>R$ {plano4x}</b> (16 aulas) · extra <b>R$ {avulsa}</b> · aula de <b>{Math.floor(duracao / 60)}h{duracao % 60 ? String(duracao % 60).padStart(2, "0") : ""}</b>
         </div>
         {Number(taxaMatricula) > 0 && (
           <div className="cfg-preview">

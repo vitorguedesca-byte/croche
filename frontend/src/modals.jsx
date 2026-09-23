@@ -16,6 +16,7 @@ import {
   tipoMensalista, TIPO_MENSALISTA_LABEL,
   validarCPF, formatarCPF,
   proximaCobranca, fraseProximaCobranca,
+  PLANOS_MENSALISTA, FREQ_MAX_ESCALA, valorPlanoMeta,
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
@@ -34,6 +35,21 @@ const TIPO_MENSALISTA_OPCOES = [
   { value: "fixo", label: "Fixo", hint: "dia e hora fixos — você monta a agenda dela", icon: "📌" },
   { value: "escala", label: "Escala", hint: "ela marca a própria aula, no dia da aula dela", icon: "🙋" },
 ];
+/* 3x e 4x por semana são só para mensalista fixo: a opção que não combina
+   com a outra escolha aparece travada, com o motivo no lugar da dica. */
+const tipoMensalistaOpcoes = (freq) => TIPO_MENSALISTA_OPCOES.map((o) =>
+  o.value === "escala" && Number(freq) > FREQ_MAX_ESCALA
+    ? { ...o, disabled: true, hint: `não existe escala de ${freq}x — só 1x ou 2x por semana` }
+    : o);
+const planoOpcoes = (meta, tipo, { value = (f) => f, label = (f) => `${f}x por semana` } = {}) =>
+  PLANOS_MENSALISTA.map((p) => ({
+    value: value(p.freq),
+    label: label(p.freq),
+    hint: p.soFixo && tipo === "escala" ? "só para mensalista fixo" : `${p.aulasMes} aulas por mês`,
+    icon: "📅",
+    meta: money(valorPlanoMeta(meta, p.freq)),
+    disabled: !!p.soFixo && tipo === "escala",
+  }));
 
 /* Resultado da criação de horários: as aulas duram 2h, então o servidor recusa
    turmas que se sobrepõem na mesma unidade — aqui a gente conta o que aconteceu. */
@@ -753,7 +769,7 @@ export function BaixarLeadModal({ client, onComplete }) {
   const isMensalista = client.plan === "mensalista" || client.matriculaStatus === "pendente" || (client.weeklyFreq && client.weeklyFreq > 0);
 
   const valorPadrao = isMensalista
-    ? (client.weeklyFreq === 2 ? (Number(data?.meta?.valorPlano2x) || 200) : (Number(data?.meta?.valorPlano1x) || 120))
+    ? (Number(valorPlanoMeta(data?.meta, client.weeklyFreq)) || valorPlanoMeta({}, client.weeklyFreq))
     : (bookings[0]?.value ? Number(bookings[0].value) : (Number(data?.meta?.valorAvulsa) || 40));
 
   const [value, setValue] = useState(valorPadrao);
@@ -1881,8 +1897,7 @@ export function ReajusteGeral() {
   const mensalistas = data.clients.filter((c) => c.plan === "mensalista" && c.status !== "cancelado");
   const individuais = mensalistas.filter((c) => c.monthlyValue != null).sort((a, b) => a.name.localeCompare(b.name));
   const naTabela = mensalistas.filter((c) => c.monthlyValue == null);
-  const p1 = data.meta?.valorPlano1x ?? 120;
-  const p2 = data.meta?.valorPlano2x ?? 200;
+  const tabelaPlanos = PLANOS_MENSALISTA.map((p) => ({ freq: p.freq, valor: valorPlanoMeta(data.meta, p.freq) }));
 
   const toggle = (id) => setMarcados((m) => (m.includes(id) ? m.filter((x) => x !== id) : [...m, id]));
   const todos = () => setMarcados(marcados.length === individuais.length ? [] : individuais.map((c) => c.id));
@@ -1893,7 +1908,7 @@ export function ReajusteGeral() {
 
     const linhas = [];
     if (atualizarTabela) {
-      linhas.push(`Tabela: 1x/semana ${money(p1)} → ${money(aplicar(p1))} · 2x/semana ${money(p2)} → ${money(aplicar(p2))}.`);
+      linhas.push(`Tabela: ${tabelaPlanos.map((p) => `${p.freq}x/semana ${money(p.valor)} → ${money(aplicar(p.valor))}`).join(" · ")}.`);
       linhas.push(`${naTabela.length} aluna(s) que pagam o preço de tabela passam a pagar o valor novo. Quem se matricular a partir de agora também.`);
     }
     if (marcados.length) linhas.push(`${marcados.length} aluna(s) com valor individual serão reajustadas.`);
@@ -1907,7 +1922,7 @@ export function ReajusteGeral() {
     setBusy(true);
     try {
       const r = await run(api.reajuste({ tipo, valor: n, atualizarTabela, individuais: marcados }));
-      toast(`Reajuste aplicado.${r.tabela ? ` Tabela: ${money(r.tabela.plano1x)} / ${money(r.tabela.plano2x)}.` : ""}`, "success");
+      toast(`Reajuste aplicado.${r.tabela ? ` Tabela: ${PLANOS_MENSALISTA.map((p) => money(r.tabela[`plano${p.freq}x`])).join(" / ")}.` : ""}`, "success");
       close();
     } finally { setBusy(false); }
   };
@@ -1958,7 +1973,9 @@ export function ReajusteGeral() {
             <b style={{ color: atualizarTabela ? "var(--green-deep)" : "var(--muted)" }}>Reajustar a tabela de preços</b>
             <div className="help" style={{ marginTop: ".2rem" }}>
               {valido
-                ? <>1x/semana <b>{money(p1)} → {money(aplicar(p1))}</b> · 2x/semana <b>{money(p2)} → {money(aplicar(p2))}</b>.
+                ? <>{tabelaPlanos.map((p, i) => (
+                    <span key={p.freq}>{i ? " · " : ""}{p.freq}x/semana <b>{money(p.valor)} → {money(aplicar(p.valor))}</b></span>
+                  ))}.
                     Atinge as {naTabela.length} aluna(s) sem valor próprio e todas as matrículas novas.</>
                 : "Define o valor de quem entrar depois e de quem hoje paga o preço de tabela."}
             </div>
@@ -2450,8 +2467,7 @@ export function ClientProfile({ client, initialTab }) {
 export function planoLabel(c, meta = {}) {
   if (c.plan !== "mensalista") return <span className="badge b-muted">Avulso</span>;
   const valor = c.monthlyValue != null ? c.monthlyValue
-    : c.weeklyFreq === 2 ? (meta.valorPlano2x ?? 200)
-    : c.weeklyFreq === 1 ? (meta.valorPlano1x ?? 120)
+    : PLANOS_MENSALISTA.some((p) => p.freq === c.weeklyFreq) ? valorPlanoMeta(meta, c.weeklyFreq)
     : (meta.mensalidadeValor ?? 0);
   const freq = c.weeklyFreq ? `${c.weeklyFreq}x por semana` : "plano antigo";
   const tipo = tipoMensalista(c);
@@ -2562,7 +2578,7 @@ export function EnrollForm({ client }) {
     // Sem regra de data no plano (sábado saiu em 30/08, 18h em 26/08), a 1ª aula
     // oficial pode cair em qualquer turma livre da grade.
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-  const valor = freq === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120);
+  const valor = valorPlanoMeta(meta, freq);
   const ehEscala = tipo === "escala";
 
   const salvar = async () => {
@@ -2603,10 +2619,7 @@ export function EnrollForm({ client }) {
         <Select
           value={freq}
           onChange={(v) => { const n = Number(v); setFreq(n); setSlotIds(Array(n).fill("")); }}
-          options={[
-            { value: 1, label: "1x por semana", hint: "4 aulas por mês", icon: "📅", meta: money(meta.valorPlano1x ?? 120) },
-            { value: 2, label: "2x por semana", hint: "8 aulas por mês", icon: "📅", meta: money(meta.valorPlano2x ?? 200) },
-          ]}
+          options={planoOpcoes(meta, tipo)}
         />
       </div>
       <div className="field">
@@ -2614,7 +2627,7 @@ export function EnrollForm({ client }) {
         <Select
           value={tipo}
           onChange={setTipo}
-          options={TIPO_MENSALISTA_OPCOES}
+          options={tipoMensalistaOpcoes(freq)}
         />
       </div>
       {ehEscala && (
@@ -3152,7 +3165,7 @@ function useClientForm(client, onDone) {
   const [firstClass, setFirstClass] = useState(client ? !!client.firstClass : true);
   const [status, setStatus] = useState(client?.status || "ativo");
   const [billingDay, setBillingDay] = useState(client?.billingDay != null ? String(client.billingDay) : "");
-  // Plano: "avulso" | "1" | "2" (mensalista 1x/2x por semana)
+  // Plano: "avulso" | "1" … "4" (mensalista 1x a 4x por semana; 3x/4x só fixo)
   const [plano, setPlano] = useState(client?.plan === "mensalista" ? String(client.weeklyFreq || 1) : "avulso");
   // Tipo de mensalista: "fixo" (agenda montada pela Inêz) | "escala" (ela marca)
   const [tipoMens, setTipoMens] = useState(client?.mensalistaTipo === "escala" ? "escala" : "fixo");
@@ -3172,7 +3185,9 @@ function useClientForm(client, onDone) {
     const mudouFreq = eraMensal && querMensal && Number(plano) !== (client.weeklyFreq || 1);
     const precisaMatricular = querMensal && (!client || !eraMensal || mudouFreq);
 
-    const valorDoPlano = (f) => (Number(f) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120));
+    if (querMensal && tipoMens === "escala" && Number(plano) > FREQ_MAX_ESCALA)
+      return toast(`O plano de ${plano}x por semana é só para mensalista fixo. Na escala, escolha 1x ou 2x.`, "error");
+    const valorDoPlano = (f) => valorPlanoMeta(meta, f);
     const valorIndivNum = querMensal && customMonthly === "individual" && String(monthlyValue).trim() !== ""
       ? Number(String(monthlyValue).replace(",", "."))
       : null;
@@ -3250,6 +3265,9 @@ function useClientForm(client, onDone) {
       const desde = compLabel(addComp(compAtual(), 1));
       const individual = valorIndivNum != null || client.monthlyValue != null;
       const valorIndivEfetivo = valorIndivNum != null ? valorIndivNum : client.monthlyValue;
+      // Valor já combinado para este mês (troca anterior, desconto) é o que fica
+      const combinadoMes = precoDaComp(data.precos, client.id, compAtual());
+      const valorMesAtual = combinadoMes ? combinadoMes.amountCents / 100 : vDe;
 
       const linhas = [
         `${client.name} sai do plano de ${de}x por semana e entra no de ${para}x.`,
@@ -3260,8 +3278,17 @@ function useClientForm(client, onDone) {
           : `• Mensalidade: ${money(vDe)} → ${money(vPara)} (${vPara > vDe ? "+" : "−"}${money(Math.abs(vPara - vDe))})`,
         `• Aulas por semana: ${de} → ${para}`,
         "",
+        /* A troca não mexe na agenda: a grade de 12 meses continua com os
+           horários que já tinha. Sem este aviso, "Aulas por semana: 4 → 2"
+           parece prometer que 2 horários somem sozinhos — e ela seguiria com 4. */
+        tipoMens === "escala"
+          ? "A agenda não muda: ela continua marcando as próprias aulas pelo portal."
+          : para > de
+            ? `A agenda NÃO ganha horário sozinha: marque na agenda o${para - de > 1 ? "s" : ""} ${para - de} horário${para - de > 1 ? "s" : ""} novo${para - de > 1 ? "s" : ""} da semana dela.`
+            : `A agenda NÃO perde horário sozinha: exclua da agenda o${de - para > 1 ? "s" : ""} ${de - para} horário${de - para > 1 ? "s" : ""} da semana que ela deixa de fazer.`,
+        "",
         `${compLabel(compAtual())} não muda: a mensalidade deste mês fica em ` +
-          `${individual ? money(valorIndivEfetivo) : money(vDe)}.`,
+          `${individual ? money(valorIndivEfetivo) : money(valorMesAtual)}.`,
       ];
       const ok = await confirmModal({
         title: "Trocar o plano de mensalista",
@@ -3389,8 +3416,7 @@ function ClientFormFields({ f }) {
             onChange={f.setPlano}
             options={[
               { value: "avulso", label: "Avulso", hint: "paga por aula, sem mensalidade", icon: "🧺" },
-              { value: "1", label: "Mensalista — 1x por semana", hint: "4 aulas por mês", icon: "📅", meta: money(meta.valorPlano1x ?? 120) },
-              { value: "2", label: "Mensalista — 2x por semana", hint: "8 aulas por mês", icon: "📅", meta: money(meta.valorPlano2x ?? 200) },
+              ...planoOpcoes(meta, f.tipoMens, { value: String, label: (n) => `Mensalista — ${n}x por semana` }),
             ]}
           />
           {f.plano !== "avulso" && client?.plan !== "mensalista" && (
@@ -3428,7 +3454,7 @@ function ClientFormFields({ f }) {
           <div className="row2" style={{ marginBottom: ".6rem" }}>
             <div className="field" style={{ margin: 0 }}>
               <label style={{ display: "block", marginBottom: ".3rem" }}>Regra / Tipo de mensalista</label>
-              <Select value={f.tipoMens} onChange={f.setTipoMens} options={TIPO_MENSALISTA_OPCOES} />
+              <Select value={f.tipoMens} onChange={f.setTipoMens} options={tipoMensalistaOpcoes(f.plano)} />
               <div className="help" style={{ marginTop: ".3rem" }}>
                 {f.tipoMens === "fixo" ? "Dia e horário fixos toda semana." : "Aluna agenda aulas pelo portal conforme as vagas."}
               </div>
@@ -3469,7 +3495,7 @@ function ClientFormFields({ f }) {
                   fontSize: ".85rem",
                 }}
               >
-                📋 Tabela ({money(Number(f.plano) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120))}/mês)
+                📋 Tabela ({money(valorPlanoMeta(meta, f.plano))}/mês)
               </button>
               <button
                 type="button"
@@ -3498,7 +3524,7 @@ function ClientFormFields({ f }) {
                   type="number"
                   step="0.01"
                   min="0"
-                  placeholder={String(Number(f.plano) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120))}
+                  placeholder={String(valorPlanoMeta(meta, f.plano))}
                   value={f.monthlyValue}
                   onChange={(e) => f.setMonthlyValue(e.target.value)}
                   style={{ width: "100%", fontWeight: 600 }}
@@ -3509,7 +3535,7 @@ function ClientFormFields({ f }) {
               </div>
             ) : (
               <div className="help">
-                A aluna pagará o valor vigente da tabela geral do curso ({money(Number(f.plano) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120))}/mês).
+                A aluna pagará o valor vigente da tabela geral do curso ({money(valorPlanoMeta(meta, f.plano))}/mês).
               </div>
             )}
           </div>

@@ -23,7 +23,7 @@ model Client {
   // ----- plano / cobrança -----
   plan         String  @default("avulso") @db.VarChar(20) // "avulso" | "mensalista"
   status       String  @default("ativo") @db.VarChar(20) // "ativo" | "cancelado" (rompeu com o curso)
-  weeklyFreq   Int?    // aulas por semana do mensalista: 1 (R$120) ou 2 (R$200); null = plano antigo
+  weeklyFreq   Int?    // aulas por semana do mensalista: 1, 2, 3 ou 4 (3x/4x só no fixo); null = plano antigo
   // Como a mensalista ocupa a agenda:
   //   "fixo"   → dia e hora fixos, agendados em lote pela Inêz
   //   "escala" → ela mesma marca, e só no dia em que tem aula
@@ -371,6 +371,8 @@ model Settings {
   // ----- tabela de preços -----
   valorPlano1x     Float  @default(120) // mensalidade de 1x por semana (4 aulas/mês)
   valorPlano2x     Float  @default(200) // mensalidade de 2x por semana (8 aulas/mês)
+  valorPlano3x     Float  @default(320) // mensalidade de 3x por semana (12 aulas/mês) — só mensalista fixo
+  valorPlano4x     Float  @default(400) // mensalidade de 4x por semana (16 aulas/mês) — só mensalista fixo
   valorAvulsa      Float  @default(40)  // aula extra avulsa
   duracaoAulaMin   Int    @default(120) // duração da aula em minutos
   /* Taxa de matrícula: cobrada UMA vez, junto da 1ª mensalidade da aluna nova.
