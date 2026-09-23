@@ -6,7 +6,7 @@ import { toast as toastErro, confirmModal } from "./toast.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
-import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, compPorExtenso } from "./helpers.js";
+import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, compPorExtenso, PLANOS_MENSALISTA, valorPlanoMeta, aulasSeChocam } from "./helpers.js";
 
 const CPF_KEY = "fqc_portal_cpf";
 // WhatsApp da escola: (31) 98496-6403 — sem o "55", que o waLink já acrescenta
@@ -763,15 +763,18 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
   const [resultado, setResultado] = useState(null);
   const t = todayISO();
 
-  /* A aluna só escolhe entre 1x e 2x aqui. 3x e 4x a Inêz matricula pelo
-     painel — mas essa aluna pode chegar aqui para montar a grade do plano que
-     já tem, e aí o plano dela precisa estar na lista. */
-  const planos = [
-    { freq: 1, valor: meta.valorPlano1x ?? 120, titulo: "1x por semana", detalhe: "4 aulas no mês" },
-    { freq: 2, valor: meta.valorPlano2x ?? 200, titulo: "2x por semana", detalhe: "8 aulas no mês" },
-    ...(gradeDoPlanoPago && freq === 3 ? [{ freq: 3, valor: meta.valorPlano3x ?? 320, titulo: "3x por semana", detalhe: "12 aulas no mês" }] : []),
-    ...(gradeDoPlanoPago && freq === 4 ? [{ freq: 4, valor: meta.valorPlano4x ?? 400, titulo: "4x por semana", detalhe: "16 aulas no mês" }] : []),
-  ];
+  /* 1x a 4x (3x e 4x desde 23/09/2026). A matrícula por aqui é sempre de
+     horário FIXO — a grade de 12 meses — então os quatro planos valem. */
+  const planos = PLANOS_MENSALISTA.map((p) => ({
+    freq: p.freq, valor: valorPlanoMeta(meta, p.freq), titulo: `${p.freq}x por semana`, detalhe: `${p.aulasMes} aulas no mês`,
+  }));
+  /* Cada horário escolhido vira um padrão semanal (dia da semana + hora). Dois
+     padrões no mesmo dia da semana que se cruzam dariam 12 meses de aulas
+     encavaladas — o servidor recusa, e a tela avisa já no toque. */
+  const diaDaSemana = (iso) => new Date(iso + "T00:00Z").getUTCDay();
+  const conflitoCom = (s, escolhidos) => escolhidos.find((x) =>
+    x.unit === s.unit && diaDaSemana(x.date) === diaDaSemana(s.date) &&
+    aulasSeChocam(x.time, s.time, meta.duracaoAulaMin));
   const byDay = {};
   (data.available || [])
     .filter((s) => s.date >= t)
@@ -870,11 +873,12 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
           <div className="pt-day-h">{fmtDateLong(d)}</div>
           {byDay[d].map((s) => (
             <button key={s.id} className={`pt-slot ${slotsEscolhidos.some((x) => x.id === s.id) ? "on" : ""}`} onClick={() => {
-              setSlotsEscolhidos((atuais) => {
-                if (atuais.some((x) => x.id === s.id)) return atuais.filter((x) => x.id !== s.id);
-                if (atuais.length >= freq) return [...atuais.slice(1), s];
-                return [...atuais, s];
-              });
+              if (slotsEscolhidos.some((x) => x.id === s.id)) return setSlotsEscolhidos((atuais) => atuais.filter((x) => x.id !== s.id));
+              // ao trocar (plano cheio), o mais antigo sai — ele não conta no conflito
+              const base = slotsEscolhidos.length >= freq ? slotsEscolhidos.slice(1) : slotsEscolhidos;
+              const choque = conflitoCom(s, base);
+              if (choque) return flash(`Esse horário cruza com o de ${new Date(choque.date + "T00:00").toLocaleDateString("pt-BR", { weekday: "long" })} às ${choque.time}, que você já escolheu. Escolha outro dia ou horário.`);
+              setSlotsEscolhidos([...base, s]);
             }}>
               <div><b>{faixaHorario(s.time, meta.duracaoAulaMin)}</b><span> · {s.unit}</span></div>
               <span className="pt-vagas">{s.free} vaga{s.free === 1 ? "" : "s"}</span>

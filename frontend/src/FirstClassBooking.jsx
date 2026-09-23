@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "./api.js";
-import { todayISO, addDays, fmtDate, fmtDateLong, money, capitalize, fimDaAula, validarCPF, formatarCPF, waLink, mesmaSemana } from "./helpers.js";
+import { todayISO, addDays, fmtDate, fmtDateLong, money, capitalize, fimDaAula, validarCPF, formatarCPF, waLink, mesmaSemana, aulasSeChocam, PLANOS_MENSALISTA, FREQ_MAX_ESCALA, valorPlanoMeta } from "./helpers.js";
 
 const DOW = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
 
@@ -83,7 +83,7 @@ function PtAgenda({ available, value, onPick }) {
    • ESCALA — ela escolhe a aula durante a semana, marcando a próxima no dia da
               aula dela.
 
-   Em ambos: de segunda a sexta, até as 18h. */
+   3x e 4x por semana só existem no fixo (23/09/2026). */
 function EscolhaDePlano({
   modalidade,
   setModalidade,
@@ -91,8 +91,7 @@ function EscolhaDePlano({
   setTipo,
   onModalidadeChange,
   valorAvulsa,
-  valor1x,
-  valor2x,
+  valorDoPlano,
   taxa = 0,
 }) {
   const Opcao = ({ on, onClick, titulo, linhas, preco, alerta }) => (
@@ -134,23 +133,25 @@ function EscolhaDePlano({
         alerta="OBS: não devolveremos o valor da aula avulsa em caso de falta."
       />
 
-      {/* 2. MENSAL 1X */}
-      <Opcao
-        on={modalidade === "mensal1"}
-        onClick={() => { setModalidade("mensal1"); onModalidadeChange?.("mensal1"); }}
-        titulo="📅 MENSAL 1X POR SEMANA"
-        linhas={taxa > 0 ? `4 aulas por mês · 1º pagamento: ${money(valor1x + taxa)}` : "4 aulas por mês"}
-        preco={`${money(valor1x)}/mês`}
-      />
-
-      {/* 3. MENSAL 2X */}
-      <Opcao
-        on={modalidade === "mensal2"}
-        onClick={() => { setModalidade("mensal2"); onModalidadeChange?.("mensal2"); }}
-        titulo="📅 MENSAL 2X POR SEMANA"
-        linhas={taxa > 0 ? `8 aulas por mês · 1º pagamento: ${money(valor2x + taxa)}` : "8 aulas por mês"}
-        preco={`${money(valor2x)}/mês`}
-      />
+      {/* 2. MENSAIS — 1x a 4x (3x e 4x desde 23/09/2026, só no fixo) */}
+      {PLANOS_MENSALISTA.map((p) => {
+        const v = valorDoPlano(p.freq);
+        return (
+          <Opcao
+            key={p.freq}
+            on={modalidade === `mensal${p.freq}`}
+            onClick={() => {
+              setModalidade(`mensal${p.freq}`);
+              // escala só existe em 1x e 2x: quem escolhe 3x/4x é fixo
+              if (p.freq > FREQ_MAX_ESCALA) setTipo("fixo");
+              onModalidadeChange?.(`mensal${p.freq}`);
+            }}
+            titulo={`📅 MENSAL ${p.freq}X POR SEMANA`}
+            linhas={taxa > 0 ? `${p.aulasMes} aulas por mês · 1º pagamento: ${money(v + taxa)}` : `${p.aulasMes} aulas por mês`}
+            preco={`${money(v)}/mês`}
+          />
+        );
+      })}
 
       {modalidade !== "avulso" && (
         <div style={{ marginTop: "1.1rem", padding: ".9rem", background: "rgba(28,94,51,.03)", border: "1px solid var(--line)", borderRadius: 10 }}>
@@ -160,16 +161,23 @@ function EscolhaDePlano({
             titulo="Fixo"
             linhas="Você tem sempre o mesmo dia e horário na semana, já reservados para você. É só chegar."
           />
-          <Opcao
-            on={tipo === "escala"} onClick={() => setTipo("escala")}
-            titulo="Escala"
-            linhas="Você escolhe a aula durante a semana, marcando a próxima no dia da sua aula. Bom para quem tem a semana variável."
-          />
+          {Number(modalidade.replace("mensal", "")) > FREQ_MAX_ESCALA ? (
+            <div style={{ padding: ".7rem 1rem", marginBottom: ".55rem", borderRadius: 12, border: "2px dashed var(--line)", color: "var(--muted)", fontSize: ".9rem" }}>
+              <b>Escala</b> — disponível só nos planos de 1x e 2x por semana. No plano de {modalidade.replace("mensal", "")}x os seus horários ficam fixos.
+            </div>
+          ) : (
+            <Opcao
+              on={tipo === "escala"} onClick={() => setTipo("escala")}
+              titulo="Escala"
+              linhas="Você escolhe a aula durante a semana, marcando a próxima no dia da sua aula. Bom para quem tem a semana variável."
+            />
+          )}
+          {/* Aqui dizia "de segunda a sexta, até as 18h" — as duas regras saíram
+              do plano (18h em 26/08, sábado em 30/08/2026). */}
           <div className="pt-hint" style={{ marginTop: ".3rem" }}>
-            Nos planos mensais as aulas são de segunda a sexta, até as 18h.
             {taxa > 0
-              ? <> Você paga a <b>primeira mensalidade agora</b>, junto da <b>taxa de matrícula de {money(taxa)}</b> (uma vez só). A próxima mensalidade vence <b>no mês que vem</b>, no mesmo dia — e daí em diante é só a mensalidade.</>
-              : <> Você paga a <b>primeira mensalidade agora</b> e a próxima só vence <b>no mês que vem</b>, no mesmo dia — e todo mês nesse dia.</>}
+              ? <>Você paga a <b>primeira mensalidade agora</b>, junto da <b>taxa de matrícula de {money(taxa)}</b> (uma vez só). A próxima mensalidade vence <b>no mês que vem</b>, no mesmo dia — e daí em diante é só a mensalidade.</>
+              : <>Você paga a <b>primeira mensalidade agora</b> e a próxima só vence <b>no mês que vem</b>, no mesmo dia — e todo mês nesse dia.</>}
           </div>
         </div>
       )}
@@ -183,48 +191,55 @@ function EscolhaDePlano({
   );
 }
 
-/* Seleção da 2ª aula na mesma semana para o plano 2x por semana */
-function PtAgendaSemana({ available, firstSlot, value, onPick }) {
-  if (!firstSlot) return null;
-  const slotsDaSemana = available.filter(
-    (s) => s.unit === firstSlot.unit && mesmaSemana(s.date, firstSlot.date) && s.id !== firstSlot.id
-  );
+/* Os demais horários da semana, no plano 2x a 4x: todos na MESMA semana da 1ª
+   aula e na mesma unidade. Some da lista o que já foi escolhido e o que se
+   sobrepõe, no mesmo dia, a uma aula dela (manhã e tarde no mesmo dia vale).
+   É com esses horários que a grade de 12 meses é montada quando o Pix cai. */
+function horariosDaSemanaPossiveis(available, firstSlot, escolhidos, dur) {
+  const ja = [firstSlot, ...escolhidos];
+  return available.filter((s) =>
+    s.unit === firstSlot.unit &&
+    mesmaSemana(s.date, firstSlot.date) &&
+    !ja.some((j) => j.id === s.id) &&
+    !ja.some((j) => j.date === s.date && aulasSeChocam(j.time, s.time, dur)));
+}
+
+function PtAgendaSemana({ available, firstSlot, value = [], onChange, quantos, dur }) {
+  if (!firstSlot || quantos < 1) return null;
+  const possiveis = horariosDaSemanaPossiveis(available, firstSlot, value, dur);
+  const falta = quantos - value.length;
+  const proxima = value.length + 2; // posição da aula que ela escolhe agora
 
   const byDay = {};
-  slotsDaSemana.forEach((s) => {
-    (byDay[s.date] = byDay[s.date] || []).push(s);
-  });
+  possiveis.forEach((s) => { (byDay[s.date] = byDay[s.date] || []).push(s); });
   Object.values(byDay).forEach((arr) => arr.sort((a, b) => a.time.localeCompare(b.time)));
   const days = Object.keys(byDay).sort();
-
-  if (!days.length) {
-    return (
-      <div style={{ marginTop: "1rem", padding: ".85rem 1rem", borderRadius: 10, background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba", fontSize: ".9rem", lineHeight: 1.45 }}>
-        ⚠️ Não há outros horários disponíveis com vagas nesta mesma semana na unidade {firstSlot.unit}. Você poderá marcar o 2º horário pela área do aluno ou combinar pelo WhatsApp da escola.
-      </div>
-    );
-  }
 
   return (
     <div style={{ marginTop: "1.2rem", padding: "1.1rem", background: "rgba(28,94,51,.04)", border: "1.5px solid var(--green-mid, #2d7a46)", borderRadius: 12 }}>
       <div style={{ fontWeight: 700, color: "var(--green-deep, #1c5e33)", marginBottom: ".35rem", display: "flex", alignItems: "center", gap: ".4rem", fontSize: "1rem" }}>
-        <span>🗓️</span> Escolha sua 2ª aula na mesma semana
+        <span>🗓️</span> {quantos === 1 ? "Escolha sua 2ª aula na mesma semana" : `Escolha as outras ${quantos} aulas da semana`}
       </div>
       <div style={{ fontSize: ".88rem", color: "var(--muted)", marginBottom: ".85rem" }}>
-        Para o plano de <b>2x por semana</b>, selecione o segundo horário na mesma semana da primeira aula ({fmtDate(firstSlot.date)}):
+        Para o plano de <b>{quantos + 1}x por semana</b>, escolha {quantos === 1 ? "o segundo horário" : `mais ${quantos} horários`} na mesma semana da primeira aula ({fmtDate(firstSlot.date)}).
+        {" "}Eles se repetem toda semana.
       </div>
-      {value ? (
-        <div style={{ padding: ".7rem .9rem", background: "#fff", borderRadius: 8, border: "1.5px solid var(--green-deep, #1c5e33)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: ".5rem" }}>
+
+      {value.map((v, i) => (
+        <div key={v.id} style={{ padding: ".6rem .9rem", marginBottom: ".45rem", background: "#fff", borderRadius: 8, border: "1.5px solid var(--green-deep, #1c5e33)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: ".5rem" }}>
           <div>
-            <span style={{ color: "var(--green-deep)", fontWeight: 700 }}>✓ 2ª aula escolhida:</span>{" "}
-            <b>{capitalize(fmtDateLong(value.date))} às {value.time}</b>
+            <span style={{ color: "var(--green-deep)", fontWeight: 700 }}>✓ {i + 2}ª aula:</span>{" "}
+            <b>{capitalize(fmtDateLong(v.date))} às {v.time}</b>
           </div>
-          <button type="button" className="pt-link" style={{ fontSize: ".85rem", margin: 0 }} onClick={() => onPick(null)}>
+          <button type="button" className="pt-link" style={{ fontSize: ".85rem", margin: 0 }} onClick={() => onChange(value.filter((x) => x.id !== v.id))}>
             Trocar
           </button>
         </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: ".75rem" }}>
+      ))}
+
+      {falta > 0 && (days.length ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: ".75rem", marginTop: value.length ? ".6rem" : 0 }}>
+          <div style={{ fontSize: ".9rem", fontWeight: 600 }}>Escolha a sua {proxima}ª aula:</div>
           {days.map((d) => (
             <div key={d} style={{ background: "#fff", padding: ".6rem .85rem", borderRadius: 8, border: "1px solid var(--line)" }}>
               <div style={{ fontSize: ".88rem", fontWeight: 600, color: "var(--terracota)", marginBottom: ".4rem" }}>
@@ -235,8 +250,8 @@ function PtAgendaSemana({ available, firstSlot, value, onPick }) {
                   <button
                     key={s.id}
                     type="button"
-                    className={`pt-time ${value?.id === s.id ? "on" : ""}`}
-                    onClick={() => onPick(s)}
+                    className="pt-time"
+                    onClick={() => onChange([...value, s])}
                     style={{ padding: ".4rem .85rem", fontSize: ".92rem" }}
                   >
                     {s.time}
@@ -246,7 +261,12 @@ function PtAgendaSemana({ available, firstSlot, value, onPick }) {
             </div>
           ))}
         </div>
-      )}
+      ) : (
+        <div style={{ marginTop: ".4rem", padding: ".85rem 1rem", borderRadius: 10, background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba", fontSize: ".9rem", lineHeight: 1.45 }}>
+          ⚠️ Não há mais horários com vaga nesta mesma semana na unidade {firstSlot.unit}.
+          {" "}Você pode seguir com {value.length ? "os horários escolhidos" : "a primeira aula"}: a escola combina com você {falta > 1 ? `os outros ${falta} horários` : "o horário que falta"} pelo WhatsApp.
+        </div>
+      ))}
     </div>
   );
 }
@@ -261,19 +281,19 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const [step, setStep] = useState("unit"); // unit | cal1 | pay | done
   const [unit, setUnit] = useState(null);
   const [slot, setSlot] = useState(null); // horário da primeira aula
-  const [slot2, setSlot2] = useState(null); // 2º horário da semana quando plano 2x
+  const [extras, setExtras] = useState([]); // demais horários da semana, no plano 2x a 4x
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [cpf, setCpf] = useState("");
   const [email, setEmail] = useState("");
   const [birthday, setBirthday] = useState("");
-  /* Modalidade escolhida: "avulso" | "mensal1" | "mensal2".
+  /* Modalidade escolhida: "avulso" | "mensal1" … "mensal4".
      Para mensalista: tipo (fixo/escala). */
   const [modalidade, setModalidade] = useState("mensal1");
   const [tipo, setTipo] = useState("escala");
   const isAvulso = modalidade === "avulso";
-  const freq = modalidade === "mensal2" ? 2 : 1;
+  const freq = isAvulso ? 1 : (Number(modalidade.replace("mensal", "")) || 1);
 
   const [booking, setBooking] = useState(null);
   const [inscricao, setInscricao] = useState(null); // { valorMensal, primeiroVencimento }
@@ -282,7 +302,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const [toast, setToast] = useState("");
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 3800); };
 
-  const valorPlano = (f) => (Number(f) === 2 ? (meta.valorPlano2x ?? 200) : (meta.valorPlano1x ?? 120));
+  const valorPlano = (f) => valorPlanoMeta(meta, f);
   const valorAvulsa = meta.valorAvulsa ?? 40;
   const mensalidade = isAvulso ? valorAvulsa : valorPlano(freq);
   const taxa = isAvulso ? 0 : Math.max(0, Number(meta.taxaMatricula) || 0);
@@ -306,15 +326,21 @@ export default function FirstClassBooking({ onBack, fromSite }) {
     if (!/\S+@\S+\.\S+/.test(email.trim())) return flash("Informe um email válido.");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(birthday)) return flash("Informe a sua data de nascimento.");
     if (birthday >= todayISO()) return flash("A data de nascimento precisa ser no passado.");
-    if (modalidade === "mensal2" && !slot2) {
-      return flash("Por favor, selecione a 2ª aula na mesma semana para o plano 2x por semana.");
+    if (!isAvulso && tipo === "escala" && freq > FREQ_MAX_ESCALA)
+      return flash(`O plano de ${freq}x por semana é só com horário fixo.`);
+    /* Faltou escolher horário da semana: só deixa seguir se a semana não tem
+       mais nenhum com vaga — aí a escola combina com ela (e a ficha avisa). */
+    if (!isAvulso && extras.length < freq - 1 &&
+        horariosDaSemanaPossiveis(available, slot, extras, meta.duracaoAulaMin).length) {
+      const falta = freq - 1 - extras.length;
+      return flash(`Escolha ${falta > 1 ? `mais ${falta} horários` : "mais 1 horário"} na mesma semana para o plano de ${freq}x por semana.`);
     }
     setBusy(true);
     try {
       const b = booking || await api.createBooking({
         clientName: name.trim(), phone: phone.trim(), cpf: cpf.trim(), email: email.trim(), birthday,
         unit: slot.unit, slotId: slot.id,
-        secondSlotId: modalidade === "mensal2" ? (slot2?.id || null) : null,
+        extraSlotIds: isAvulso ? [] : extras.slice(0, freq - 1).map((s) => s.id),
         firstClass: true,
         plan: isAvulso ? "avulso" : "mensalista",
         modalidade: isAvulso ? "avulso" : "mensal",
@@ -386,7 +412,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   }, [step, pix, booking?.id]);
 
   const restart = () => {
-    setStep("unit"); setUnit(null); setSlot(null); setSlot2(null);
+    setStep("unit"); setUnit(null); setSlot(null); setExtras([]);
     setName(""); setPhone(""); setCpf(""); setEmail(""); setBirthday("");
     setModalidade("mensal1"); setTipo("escala"); setBooking(null); setInscricao(null); setPix(null);
     loadAvail();
@@ -414,7 +440,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
             <h2 className="pt-h2" style={{ marginTop: 0 }}>Escolha a unidade</h2>
             <div className="pt-unit-pick">
               {meta.units.map((u) => (
-                <button key={u} className="pt-unit-card" onClick={() => { setUnit(u); setSlot(null); setSlot2(null); loadAvail(u); setStep("cal1"); }}>
+                <button key={u} className="pt-unit-card" onClick={() => { setUnit(u); setSlot(null); setExtras([]); loadAvail(u); setStep("cal1"); }}>
                   <div className="ic">📍</div><b>{u}</b><span>Aulas presenciais</span>
                 </button>
               ))}
@@ -425,24 +451,24 @@ export default function FirstClassBooking({ onBack, fromSite }) {
         {/* 2 · HORÁRIO (calendário) */}
         {step === "cal1" && (
           <div className="pt-card">
-            <button className="pt-link" onClick={() => { setStep("unit"); setUnit(null); setSlot2(null); }}>← Trocar unidade ({unit})</button>
+            <button className="pt-link" onClick={() => { setStep("unit"); setUnit(null); setExtras([]); }}>← Trocar unidade ({unit})</button>
             <h2 className="pt-h2">Escolha o dia e o horário</h2>
             {loading ? <div className="pt-cal-empty">Carregando horários…</div>
-              : <PtAgenda available={available} value={slot} onPick={(s) => { setSlot(s); setSlot2(null); setStep("pay"); }} />}
+              : <PtAgenda available={available} value={slot} onPick={(s) => { setSlot(s); setExtras([]); setStep("pay"); }} />}
           </div>
         )}
 
         {/* 3 · PAGAMENTO (Pix) */}
         {step === "pay" && slot && (
           <div className="pt-card">
-            <button className="pt-link" onClick={() => { setStep("cal1"); setSlot2(null); }}>← Trocar horário</button>
+            <button className="pt-link" onClick={() => { setStep("cal1"); setExtras([]); }}>← Trocar horário</button>
             <div className="pt-fc-resume">
               <div>📍 <b>{slot.unit}</b> · 1ª aula: {capitalize(fmtDateLong(slot.date))} · <b>{slot.time}</b></div>
-              {modalidade === "mensal2" && slot2 && (
-                <div style={{ marginTop: ".35rem", color: "var(--green-deep, #1c5e33)", fontWeight: 600 }}>
-                  ➕ 2ª aula: {capitalize(fmtDateLong(slot2.date))} · <b>{slot2.time}</b>
+              {!isAvulso && extras.map((x, i) => (
+                <div key={x.id} style={{ marginTop: ".35rem", color: "var(--green-deep, #1c5e33)", fontWeight: 600 }}>
+                  ➕ {i + 2}ª aula: {capitalize(fmtDateLong(x.date))} · <b>{x.time}</b>
                 </div>
-              )}
+              ))}
             </div>
 
             <div className="pt-matricula" style={{ lineHeight: 1.55 }}>
@@ -451,8 +477,11 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                   Prontinho{name ? `, ${name.split(" ")[0]}` : ""}! 💚 Agora escolha a sua mensalidade:
                 </p>
                 <p style={{ margin: ".35rem 0" }}>
-                  1️⃣ <b>1x por semana</b> — {money(meta.valorPlano1x ?? 120)}/mês (1º pagamento: {money((meta.valorPlano1x ?? 120) + (Number(meta.taxaMatricula) || 20))})<br />
-                  2️⃣ <b>2x por semana</b> — {money(meta.valorPlano2x ?? 200)}/mês (1º pagamento: {money((meta.valorPlano2x ?? 200) + (Number(meta.taxaMatricula) || 20))})
+                  {PLANOS_MENSALISTA.map((p) => (
+                    <span key={p.freq}>
+                      {["", "1️⃣", "2️⃣", "3️⃣", "4️⃣"][p.freq]} <b>{p.freq}x por semana</b> — {money(valorPlano(p.freq))}/mês (1º pagamento: {money(valorPlano(p.freq) + (Number(meta.taxaMatricula) || 20))})<br />
+                    </span>
+                  ))}
                 </p>
                 <p style={{ margin: ".35rem 0" }}>
                   No primeiro pagamento entra a taxa de matrícula de {money(Number(meta.taxaMatricula) || 20)}, cobrada uma vez só. A partir do mês seguinte é só a mensalidade.
@@ -477,7 +506,9 @@ export default function FirstClassBooking({ onBack, fromSite }) {
               <div className="pt-atencao">
                 <span className="t">⚠️ Atenção</span>
                 Se você faltar, essa aula <b>não é remarcada</b> automaticamente — mas a sua mensalidade continua valendo,
-                e as <b>próximas aulas</b> você marca normalmente pela área do aluno. Até lá! 💛
+                {tipo === "fixo"
+                  ? <> e as <b>próximas aulas</b> já ficam reservadas para você, toda semana, nos mesmos horários. Até lá! 💛</>
+                  : <> e as <b>próximas aulas</b> você marca normalmente pela área do aluno. Até lá! 💛</>}
               </div>
             )}
 
@@ -496,19 +527,21 @@ export default function FirstClassBooking({ onBack, fromSite }) {
               <EscolhaDePlano
                 modalidade={modalidade} setModalidade={setModalidade}
                 tipo={tipo} setTipo={setTipo}
-                onModalidadeChange={(m) => { if (m !== "mensal2") setSlot2(null); }}
+                // trocar de plano muda quantos horários ela escolhe: recomeça a escolha
+                onModalidadeChange={() => setExtras([])}
                 valorAvulsa={valorAvulsa}
-                valor1x={meta.valorPlano1x ?? 120}
-                valor2x={meta.valorPlano2x ?? 200}
+                valorDoPlano={valorPlano}
                 taxa={taxa}
               />
 
-              {modalidade === "mensal2" && (
+              {!isAvulso && freq > 1 && (
                 <PtAgendaSemana
                   available={available}
                   firstSlot={slot}
-                  value={slot2}
-                  onPick={setSlot2}
+                  value={extras}
+                  onChange={setExtras}
+                  quantos={freq - 1}
+                  dur={meta.duracaoAulaMin}
                 />
               )}
 
@@ -583,11 +616,11 @@ export default function FirstClassBooking({ onBack, fromSite }) {
               <div style={{ marginTop: ".25rem" }}>
                 🗓 <b>{isAvulso ? "Aula avulsa:" : "1ª aula:"}</b> {capitalize(fmtDateLong(slot.date))} às <b>{slot.time}{meta.duracaoAulaMin ? ` às ${fimDaAula(slot.time, meta.duracaoAulaMin)}` : ""}</b>
               </div>
-              {slot2 && (
-                <div style={{ marginTop: ".25rem", color: "var(--green-deep, #1c5e33)" }}>
-                  🗓 <b>2ª aula:</b> {capitalize(fmtDateLong(slot2.date))} às <b>{slot2.time}{meta.duracaoAulaMin ? ` às ${fimDaAula(slot2.time, meta.duracaoAulaMin)}` : ""}</b>
+              {!isAvulso && extras.map((x, i) => (
+                <div key={x.id} style={{ marginTop: ".25rem", color: "var(--green-deep, #1c5e33)" }}>
+                  🗓 <b>{i + 2}ª aula:</b> {capitalize(fmtDateLong(x.date))} às <b>{x.time}{meta.duracaoAulaMin ? ` às ${fimDaAula(x.time, meta.duracaoAulaMin)}` : ""}</b>
                 </div>
-              )}
+              ))}
             </div>
             <p className="pt-hint">{isAvulso ? "Sua vaga para a aula avulsa está garantida! 💚" : "Sua vaga está garantida e sua matrícula confirmada! 💚"}</p>
 
@@ -651,10 +684,17 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 {inscricao?.primeiroVencimento
                   ? <p>🗓 A próxima vence em <b>{fmtDate(inscricao.primeiroVencimento)}</b>, e todo mês nesse mesmo dia.</p>
                   : <p>🗓 A próxima vence no mês que vem, no mesmo dia de hoje — e todo mês nesse dia.</p>}
-                <p>📅 As próximas aulas você marca pela <b>área do aluno</b>, entrando com o seu CPF.</p>
+                {/* Fixo: a grade de 12 meses é montada quando o Pix cai — não há o
+                    que marcar. Escala: ela marca cada aula pelo portal. */}
+                {tipo === "fixo"
+                  ? <p>📅 As próximas aulas <b>já estão reservadas</b> para você, toda semana, nos mesmos horários. Você acompanha tudo pela <b>área do aluno</b>, entrando com o seu CPF.</p>
+                  : <p>📅 As próximas aulas você marca pela <b>área do aluno</b>, entrando com o seu CPF.</p>}
+                {/* A regra (Vitor, 01/09/2026): desistindo depois da 1ª aula, a
+                    MENSALIDADE volta inteira; a taxa de matrícula não. O texto
+                    antigo dizia o contrário do topo desta mesma página. */}
                 {taxa > 0
-                  ? <p>💬 Se preferir não seguir, é só avisar: devolvemos a taxa de matrícula de {money(taxa)} e cancelamos as próximas cobranças. A mensalidade já paga não é devolvida.</p>
-                  : <p>💬 Se preferir não seguir, é só avisar: cancelamos as próximas cobranças. A mensalidade já paga não é devolvida.</p>}
+                  ? <p>💬 Se decidir não continuar depois da primeira aula, é só avisar: devolvemos a mensalidade de {money(inscricao?.valorMensal ?? mensalidade)} e cancelamos as próximas cobranças. Só a taxa de matrícula ({money(taxa)}) não é devolvida.</p>
+                  : <p>💬 Se decidir não continuar depois da primeira aula, é só avisar: devolvemos a mensalidade e cancelamos as próximas cobranças.</p>}
               </>)}
             </div>
             <button className="pt-link" onClick={restart}>Marcar outra aula</button>

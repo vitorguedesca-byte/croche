@@ -55,6 +55,13 @@ export const hhmm = (t) => {
   return m ? `${m[1].padStart(2, "0")}:${m[2]}` : "";
 };
 // Fim da aula a partir do início + duração em minutos (padrão: 2h)
+/* Duas aulas no mesmo dia se sobrepõem? ESPELHO de haChoque no server — a tela
+   esconde a opção, mas quem recusa de verdade é o backend. */
+export function aulasSeChocam(timeA, timeB, dur = 120) {
+  const min = (t) => { const [h, m] = String(t).slice(0, 5).split(":").map(Number); return h * 60 + m; };
+  const a = min(timeA), b = min(timeB), d = Number(dur) || 120;
+  return a < b + d && b < a + d;
+}
 export function fimDaAula(time, dur = 120) {
   const ini = hhmm(time);
   if (!ini) return "";

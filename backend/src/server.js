@@ -1759,6 +1759,10 @@ app.get(
         pixName: SETTINGS.pixName,
         valorPlano1x: SETTINGS.valorPlano1x,
         valorPlano2x: SETTINGS.valorPlano2x,
+        valorPlano3x: SETTINGS.valorPlano3x,
+        valorPlano4x: SETTINGS.valorPlano4x,
+        // a tela tira da grade da semana os horários que se sobrepõem
+        duracaoAulaMin: SETTINGS.duracaoAulaMin,
         // taxa somada ao 1º pagamento da aluna nova (0 = desligada)
         taxaMatricula: SETTINGS.taxaMatricula,
       },
@@ -1894,8 +1898,13 @@ app.post(
          avulsa, sem taxa de matrícula e sem gerar grade de 52 semanas. */
       const isAvulso = b.plan === "avulso" || b.modalidade === "avulso" || b.weeklyFreq === "avulso";
       const ehMatricula = !isAvulso && !!b.firstClass && i === 0;
-      const freqEscolhida = Number(b.weeklyFreq) === 2 ? 2 : 1;
+      const freqEscolhida = freqDoPlano(b.weeklyFreq);
       const taxa = ehMatricula ? taxaMatriculaAtual() : 0;
+      // 3x e 4x só no fixo — recusa antes de segurar vaga e emitir cobrança
+      if (ehMatricula) {
+        const erroEscala = erroEscalaSoAte2x(freqEscolhida, b.mensalistaTipo === "fixo" ? "fixo" : "escala");
+        if (erroEscala) return res.status(400).json({ error: erroEscala.message });
+      }
 
       /* Regra 6: Vagas liberadas por falta/cancelamento só ficam livres para reposição,
          aula extra e escala. Alunas novas (1ª aula) não podem ocupar vaga decorrente
@@ -1985,7 +1994,7 @@ app.post(
            ela só vira mensalista/aluna ativa de fato quando a 1ª mensalidade é paga. Quem faz
            essa virada é registrarMatriculaPaga(), que roda tanto no "já paguei"
            quanto no webhook do Sicredi. */
-        const freq = Number(b.weeklyFreq) === 2 ? 2 : Number(b.weeklyFreq) === 1 ? 1 : null;
+        const freq = FREQS_PLANO.includes(Number(b.weeklyFreq)) ? Number(b.weeklyFreq) : null;
         const tipoEntrada = b.mensalistaTipo === "fixo" ? "fixo" : "escala";
         await prisma.client.update({
           where: { id: client.id },
@@ -1997,32 +2006,12 @@ app.post(
           },
         });
 
-        // Matrícula 2x por semana: se enviou o 2º horário da mesma semana (secondSlotId ou slot2Id)
-        const slot2Id = Number(b.secondSlotId || b.slot2Id);
-        if (freq === 2 && slot2Id && slot2Id !== slot.id) {
-          const slot2 = await prisma.slot.findUnique({ where: { id: slot2Id } });
-          if (slot2 && mesmaSemana(slot2.date, slot.date) && !feriadoNoDia(slot2.date, slot2.unit)) {
-            const occ2 = await occupancy(slot2.id);
-            if (occ2 < (slot2.capacity || 1)) {
-              const booking2 = await prisma.booking.create({
-                data: {
-                  clientName: b.clientName,
-                  phone: b.phone || "",
-                  unit: slot2.unit,
-                  date: slot2.date,
-                  time: slot2.time,
-                  prof: slot2.prof,
-                  slotId: slot2.id,
-                  status: "aguardando",
-                  value: 0,
-                  taxaMatricula: null,
-                  paymentMethod: MARCA_MATRICULA,
-                  holdUntil: new Date(Date.now() + HOLD_MIN * 60_000),
-                },
-              });
-              criadas.push(booking2);
-            }
-          }
+        /* Demais horários da semana (2x a 4x): `extraSlotIds`, ou o campo antigo
+           `secondSlotId`/`slot2Id` de quando só existia o 2x. */
+        if (freq && freq > 1) {
+          const pedidos = Array.isArray(b.extraSlotIds) ? b.extraSlotIds : [b.secondSlotId || b.slot2Id];
+          const { extras } = await segurarHorariosExtras({ clientName: b.clientName, phone: b.phone }, slot, pedidos, freq);
+          criadas.push(...extras);
         }
       }
     }
@@ -4152,6 +4141,17 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
   const padroes = new Set(slotsBase.map((s) => `${s.unit}|${new Date(s.date + "T00:00Z").getUTCDay()}|${hhmm(s.time)}`));
   if (padroes.size !== slotsBase.length)
     throw Object.assign(new Error("Escolha dias ou horários semanais diferentes para a grade."), { code: 400 });
+  /* Dois horários no MESMO dia da semana que se sobrepõem (09:00 e 10:00, com
+     aula de 2h) viram 12 meses de aulas encavaladas. Com 3x e 4x (23/09/2026)
+     escolher dois no mesmo dia ficou comum — manhã e tarde vale, sobreposto não. */
+  const diaDaSemana = (s) => new Date(s.date + "T00:00Z").getUTCDay();
+  for (let i = 0; i < slotsBase.length; i++) {
+    for (let j = i + 1; j < slotsBase.length; j++) {
+      const a = slotsBase[i], b = slotsBase[j];
+      if (a.unit === b.unit && diaDaSemana(a) === diaDaSemana(b) && haChoque(hhmm(a.time), hhmm(b.time)))
+        throw Object.assign(new Error(`Os horários ${hhmm(a.time)} e ${hhmm(b.time)} caem no mesmo dia da semana e se sobrepõem. Escolha horários que não se cruzem.`), { code: 400 });
+    }
+  }
   for (const slot of slotsBase) {
     if (slot.date < todayISO()) throw Object.assign(new Error("Escolha somente aulas futuras."), { code: 400 });
     if (feriadoNoDia(slot.date, slot.unit)) throw Object.assign(new Error(recusaFeriado(feriadoNoDia(slot.date, slot.unit), slot.date)), { code: 409 });
@@ -5214,6 +5214,45 @@ async function upsertClienteWa({ nome, phone, cpf, email, birthday, unit }) {
 
    A ficha já existe quando chegamos aqui: ela nasceu no passo do cadastro, antes
    da reserva, porque é o CPF DELA que o Sicredi usa para emitir o Pix. */
+/* Os demais horários da semana da matrícula (plano 2x a 4x), cada um segurado
+   junto com o da 1ª aula. Usado pelo site e pelo WhatsApp — as duas portas de
+   matrícula seguram os horários do mesmo jeito.
+
+   Valor 0: o Pix é um só, na reserva da 1ª aula. Quando o pagamento cai,
+   registrarMatriculaPaga confirma todos e monta a grade de 12 meses com eles.
+   Horário que lotou, virou feriado, é de outra semana ou se sobrepõe a outro
+   dela no mesmo dia fica de fora — a cobrança lista só os que entraram, e o
+   que faltar vira aviso na ficha quando o pagamento cai. */
+async function segurarHorariosExtras({ clientName, phone }, slot, extraSlotIds, freq) {
+  const extras = [];
+  const extraSlots = [];
+  const ids = [...new Set((extraSlotIds || []).map(Number).filter((id) => id && id !== slot.id))].slice(0, Math.max(0, freq - 1));
+  for (const id of ids) {
+    const s = await prisma.slot.findUnique({ where: { id } });
+    if (!s || s.unit !== slot.unit || !mesmaSemana(s.date, slot.date) || feriadoNoDia(s.date, s.unit)) continue;
+    if ([slot, ...extraSlots].some((j) => j.date === s.date && haChoque(hhmm(j.time), hhmm(s.time)))) continue;
+    if ((await occupancy(s.id)) >= (s.capacity || 1)) continue;
+    extras.push(await prisma.booking.create({
+      data: {
+        clientName,
+        phone: phone || "",
+        unit: s.unit,
+        date: s.date,
+        time: s.time,
+        prof: s.prof,
+        slotId: s.id,
+        status: "aguardando",
+        value: 0,
+        taxaMatricula: null,
+        paymentMethod: MARCA_MATRICULA,
+        holdUntil: new Date(Date.now() + HOLD_MIN * 60_000),
+      },
+    }));
+    extraSlots.push(s);
+  }
+  return { extras, extraSlots };
+}
+
 async function createWaBooking(client, slot, { weeklyFreq, extraSlotIds = [] }) {
   const isAvulso = weeklyFreq === "avulso";
   // A aluna do WhatsApp entra como FIXO, então os quatro planos valem aqui
@@ -5231,38 +5270,9 @@ async function createWaBooking(client, slot, { weeklyFreq, extraSlotIds = [] }) 
     },
   });
 
-  /* Os demais horários da semana (2x a 4x), cada um segurado junto com o 1º.
-     Valor 0: o Pix é um só, na reserva da 1ª aula. Quando o pagamento cai,
-     registrarMatriculaPaga confirma todos e monta a grade de 12 meses com eles.
-     Horário que lotou (ou virou feriado) enquanto ela escolhia fica de fora — a
-     cobrança lista só os que entraram, e o resto a escola combina com ela. */
-  const extras = [];
-  const extraSlots = [];
-  if (!isAvulso) {
-    const ids = [...new Set((extraSlotIds || []).map(Number).filter((id) => id && id !== slot.id))].slice(0, freq - 1);
-    for (const id of ids) {
-      const s = await prisma.slot.findUnique({ where: { id } });
-      if (!s || !mesmaSemana(s.date, slot.date) || feriadoNoDia(s.date, s.unit)) continue;
-      if ([slot, ...extraSlots].some((j) => j.date === s.date && haChoque(hhmm(j.time), hhmm(s.time)))) continue;
-      if ((await occupancy(s.id)) >= (s.capacity || 1)) continue;
-      extras.push(await prisma.booking.create({
-        data: {
-          clientName: client.name,
-          phone: client.phone || "",
-          unit: s.unit,
-          date: s.date,
-          time: s.time,
-          prof: s.prof,
-          slotId: s.id,
-          status: "aguardando",
-          value: 0,
-          paymentMethod: MARCA_MATRICULA,
-          holdUntil: new Date(Date.now() + HOLD_MIN * 60_000),
-        },
-      }));
-      extraSlots.push(s);
-    }
-  }
+  const { extras, extraSlots } = isAvulso
+    ? { extras: [], extraSlots: [] }
+    : await segurarHorariosExtras({ clientName: client.name, phone: client.phone }, slot, extraSlotIds, freq);
 
   const atualizado = await prisma.client.update({
     where: { id: client.id },
