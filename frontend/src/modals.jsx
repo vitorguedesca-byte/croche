@@ -164,7 +164,7 @@ export function SlotCard({ slot, showUnit, todosAlunos = false, somenteLeitura =
 
 /* ======================= Modal do dia ======================= */
 export function DayModal({ date, unit = "Todas", somenteLeitura = false }) {
-  const { data, reload } = useStore();
+  const { data, reload, run } = useStore();
   const { open, close } = useModal();
   const [ferBusy, setFerBusy] = useState("");
   const todas = unit === "Todas";
