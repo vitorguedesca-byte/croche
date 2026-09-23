@@ -2261,6 +2261,21 @@ async function avisarMatriculaConfirmada(booking) {
     const client = await prisma.client.findFirst({ where: { name: booking.clientName } });
     const portalUrl = client?.cpf ? `${WA_PORTAL_URL}?cpf=${client.cpf}` : WA_PORTAL_URL;
     const quando = fmtSlotBR({ date: booking.date, time: booking.time });
+    /* Plano 2x a 4x: a matrícula tem mais de um horário na semana, e a
+       confirmação cita todos. Roda depois de registrarMatriculaPaga, que já
+       confirmou os demais horários (marcados como aula do plano). Na 1ª semana
+       só existem esses: a grade de 12 meses pula o que ela já tem. */
+    const daSemana = isMatricula
+      ? (await prisma.booking.findMany({
+          where: {
+            clientName: booking.clientName, status: { not: "cancelada" }, id: { not: booking.id },
+            date: { gte: booking.date }, paymentMethod: { in: [PGTO_PLANO, MARCA_MATRICULA] },
+          },
+        })).filter((b) => mesmaSemana(b.date, booking.date))
+      : [];
+    const aulas = [booking, ...daSemana]
+      .sort((a, b) => (a.date + hhmm(a.time)).localeCompare(b.date + hhmm(b.time)))
+      .map((b) => fmtSlotBR({ date: b.date, time: b.time }));
     /* Quase sempre a janela está aberta aqui: ela acabou de conversar com o bot
        para escolher unidade, horário e CPF. Mas quem paga pelo portal horas
        depois cai fora dela — e aí, sem template, a primeira mensagem que uma
@@ -2276,6 +2291,8 @@ async function avisarMatriculaConfirmada(booking) {
         nome: booking.clientName,
         unidade: booking.unit,
         quando,
+        aulas,
+        repetem: client?.mensalistaTipo === "fixo",
         // a taxa gravada NA RESERVA: é o que ela pagou, não o que a tabela diz hoje
         taxa: booking.taxaMatricula ? moedaBR(booking.taxaMatricula) : "",
         portalUrl,
@@ -2284,7 +2301,8 @@ async function avisarMatriculaConfirmada(booking) {
     } else {
       const nome = isAvulso ? "pagamento_aula_avulsa" : "matricula_confirmada";
       const r = await sendWaTemplate(booking.phone, nome, {
-        body: [primeiroNome(booking.clientName) || "aluna", booking.unit, quando],
+        // o template tem um campo só para "quando": vai a lista numa linha
+        body: [primeiroNome(booking.clientName) || "aluna", booking.unit, listaComE(aulas)],
       });
       await registrarWaEnvio(r, { phone: booking.phone, kind: nome });
     }

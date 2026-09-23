@@ -52,8 +52,16 @@ Agradecemos pela compreensão e parceria. Essas regras nos ajudam a manter um am
    mensalidade e a taxa fica. Isto é REPETIÇÃO do que ela leu antes de pagar, de
    propósito — a hora de descobrir o que não volta não é a hora de pedir de
    volta. */
-export const textoMatriculaConfirmada = ({ nome, unidade, quando, taxa, portalUrl, isAvulso }) => {
+/* `aulas`: as aulas da semana da matrícula (plano 2x a 4x), já formatadas.
+   Com mais de uma, sai a lista — antes a mensagem citava só a 1ª aula, e a
+   aluna de 3x ficava sem saber se os outros horários tinham entrado.
+   `repetem`: aluna de horário fixo — os horários valem toda semana. */
+export const textoMatriculaConfirmada = ({ nome, unidade, quando, aulas = [], repetem = false, taxa, portalUrl, isAvulso }) => {
   const urlPortal = portalUrl || WA_PORTAL_URL;
+  const linhaQuando = aulas.length > 1
+    ? `🗓️ Suas aulas desta semana:\n${aulas.map((a) => `• ${a}`).join("\n")}` +
+      (repetem ? `\n\nEsses horários se repetem toda semana — já estão reservados para você.` : "")
+    : `🗓️ ${quando}`;
   if (isAvulso) {
     return `Obrigada, ${String(nome || "").split(" ")[0]}! 🙏 Recebemos o seu pagamento da *Aula Avulsa*.
 
@@ -71,7 +79,7 @@ Seja muito bem-vinda ao ateliê! Se você amar a aula e quiser continuar conosco
 
 *Confirmação de agendamento*
 📍 ${unidade}
-🗓️ ${quando}
+${linhaQuando}
 
 Sua vaga está garantida! 💚
 
