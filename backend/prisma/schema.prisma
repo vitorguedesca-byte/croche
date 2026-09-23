@@ -269,9 +269,12 @@ model WaConversation {
   slotId    Int? // horário escolhido (aguardando confirmação/nome)
   offered   String   @default("[]") @db.VarChar(500) // JSON dos slotIds oferecidos
   pendingName String? @db.VarChar(120) // nome digitado, aguardando confirmação
-  // Plano escolhido na conversa (1 ou 2 aulas por semana) — é o que define o
+  // Plano escolhido na conversa (1 a 4 aulas por semana) — é o que define o
   // valor da 1ª mensalidade, que é o pagamento que matricula a aluna.
   weeklyFreq Int?
+  // Horários da semana escolhidos ALÉM do 1º (JSON de slotIds), no plano 2x a
+  // 4x. Guardados aqui porque a escolha leva uma mensagem por horário.
+  extraSlots String @default("[]") @db.VarChar(100)
   // CPF do pagador: o Sicredi exige para emitir a cobrança Pix. É também a
   // CHAVE de entrada da conversa — antes de marcar, o bot pergunta o CPF e
   // procura a ficha; quem já existe não preenche cadastro de novo.

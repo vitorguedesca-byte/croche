@@ -86,6 +86,11 @@ import {
   HOLD_MIN,
   HOLD_AVISO_MIN,
   RODADA_HOLD_MIN,
+  FREQS_WA,
+  planoEscolhido,
+  ordinal,
+  horariosExtrasPossiveis,
+  listaComE,
 } from "./waFluxo.js";
 
 // pasta de fotos de depoimentos (servida estaticamente pelo Vite via frontend/public)
@@ -2165,12 +2170,18 @@ async function registrarMatriculaPaga(booking) {
     data: { matriculaStatus: "paga", matriculaAt: pagoEm, status: "ativo" },
   });
   if (!atualizado.weeklyFreq || (atualizado.plan === "mensalista" && atualizado.matriculaStatus === "convertida")) return null;
+  /* A grade de 12 meses sai de TODOS os horários desta matrícula — o da 1ª
+     aula e os demais da semana (2x a 4x) — passados explicitamente. Antes só ia
+     o da 1ª aula, e os outros eram "achados" pelas marcações futuras dela, o que
+     só acontecia com ficha de aluna nova (firstClass): a ex-aluna que voltava
+     pelo WhatsApp saía com a grade de um horário só. */
+  const slotIdsMatricula = [booking.slotId, ...outrasMatricula.map((om) => om.slotId)].filter(Boolean);
   try {
     const r = await converterEmMensalista(atualizado, {
       weeklyFreq: atualizado.weeklyFreq,
       mensalistaTipo: atualizado.mensalistaTipo,
       billingDay: diaDoMes(pagoEm),
-      slotId: booking.slotId,
+      slotIds: slotIdsMatricula,
       /* O que vira mensalidade do mês corrente é o PAGAMENTO MENOS A TAXA DE
          MATRÍCULA. `booking.value` é o que ela pagou (mensalidade + taxa); a
          fatura do mês tem que nascer com o valor da mensalidade, senão o
@@ -2179,6 +2190,20 @@ async function registrarMatriculaPaga(booking) {
       mensalidadePaga: { valor: mensalidadeDaReserva(booking), pagoEm, txid: booking.txid },
     });
     console.log(`[matricula] ${atualizado.name} matriculada no plano ${atualizado.weeklyFreq}x (${atualizado.mensalistaTipo}). Aulas criadas na grade: ${r?.grade?.total || 0}.`);
+    /* Plano de N aulas com menos de N horários na grade (ela tocou em "definir
+       depois", ou a semana não tinha vaga): fica escrito na ficha, que é onde a
+       Inêz olha. Sem isso, ninguém fica sabendo que falta horário na agenda
+       dela — e a aluna pagou pelo plano inteiro. */
+    const faltam = (Number(atualizado.weeklyFreq) || 0) - slotIdsMatricula.length;
+    if (faltam > 0 && atualizado.mensalistaTipo !== "escala") {
+      const aviso = `⚠️ ${fmtDiaBR(pagoEm)}: matrícula no plano ${atualizado.weeklyFreq}x com ${slotIdsMatricula.length} horário(s) na grade — ` +
+        `falta${faltam > 1 ? "m" : ""} ${faltam}. Combinar com ela e marcar na agenda.`;
+      await prisma.client.update({
+        where: { id: atualizado.id },
+        data: { notes: [aviso, atualizado.notes].filter(Boolean).join("\n") },
+      });
+      console.log(`[matricula] ${atualizado.name}: ${aviso}`);
+    }
     return r;
   } catch (e) {
     // A mensalidade já está paga e registrada; se a matrícula falhar (Sicredi fora
@@ -5189,9 +5214,10 @@ async function upsertClienteWa({ nome, phone, cpf, email, birthday, unit }) {
 
    A ficha já existe quando chegamos aqui: ela nasceu no passo do cadastro, antes
    da reserva, porque é o CPF DELA que o Sicredi usa para emitir o Pix. */
-async function createWaBooking(client, slot, { weeklyFreq, slot2Id = null }) {
+async function createWaBooking(client, slot, { weeklyFreq, extraSlotIds = [] }) {
   const isAvulso = weeklyFreq === "avulso";
-  const freq = Number(weeklyFreq) === 2 ? 2 : 1;
+  // A aluna do WhatsApp entra como FIXO, então os quatro planos valem aqui
+  const freq = freqDoPlano(weeklyFreq);
   const booking = await prisma.booking.create({
     data: {
       clientName: client.name, phone: client.phone || "", unit: slot.unit,
@@ -5205,29 +5231,36 @@ async function createWaBooking(client, slot, { weeklyFreq, slot2Id = null }) {
     },
   });
 
-  let booking2 = null;
-  let slot2 = null;
-  if (!isAvulso && freq === 2 && slot2Id && slot2Id !== slot.id) {
-    slot2 = await prisma.slot.findUnique({ where: { id: slot2Id } });
-    if (slot2 && mesmaSemana(slot2.date, slot.date) && !feriadoNoDia(slot2.date, slot2.unit)) {
-      const occ2 = await occupancy(slot2.id);
-      if (occ2 < (slot2.capacity || 1)) {
-        booking2 = await prisma.booking.create({
-          data: {
-            clientName: client.name,
-            phone: client.phone || "",
-            unit: slot2.unit,
-            date: slot2.date,
-            time: slot2.time,
-            prof: slot2.prof,
-            slotId: slot2.id,
-            status: "aguardando",
-            value: 0,
-            paymentMethod: MARCA_MATRICULA,
-            holdUntil: new Date(Date.now() + HOLD_MIN * 60_000),
-          },
-        });
-      }
+  /* Os demais horários da semana (2x a 4x), cada um segurado junto com o 1º.
+     Valor 0: o Pix é um só, na reserva da 1ª aula. Quando o pagamento cai,
+     registrarMatriculaPaga confirma todos e monta a grade de 12 meses com eles.
+     Horário que lotou (ou virou feriado) enquanto ela escolhia fica de fora — a
+     cobrança lista só os que entraram, e o resto a escola combina com ela. */
+  const extras = [];
+  const extraSlots = [];
+  if (!isAvulso) {
+    const ids = [...new Set((extraSlotIds || []).map(Number).filter((id) => id && id !== slot.id))].slice(0, freq - 1);
+    for (const id of ids) {
+      const s = await prisma.slot.findUnique({ where: { id } });
+      if (!s || !mesmaSemana(s.date, slot.date) || feriadoNoDia(s.date, s.unit)) continue;
+      if ([slot, ...extraSlots].some((j) => j.date === s.date && haChoque(hhmm(j.time), hhmm(s.time)))) continue;
+      if ((await occupancy(s.id)) >= (s.capacity || 1)) continue;
+      extras.push(await prisma.booking.create({
+        data: {
+          clientName: client.name,
+          phone: client.phone || "",
+          unit: s.unit,
+          date: s.date,
+          time: s.time,
+          prof: s.prof,
+          slotId: s.id,
+          status: "aguardando",
+          value: 0,
+          paymentMethod: MARCA_MATRICULA,
+          holdUntil: new Date(Date.now() + HOLD_MIN * 60_000),
+        },
+      }));
+      extraSlots.push(s);
     }
   }
 
@@ -5249,7 +5282,7 @@ async function createWaBooking(client, slot, { weeklyFreq, slot2Id = null }) {
       unit: client.unit || slot.unit,
     },
   });
-  return { booking, booking2, slot2, client: atualizado };
+  return { booking, extras, extraSlots, client: atualizado };
 }
 
 /* Libera a vaga de uma reserva cujo prazo estourou. Não é cancelamento de aula:
@@ -5416,9 +5449,10 @@ setTimeout(() => rodadaConversasParadas().catch(() => {}), 60_000);
 const CONVERSA_ZERADA = {
   step: "start", unit: null, slotId: null, offered: "[]",
   pendingName: null, pendingEmail: null, pendingBirthday: null, pendingPhone: null,
-  weeklyFreq: null, cpf: null, clientId: null, bookingId: null,
+  weeklyFreq: null, extraSlots: "[]", cpf: null, clientId: null, bookingId: null,
   humanoPedidos: 0, retomadaAt: null,
 };
+const NUM_EMOJI = { 1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣" };
 
 /* parseNascimento, emailValido e telefoneBR vêm de waFluxo.js — são regras de
    leitura do que a aluna digita, e estão lá com teste. */
@@ -5602,37 +5636,41 @@ async function handleWaMessage(msg) {
      alguém desistir sentindo que foi enganada — e ela teria razão. Pelo mesmo
      motivo o texto já avisa que a taxa não volta se ela desistir. */
   const telaPlano = async (nome, prefix = "") => {
-    await setConv({ step: "plano", ...(nome ? { pendingName: padronizarNome(nome) } : {}) });
+    // Voltar ao plano zera os horários extras: o número deles depende do plano
+    await setConv({ step: "plano", extraSlots: "[]", ...(nome ? { pendingName: padronizarNome(nome) } : {}) });
     const primeiro = String(nome || "").split(" ")[0];
     const taxa = taxaMatriculaAtual();
     const vAvulsa = Number(SETTINGS.valorAvulsa) || 40;
     const linhaPlano = (f) => taxa
       ? `*${f}x por semana* — ${moedaBR(valorDoPlano(f))}/mês (1º pagamento: ${moedaBR(valorPrimeiroPagamento(f))})`
       : `*${f}x por semana* — ${moedaBR(valorDoPlano(f))} por mês`;
-    return waButtons(
-      msg.from,
+    const texto =
       `${prefix}Prontinho${primeiro ? ", " + primeiro : ""}! 💚 Como você quer fazer as suas aulas?\n\n` +
       `🧺 *Aula Avulsa* — ${moedaBR(vAvulsa)} (aula única)\n` +
       `_OBS: não devolveremos o valor da aula avulsa em caso de falta._\n\n` +
-      `1️⃣ ${linhaPlano(1)}\n` +
-      `2️⃣ ${linhaPlano(2)}\n\n` +
+      FREQS_WA.map((f) => `${NUM_EMOJI[f]} ${linhaPlano(f)}`).join("\n") + "\n\n" +
       (taxa
         ? `No *primeiro pagamento* entra a taxa de matrícula de ${moedaBR(taxa)}, cobrada uma vez só. A partir do mês seguinte é só a mensalidade.\n\n` +
           `A sua primeira aula já está inclusa. Se decidir não continuar depois dela, *devolvemos a mensalidade inteira* — só a taxa de matrícula não volta.`
-        : `A sua primeira aula já entra nesse valor: você paga a 1ª mensalidade e, se decidir não continuar depois dela, devolvemos tudo.`),
-      [
-        { id: "plano:avulso", title: "🧺 Aula Avulsa" },
-        { id: "plano:1", title: "1x por semana" },
-        { id: "plano:2", title: "2x por semana" },
-      ]
-    );
+        : `A sua primeira aula já entra nesse valor: você paga a 1ª mensalidade e, se decidir não continuar depois dela, devolvemos tudo.`);
+    /* Eram 3 botões (Avulsa, 1x, 2x) — o máximo que o WhatsApp aceita. Com 3x e
+       4x (23/09/2026) são 5 opções, então virou LISTA: um toque a mais, mas
+       cabe tudo, e cada linha já diz preço e aulas no mês. */
+    return waList(msg.from, texto, "Escolher plano", [
+      { id: "plano:avulso", title: "🧺 Aula Avulsa", description: `${moedaBR(vAvulsa)} · aula única` },
+      ...FREQS_WA.map((f) => ({
+        id: `plano:${f}`,
+        title: `${f}x por semana`,
+        description: `${moedaBR(valorDoPlano(f))}/mês · ${f * 4} aulas no mês`,
+      })),
+    ]);
   };
 
   /* Fecha tudo: grava a ficha no painel (marcada como cadastro via WhatsApp),
      cria a aula segurada, emite o Pix com o CPF DELA e manda o código.
      A vaga fica de pé por HOLD_MIN minutos — quem confirma a reserva é o
      pagamento, não a conversa. */
-  const cadastrarECobrar = async (freq, slot2Id = null) => {
+  const cadastrarECobrar = async (freq, extraSlotIds = []) => {
     const slot = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
     if (!slot) return telaUnidade("Esse horário expirou. ");
     if ((await occupancy(slot.id)) >= (slot.capacity || 1))
@@ -5654,7 +5692,7 @@ async function handleWaMessage(msg) {
     });
     console.log(`[wa] cadastro via WhatsApp: ${client.name} (ficha ${client.id}, CPF ${cpf.slice(0, 3)}***).`);
 
-    const { booking, booking2, slot2 } = await createWaBooking(client, slot, { weeklyFreq: freq, slot2Id });
+    const { booking, extras, extraSlots } = await createWaBooking(client, slot, { weeklyFreq: freq, extraSlotIds });
     let pixCode = "";
     try {
       ({ pixCode } = await emitirPixDaReserva(booking, { cpf, name: client.name }));
@@ -5668,9 +5706,9 @@ async function handleWaMessage(msg) {
         where: { id: booking.id },
         data: { status: "cancelada", holdUntil: null, absenceReason: "Falha ao emitir o Pix da reserva" },
       });
-      if (booking2) {
+      for (const extra of extras) {
         await prisma.booking.update({
-          where: { id: booking2.id },
+          where: { id: extra.id },
           data: { status: "cancelada", holdUntil: null, absenceReason: "Falha ao emitir o Pix da reserva" },
         });
       }
@@ -5681,8 +5719,8 @@ async function handleWaMessage(msg) {
     }
 
     const isAvulso = freq === "avulso";
-    await setConv({ step: "cobranca", bookingId: booking.id, clientId: client.id, weeklyFreq: isAvulso ? null : freq, pendingName: null });
-    const quandoStr = slot2 ? `${fmtSlotBR(slot)} e ${fmtSlotBR(slot2)}` : fmtSlotBR(slot);
+    await setConv({ step: "cobranca", bookingId: booking.id, clientId: client.id, weeklyFreq: isAvulso ? null : freq, extraSlots: "[]", pendingName: null });
+    const quandoStr = listaComE([slot, ...extraSlots].map(fmtSlotBR));
     await waSend(msg.from, textoCobrancaReserva({
       nome: client.name,
       unidade: slot.unit,
@@ -5704,25 +5742,53 @@ async function handleWaMessage(msg) {
     ]);
   };
 
-  const telaSegundoHorario = async (slot1, prefix = "") => {
+  /* Horários da semana além do 1º, um por mensagem: no 2x ela escolhe o 2º;
+     no 3x, o 2º e o 3º; no 4x, até o 4º. Os já escolhidos ficam em
+     `conv.extraSlots` e saem da lista seguinte, junto com o que se sobrepõe a
+     eles no mesmo dia. Ao completar o plano — ou se ela tocar em "definir
+     depois", ou se a semana não tiver mais nada — segue para a cobrança.
+
+     Faltou horário? A escola combina com ela: registrarMatriculaPaga deixa
+     anotado na ficha quantos horários faltam na grade. (O texto antigo mandava
+     marcar a 2ª aula pelo portal, mas o portal não deixa mensalista fixa
+     marcar aula da grade — ela ficaria sem saída.) */
+  const extrasDaConversa = () => {
+    try { return (JSON.parse(conv.extraSlots || "[]") || []).map(Number).filter(Boolean); }
+    catch { return []; }
+  };
+  const telaHorarioExtra = async (slot1, prefix = "") => {
+    const freq = freqDoPlano(conv.weeklyFreq);
+    const escolhidosIds = extrasDaConversa();
+    if (escolhidosIds.length >= freq - 1) return cadastrarECobrar(freq, escolhidosIds);
     const todos = await waAvailableSlots(slot1.unit);
-    const mesmaSem = todos.filter((s) => !s.esgotada && s.id !== slot1.id && mesmaSemana(s.date, slot1.date));
-    if (!mesmaSem.length) {
-      await waSend(msg.from, "Não encontramos outros horários com vagas na mesma semana da sua primeira aula. Não se preocupe, você poderá marcar a sua 2ª aula no portal assim que confirmar a matrícula! 💚");
-      return cadastrarECobrar(2);
+    const escolhidos = escolhidosIds.map((id) => todos.find((s) => s.id === id)).filter(Boolean);
+    const possiveis = horariosExtrasPossiveis(slot1, escolhidos, todos, {
+      mesmaSemana,
+      choque: (a, b) => haChoque(hhmm(a), hhmm(b)),
+    });
+    const n = escolhidosIds.length + 2; // posição do horário que ela escolhe agora
+    if (!possiveis.length) {
+      await waSend(msg.from,
+        `Não encontramos mais horários com vaga na mesma semana da sua primeira aula. ` +
+        `Sem problema: seguimos com ${escolhidosIds.length ? "os horários que você já escolheu" : "a sua primeira aula"}, ` +
+        `e a escola combina com você o${freq - n > 0 ? "s outros horários" : ` ${ordinal(n)} horário`} da sua semana. 💚`);
+      return cadastrarECobrar(freq, escolhidosIds);
     }
-    const top = mesmaSem.slice(0, 8); // até 8 horários + pular
-    const rows = top.map((s) => ({
+    const rows = possiveis.slice(0, 8).map((s) => ({ // até 8 horários + "definir depois"
       id: "slot2:" + s.id,
       title: fmtSlotDia(s),
       description: waDescricaoSlot(s),
     }));
-    rows.push({ id: "slot2:pular", title: "Definir depois", description: "Escolher a 2ª aula mais tarde" });
-    await setConv({ step: "slot2", weeklyFreq: 2 });
+    rows.push({ id: "slot2:pular", title: "Definir depois", description: "A escola combina os outros horários com você" });
+    await setConv({ step: "slot2" });
+    const jaTem = [slot1, ...escolhidos].map(fmtSlotBR);
     return waList(
       msg.from,
-      `${prefix}Como você escolheu *2x por semana*, escolha o seu *segundo horário* na mesma semana (${fmtSlotBR(slot1)}):\n\nToque abaixo para escolher 👇`,
-      "Escolher 2º horário",
+      `${prefix}Como você escolheu *${freq}x por semana*, escolha o seu *${ordinal(n)} horário* na mesma semana ` +
+        `(${escolhidos.length ? "você já tem " + listaComE(jaTem) : fmtSlotBR(slot1)}):
+
+Toque abaixo para escolher 👇`,
+      `Escolher ${ordinal(n)} horário`,
       rows
     );
   };
@@ -5780,7 +5846,7 @@ async function handleWaMessage(msg) {
     if (conv.step === "plano") return telaPlano(conv.pendingName || "", "Retomando! ");
     if (conv.step === "slot2" && conv.slotId) {
       const s = await prisma.slot.findUnique({ where: { id: conv.slotId } });
-      if (s) return telaSegundoHorario(s, "Retomando! ");
+      if (s) return telaHorarioExtra(s, "Retomando! ");
     }
     return telaUnidade();
   }
@@ -5933,38 +5999,47 @@ async function handleWaMessage(msg) {
   }
 
   if (conv.step === "plano") {
-    if (rid === "plano:avulso" || low.includes("avulso") || body.trim() === "0") {
-      await setConv({ weeklyFreq: null });
-      conv = { ...conv, weeklyFreq: null };
+    // aceita a linha da lista ("plano:3") ou o número digitado — ver waFluxo.js
+    const escolha = planoEscolhido(rid, body);
+    if (escolha === "avulso") {
+      await setConv({ weeklyFreq: null, extraSlots: "[]" });
+      conv = { ...conv, weeklyFreq: null, extraSlots: "[]" };
       return cadastrarECobrar("avulso");
     }
-    // aceita o botão ("plano:1") ou o número digitado
-    const freq = rid === "plano:2" || body.trim() === "2" ? 2
-      : rid === "plano:1" || body.trim() === "1" ? 1
-      : null;
-    if (!freq) return telaPlano(conv.pendingName || "", "Não entendi 🤔. ");
-    await setConv({ weeklyFreq: freq });
-    conv = { ...conv, weeklyFreq: freq };
-    if (freq === 2) {
+    if (!escolha) return telaPlano(conv.pendingName || "", "Não entendi 🤔. ");
+    const freq = escolha;
+    await setConv({ weeklyFreq: freq, extraSlots: "[]" });
+    conv = { ...conv, weeklyFreq: freq, extraSlots: "[]" };
+    if (freq >= 2) {
       const slot1 = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
-      if (slot1) {
-        return telaSegundoHorario(slot1);
-      }
+      if (slot1) return telaHorarioExtra(slot1);
     }
     return cadastrarECobrar(freq);
   }
 
+  /* Escolhendo os horários da semana além do 1º (o nome do passo ficou "slot2"
+     de quando só existia o 2x). Cada escolha é guardada e a tela pergunta o
+     próximo, até completar o plano. */
   if (conv.step === "slot2") {
+    const freq = freqDoPlano(conv.weeklyFreq);
+    const escolhidos = extrasDaConversa();
     if (rid === "slot2:pular" || body.trim().toLowerCase() === "pular" || body.trim().toLowerCase() === "depois") {
-      return cadastrarECobrar(2);
-    }
-    if (rid.startsWith("slot2:")) {
-      const s2Id = Number(rid.replace("slot2:", ""));
-      if (s2Id) return cadastrarECobrar(2, s2Id);
+      return cadastrarECobrar(freq, escolhidos);
     }
     const slot1 = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
-    if (slot1) return telaSegundoHorario(slot1, "Toque em uma das opções da lista para escolher. ");
-    return cadastrarECobrar(2);
+    if (rid.startsWith("slot2:")) {
+      const id = Number(rid.replace("slot2:", ""));
+      // toque repetido numa lista antiga não conta duas vezes
+      if (id && id !== slot1?.id && !escolhidos.includes(id)) {
+        const agora = [...escolhidos, id];
+        await setConv({ extraSlots: JSON.stringify(agora) });
+        conv = { ...conv, extraSlots: JSON.stringify(agora) };
+      }
+      if (slot1) return telaHorarioExtra(slot1);
+      return cadastrarECobrar(freq, extrasDaConversa());
+    }
+    if (slot1) return telaHorarioExtra(slot1, "Toque em uma das opções da lista para escolher. ");
+    return cadastrarECobrar(freq, escolhidos);
   }
 
   /* Aguardando o Pix. A conversa não avança sozinha: quem move daqui é o

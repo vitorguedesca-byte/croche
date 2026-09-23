@@ -161,3 +161,49 @@ export const conversaExpirou = (ultimaMsg, agora = Date.now(), horas = CONVERSA_
    dúvida o bot responde na hora), mas insistir sem fim vira parede. Três: duas
    tentativas de resolver aqui, e na terceira o número sai sem discussão. */
 export const HUMANO_ENTREGA_NA_VEZ = 3;
+
+/* ===================== PLANO E HORÁRIOS DA SEMANA =====================
+   Vitor, 23/09/2026: o WhatsApp passou a oferecer 3x e 4x por semana, além de
+   1x e 2x. Quem escolhe NX escolhe N horários na MESMA semana da 1ª aula — é
+   com eles que a grade de 12 meses é montada quando o Pix cai. A aluna do
+   WhatsApp entra como mensalista FIXO, e 3x/4x só existem no fixo. */
+export const FREQS_WA = [1, 2, 3, 4];
+
+/* O que ela respondeu na tela do plano: o botão da lista ("plano:3") ou o
+   número digitado. Devolve 1..4, "avulso" ou null (não entendi). */
+export function planoEscolhido(rid, body) {
+  const id = String(rid || "");
+  const txt = String(body || "").trim().toLowerCase();
+  if (id === "plano:avulso" || txt.includes("avuls") || txt === "0") return "avulso";
+  const m = id.match(/^plano:(\d)$/) || txt.match(/^(\d)\s*(x|vez|vezes)?\b/);
+  const n = m ? Number(m[1]) : NaN;
+  return FREQS_WA.includes(n) ? n : null;
+}
+
+/* "2º horário", "3ª aula": a posição do que ela está escolhendo agora. */
+export const ordinal = (n, genero = "o") => `${n}${genero === "a" ? "ª" : "º"}`;
+
+/* Horários que ainda podem entrar na semana dela.
+   - só a semana da 1ª aula, e só turma com vaga;
+   - nada que ela já escolheu;
+   - nada que se sobreponha, no mesmo dia, a uma aula que ela já escolheu:
+     ninguém faz duas turmas ao mesmo tempo. Dois horários no mesmo dia sem
+     choque (manhã e tarde) valem — é a escolha dela.
+   `choque(horaA, horaB)` vem de quem chama, porque a duração da aula mora nas
+   Configurações. */
+export function horariosExtrasPossiveis(slot1, escolhidos, todos, { mesmaSemana, choque }) {
+  const ja = [slot1, ...(escolhidos || [])].filter(Boolean);
+  const ids = new Set(ja.map((s) => s.id));
+  return (todos || []).filter((s) =>
+    !s.esgotada &&
+    !ids.has(s.id) &&
+    mesmaSemana(s.date, slot1.date) &&
+    !ja.some((j) => j.date === s.date && choque(j.time, s.time)));
+}
+
+/* "seg 28/09 09:00, ter 29/09 14:00 e qua 30/09 09:00" */
+export function listaComE(itens) {
+  const xs = (itens || []).filter(Boolean);
+  if (xs.length <= 1) return xs.join("");
+  return `${xs.slice(0, -1).join(", ")} e ${xs[xs.length - 1]}`;
+}

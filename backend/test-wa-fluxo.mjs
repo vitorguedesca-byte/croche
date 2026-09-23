@@ -21,7 +21,12 @@ import {
   HOLD_MIN,
   HOLD_AVISO_MIN,
   RODADA_HOLD_MIN,
+  planoEscolhido,
+  ordinal,
+  horariosExtrasPossiveis,
+  listaComE,
 } from "./src/waFluxo.js";
+import { mesmaSemana } from "./src/regrasAula.js";
 
 let falhas = 0;
 const ok = (cond, msg) => {
@@ -138,6 +143,41 @@ ok(acaoDaReserva({ holdUntil: emMin(0.4) }, AGORA).faltam === 1, "menos de um mi
 ok(RODADA_HOLD_MIN <= HOLD_AVISO_MIN,
   `a varredura (${RODADA_HOLD_MIN} min) cabe na janela do aviso (${HOLD_AVISO_MIN} min)`);
 ok(HOLD_AVISO_MIN < HOLD_MIN, "o aviso sai antes do fim do prazo, não depois");
+
+/* ===================== plano e horários da semana (3x/4x, 23/09/2026) ===================== */
+console.log("\n— plano escolhido —");
+ok(planoEscolhido("plano:1", "") === 1 && planoEscolhido("plano:4", "") === 4, "botão da lista: plano:1 e plano:4");
+ok(planoEscolhido("plano:avulso", "") === "avulso", "botão da avulsa");
+ok(planoEscolhido("", "3") === 3 && planoEscolhido("", "4x") === 4 && planoEscolhido("", "2 vezes") === 2, "digitado: 3, 4x, 2 vezes");
+ok(planoEscolhido("", "avulsa") === "avulso" && planoEscolhido("", "0") === "avulso", "digitado: avulsa e 0");
+ok(planoEscolhido("", "5") === null && planoEscolhido("", "30") === null && planoEscolhido("plano:9", "") === null, "5, 30 e plano:9 não são plano");
+ok(planoEscolhido("", "oi") === null, "texto qualquer não vira plano");
+ok(ordinal(3) === "3º" && ordinal(3, "a") === "3ª", "3º horário, 3ª aula");
+
+console.log("\n— horários extras da semana —");
+const choque = (a, b) => { const m = (t) => +t.slice(0, 2) * 60 + +t.slice(3, 5); return m(a) < m(b) + 120 && m(b) < m(a) + 120; };
+const regras = { mesmaSemana, choque };
+const s1 = { id: 1, date: "2026-09-28", time: "09:00" };                    // seg
+const turmas = [
+  s1,
+  { id: 2, date: "2026-09-28", time: "10:00" },                              // seg, choca com a 1ª
+  { id: 3, date: "2026-09-28", time: "14:00" },                              // seg à tarde: vale
+  { id: 4, date: "2026-09-29", time: "09:00" },                              // ter
+  { id: 5, date: "2026-09-30", time: "09:00", esgotada: true },              // qua lotada
+  { id: 6, date: "2026-10-01", time: "09:00" },                              // qui
+  { id: 7, date: "2026-10-05", time: "09:00" },                              // outra semana
+  { id: 8, date: "2026-09-29", time: "10:30" },                              // ter, choca com a 4
+];
+const ids = (xs) => xs.map((s) => s.id).join(",");
+ok(ids(horariosExtrasPossiveis(s1, [], turmas, regras)) === "3,4,6,8", "2º horário: mesma semana, com vaga, sem choque com a 1ª");
+const t4 = turmas.find((s) => s.id === 4);
+ok(ids(horariosExtrasPossiveis(s1, [t4], turmas, regras)) === "3,6", "3º horário: some o já escolhido e o que choca com ele");
+const t6 = turmas.find((s) => s.id === 6);
+ok(ids(horariosExtrasPossiveis(s1, [t4, t6], turmas, regras)) === "3", "4º horário: sobra só a segunda à tarde");
+ok(horariosExtrasPossiveis(s1, [t4, t6, turmas[2]], turmas, regras).length === 0, "sem mais nada na semana: lista vazia");
+
+console.log("\n— texto dos horários —");
+ok(listaComE(["A"]) === "A" && listaComE(["A", "B"]) === "A e B" && listaComE(["A", "B", "C"]) === "A, B e C", "A / A e B / A, B e C");
 
 console.log(falhas ? `\n${falhas} caso(s) falharam.` : "\nTodos os casos passaram.");
 process.exit(falhas ? 1 : 0);
