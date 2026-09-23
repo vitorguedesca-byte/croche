@@ -922,10 +922,10 @@ function FinanceiroOperacao() {
   const ehMesAtual = comp === atual;
 
   // Alunas mensalistas que já estavam matriculadas nessa competência.
-  // Inativas só entram se tiverem mensalidade paga no mês (registro histórico de quitação).
+  // Inativas entram se tiverem fatura gerada na competência (paga ou cancelada na inativação).
   const mensalistas = data.clients
     .filter((c) => c.plan === "mensalista")
-    .filter((c) => c.status !== "cancelado" || (data.invoices || []).some((i) => i.clientId === c.id && i.competencia === comp && i.status === "pago"))
+    .filter((c) => c.status !== "cancelado" || (data.invoices || []).some((i) => i.clientId === c.id && i.competencia === comp))
     .filter((c) => { const ini = matriculaISO(c); return !ini || ini.slice(0, 7) <= comp; })
     .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -1015,14 +1015,23 @@ function FinanceiroOperacao() {
   const invs = mensalistas.map(invOf);
   const pagosArr = invs.filter((i) => i && i.status === "pago");
   const pendArr = invs.filter((i) => i && i.status === "pendente");
+  const canceladasArr = invs.filter((i) => i && i.status === "cancelado");
   const emAtrasoArr = pendArr.filter((i) => i.encargos && i.encargos.atrasada);
   const noPrazoArr = pendArr.filter((i) => !i.encargos || !i.encargos.atrasada);
-  const semBoleto = invs.filter((i) => !i).length;
+  const semBoleto = invs.filter((i, idx) => !i && mensalistas[idx]?.status !== "cancelado").length;
 
   const recebido = pagosArr.reduce((s, i) => s + i.amountCents / 100, 0);
   const aReceber = noPrazoArr.reduce((s, i) => s + (i.amountCents / 100), 0);
   const emAtrasoTotal = emAtrasoArr.reduce((s, i) => s + (i.encargos ? i.encargos.total : i.amountCents / 100), 0);
-  const previsto = mensalistas.reduce((s, c) => { const i = invOf(c); return s + (i ? i.amountCents / 100 : valorDe(c)); }, 0);
+  // Aluna inativa com fatura cancelada não soma no previsto a receber
+  const previsto = mensalistas.reduce((s, c) => {
+    if (c.status === "cancelado") {
+      const i = invOf(c);
+      return s + (i && i.status === "pago" ? i.amountCents / 100 : 0);
+    }
+    const i = invOf(c);
+    return s + (i ? (i.status === "cancelado" ? 0 : i.amountCents / 100) : valorDe(c));
+  }, 0);
   const emitido = recebido + aReceber + emAtrasoTotal;
   const pctRecebido = emitido ? Math.round((recebido / emitido) * 100) : 0;
 
@@ -1039,7 +1048,8 @@ function FinanceiroOperacao() {
     }
     if (filtroStatus === "todos") return true;
     const inv = invOf(c);
-    if (filtroStatus === "semBoleto") return !inv;
+    if (filtroStatus === "semBoleto") return !inv && c.status !== "cancelado";
+    if (filtroStatus === "cancelado") return inv?.status === "cancelado" || c.status === "cancelado";
     if (!inv) return false;
     if (filtroStatus === "pago") return inv.status === "pago";
     if (filtroStatus === "atraso") return inv.status === "pendente" && !!inv.encargos?.atrasada;
@@ -1182,6 +1192,11 @@ function FinanceiroOperacao() {
           <button className={`btn sm ${filtroStatus === "semBoleto" ? "" : "ghost"}`} style={filtroStatus === "semBoleto" ? { background: "var(--terracota)", color: "#fff", borderColor: "var(--terracota)" } : { color: "var(--terracota)" }} onClick={() => setFiltroStatus("semBoleto")}>
             📄 Sem boleto ({semBoleto})
           </button>
+          {canceladasArr.length > 0 && (
+            <button className={`btn sm ${filtroStatus === "cancelado" ? "" : "ghost"}`} style={filtroStatus === "cancelado" ? { background: "var(--muted)", color: "#fff", borderColor: "var(--muted)" } : { color: "var(--muted)" }} onClick={() => setFiltroStatus("cancelado")}>
+              🚫 Inativas / Canceladas ({canceladasArr.length})
+            </button>
+          )}
         </div>
 
         <span className="count">{mensalistasFiltrados.length} de {mensalistas.length}</span>
@@ -1212,19 +1227,31 @@ function FinanceiroOperacao() {
                 <tr key={c.id}>
                   <td className="c-main">
                     <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} />)}>
-                      <span className="cli-av">{initials(c.name)}</span>
+                      <span className="cli-av" style={c.status === "cancelado" ? { opacity: 0.6 } : undefined}>{initials(c.name)}</span>
                       <div>
-                        <span className="cli-name">{c.name}</span>
+                        <span className="cli-name" style={c.status === "cancelado" ? { color: "var(--muted)" } : undefined}>
+                          {c.name}
+                        </span>
                         <div className="cli-sub">
                           {c.unit}
                           {c.cpf ? "" : " · ⚠ sem CPF"}
-                          {c.status === "cancelado" ? " · 🚫 inativa" : ""}
+                          {c.status === "cancelado" && (
+                            <span className="badge b-muted" style={{ marginLeft: ".3rem", padding: "1px 6px", fontSize: ".68rem", background: "rgba(100,116,139,0.12)", color: "var(--muted)" }}>
+                              🚫 inativa
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
                   </td>
                   <td data-l="Mensalidade">
-                    {money(inv ? inv.amountCents / 100 : valorDe(c))}
+                    {c.status === "cancelado" && inv?.status === "cancelado" ? (
+                      <span style={{ textDecoration: "line-through", color: "var(--muted)" }} title="Cobrança cancelada por inativação da aluna">
+                        {money(inv ? inv.amountCents / 100 : valorDe(c))}
+                      </span>
+                    ) : (
+                      money(inv ? inv.amountCents / 100 : valorDe(c))
+                    )}
                     {(() => {
                       const combinado = precoDaComp(data.precos, c.id, comp);
                       if (combinado) return (
@@ -1270,7 +1297,13 @@ function FinanceiroOperacao() {
                         ✓ pago{inv.paidAt ? " em " + fmtDate(String(inv.paidAt).slice(0, 10)) : ""}{inv.baixaManual ? " · baixa manual" : ""}
                       </span>
                     ) : inv.status === "cancelado" ? (
-                      <span className="badge b-danger">cancelado</span>
+                      <span
+                        className="badge b-muted"
+                        style={{ background: "rgba(220,53,69,0.08)", color: "var(--danger)", border: "1px solid rgba(220,53,69,0.25)" }}
+                        title="Mensalidade cancelada automaticamente devido à inativação da aluna"
+                      >
+                        🚫 Inativada · Fatura cancelada
+                      </span>
                     ) : inv.encargos?.atrasada ? (
                       <span className="badge b-danger">⚠️ em atraso há {inv.encargos.dias} dia(s)</span>
                     ) : (
@@ -1278,27 +1311,31 @@ function FinanceiroOperacao() {
                     )}
                   </td>
                   <td className="td-actions">
-                    <button
-                      className="btn ghost sm"
-                      title="Alterar o valor da mensalidade"
-                      onClick={() => open(<AlterarMensalidade client={c} compInicial={comp} />)}
-                    >
-                      💰
-                    </button>
-
-                    {!inv && ehMesAtual && (
-                      c.status === "cancelado" ? (
-                        <span className="badge b-muted" title="Inscrição inativa: reative a aluna na aba Ex-Alunos para voltar a gerar mensalidade.">
-                          🚫 inativa · sem cobrança
-                        </span>
-                      ) : (
-                        <button className="btn sm" disabled={busy} onClick={() => gerar(c)}>
-                          🧾 Gerar boleto
-                        </button>
-                      )
+                    {c.status !== "cancelado" && (
+                      <button
+                        className="btn ghost sm"
+                        title="Alterar o valor da mensalidade"
+                        onClick={() => open(<AlterarMensalidade client={c} compInicial={comp} />)}
+                      >
+                        💰
+                      </button>
                     )}
 
-                    {inv && inv.status === "pendente" && (
+                    {c.status === "cancelado" ? (
+                      <span
+                        className="badge b-muted"
+                        style={{ fontSize: ".72rem" }}
+                        title="Aluna inativada: o cadastro foi movido para a aba Ex-Alunos. Para reativar aulas e cobranças, acesse a aba Ex-Alunos e clique em Restaurar."
+                      >
+                        🚫 Inativa (Ex-Alunos)
+                      </span>
+                    ) : !inv && ehMesAtual ? (
+                      <button className="btn sm" disabled={busy} onClick={() => gerar(c)}>
+                        🧾 Gerar boleto
+                      </button>
+                    ) : null}
+
+                    {c.status !== "cancelado" && inv && inv.status === "pendente" && (
                       <>
                         <button
                           className="btn wa sm"
