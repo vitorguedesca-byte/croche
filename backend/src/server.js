@@ -1801,7 +1801,15 @@ async function ensureClient(nomeBruto, phone, unit, tags, cpf, email, firstClass
    matrícula (as aulas seguintes ela marca normalmente pelo portal).
    Os nomes das colunas são herança do fluxo antigo de aula experimental; o
    significado hoje é "primeira aula / matrícula". */
-const jaFezMatricula = (c) => !!c && (!!c.trialDate || c.matriculaStatus !== "nao_aplica");
+/* MENSALISTA ATIVA também já é aluna, mesmo sem nenhuma das duas marcas: as
+   alunas cadastradas antes do fluxo de matrícula existir (181 em 23/09/2026)
+   têm `trialDate` vazio e `matriculaStatus` "nao_aplica". Sem esta linha, a
+   Camila Marcelina (2x, ativa) entrou pelo robô para marcar uma aula a mais, foi
+   tratada como aluna nova — cobrança de R$ 140 de matrícula — e a ficha dela
+   caiu para "lead". Ex-aluna (cancelado) continua podendo se matricular de novo. */
+const jaFezMatricula = (c) => !!c && (
+  !!c.trialDate || c.matriculaStatus !== "nao_aplica" ||
+  (c.plan === "mensalista" && c.status !== "cancelado"));
 
 app.post(
   "/api/bookings",
