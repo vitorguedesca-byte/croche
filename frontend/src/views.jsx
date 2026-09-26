@@ -812,7 +812,18 @@ export function Clientes({ params }) {
                         {c.plan === "avulso" && c.status !== "cancelado" ? <span className="badge ml" style={{ background: "rgba(180, 83, 9, 0.12)", color: "#b45309", border: "1px solid rgba(180, 83, 9, 0.3)" }}>🧺 AULA AVULSA</span> : null}
                         {c.matriculaStatus === "paga" && c.plan !== "mensalista" && c.status !== "cancelado" ? <span className="badge b-warn ml">🎟️ matrícula a concluir</span> : null}
                         {tab === "novato" ? <span className="badge b-terra ml">✨ 1ª aula</span> : null}
-                        {(tab === "lead" || c.status === "lead") ? <span className="badge b-warn ml" style={{ background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba" }}>⚠️ Pagamento não realizado</span> : null}
+                        {(() => {
+                          const clientDigits = (c.phone || "").replace(/\D/g, "");
+                          const bks = (data.bookings || []).filter((b) => b.clientName === c.name || (clientDigits && b.phone && b.phone.replace(/\D/g, "").endsWith(clientDigits.slice(-8))));
+                          const hasPaid = bks.some((b) => b.paid || b.status === "concluida" || (b.status === "confirmada" && b.paymentMethod)) || c.matriculaStatus === "paga" || c.matriculaStatus === "convertida";
+                          if ((tab === "lead" || c.status === "lead") && !hasPaid) {
+                            return <span className="badge b-warn ml" style={{ background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba" }}>⚠️ Pagamento não realizado</span>;
+                          }
+                          if ((tab === "lead" || c.status === "lead") && hasPaid) {
+                            return <span className="badge b-ok ml" style={{ background: "rgba(34,197,94,0.12)", color: "#15803d", border: "1px solid rgba(34,197,94,0.3)" }}>✓ Pagamento confirmado</span>;
+                          }
+                          return null;
+                        })()}
                         {c.origem === "whatsapp" ? <span className="badge b-info ml" title="Cadastro feito pela própria aluna na conversa do WhatsApp — confira os dados">💬 Cadastro via WhatsApp</span> : null}
                         <div className="cli-sub">{c.phone || "sem telefone"}{c.birthday ? " · 🎂 " + fmtDate(c.birthday) : ""}</div>
                       </div>

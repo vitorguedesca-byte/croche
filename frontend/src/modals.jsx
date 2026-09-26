@@ -765,7 +765,10 @@ export function BaixarLeadModal({ client, onComplete }) {
   const [busy, setBusy] = useState(false);
 
   // Busca agendamentos associados
-  const bookings = (data?.bookings || []).filter((b) => b.clientName === client.name);
+  const clientDigits = (client.phone || "").replace(/\D/g, "");
+  const bookings = (data?.bookings || []).filter(
+    (b) => b.clientName === client.name || (clientDigits && b.phone && b.phone.replace(/\D/g, "").endsWith(clientDigits.slice(-8)))
+  );
   const isMensalista = client.plan === "mensalista" || client.matriculaStatus === "pendente" || (client.weeklyFreq && client.weeklyFreq > 0);
 
   const valorPadrao = isMensalista
@@ -2262,7 +2265,9 @@ export function ClientProfile({ client, initialTab }) {
   const { open, close } = useModal();
   const c = data.clients.find((x) => x.id === client.id) || client;
   const at = clientAttendance(data, c.name);
-  const hist = data.bookings.filter((b) => b.clientName === c.name).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  const clientDigits = (c.phone || "").replace(/\D/g, "");
+  const hist = data.bookings.filter((b) => b.clientName === c.name || (clientDigits && b.phone && b.phone.replace(/\D/g, "").endsWith(clientDigits.slice(-8)))).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  const hasPaid = hist.some((b) => b.paid || b.status === "concluida" || (b.status === "confirmada" && b.paymentMethod)) || c.matriculaStatus === "paga" || c.matriculaStatus === "convertida";
   const total = hist.filter((b) => b.status !== "cancelada").length;
   const pago = hist.filter((b) => b.paid).reduce((s, b) => s + b.value, 0);
   const t = todayISO();
@@ -2334,8 +2339,10 @@ export function ClientProfile({ client, initialTab }) {
             <span className="chip">{c.unit || "—"}</span>
             {c.status === "cancelado"
               ? <span className="badge b-danger">Inscrição cancelada</span>
-              : c.status === "lead"
+              : c.status === "lead" && !hasPaid
               ? <span className="badge b-warn" style={{ background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba" }}>⚠️ Pagamento não realizado</span>
+              : c.status === "lead" && hasPaid
+              ? <span className="badge b-ok" style={{ background: "rgba(34,197,94,0.12)", color: "#15803d", border: "1px solid rgba(34,197,94,0.3)" }}>✓ Pagamento confirmado</span>
               : <span className="badge b-ok">Ativa</span>}
             {c.firstClass ? <span className="badge b-terra">✨ Novo(a)</span> : null}
             {/* Ficha nascida na conversa do WhatsApp: os dados foram digitados
@@ -2376,7 +2383,7 @@ export function ClientProfile({ client, initialTab }) {
         <div className="prin">
           {cartaoIdentidade}
           <div className="prin-main">
-            {c.status === "lead" && (
+            {c.status === "lead" && !hasPaid && (
               <div style={{ background: "#fff3cd", color: "#856404", padding: ".75rem 1rem", borderRadius: 8, marginBottom: "1rem", border: "1px solid #ffeeba", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
                 <div>
                   <b style={{ display: "block", fontSize: ".95rem" }}>⚠️ Lead — Pagamento não realizado</b>
@@ -2388,6 +2395,19 @@ export function ClientProfile({ client, initialTab }) {
                   </button>
                   <button className="btn wa sm" style={{ whiteSpace: "nowrap" }} onClick={() => openWa(c.phone, `Olá ${c.name}! Tudo bem? 💚 Vi que você iniciou o agendamento da sua aula de crochê na Fios que Curam mas ainda não recebemos a confirmação do pagamento. Posso te ajudar a garantir sua vaga?`)}>
                     Cobrar no WhatsApp
+                  </button>
+                </div>
+              </div>
+            )}
+            {c.status === "lead" && hasPaid && (
+              <div style={{ background: "rgba(34,197,94,0.08)", color: "#15803d", padding: ".75rem 1rem", borderRadius: 8, marginBottom: "1rem", border: "1px solid rgba(34,197,94,0.25)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
+                <div>
+                  <b style={{ display: "block", fontSize: ".95rem" }}>✓ Pagamento confirmado</b>
+                  <span style={{ fontSize: ".84rem" }}>A aula/matrícula desta aluna foi paga! O cadastro pode ser concluído como aluna ativa.</span>
+                </div>
+                <div style={{ display: "flex", gap: ".5rem", flexShrink: 0 }}>
+                  <button className="btn sm ok" onClick={() => open(<BaixarLeadModal client={c} />)}>
+                    ✓ Concluir ativação
                   </button>
                 </div>
               </div>

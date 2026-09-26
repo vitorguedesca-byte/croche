@@ -1049,6 +1049,7 @@ function haChoque(timeA, timeB, dur = SETTINGS.duracaoAulaMin) {
 app.get(
   "/api/state",
   wrap(async (req, res) => {
+    await sincronizarLeadsPagos().catch((e) => console.warn("[api/state] sincronizarLeadsPagos:", e.message));
     const [clients, slots, bookings, invoices, makeups, precos] = await Promise.all([
       prisma.client.findMany({ orderBy: { name: "asc" } }),
       prisma.slot.findMany({ include: { waitlist: true }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
@@ -2135,9 +2136,18 @@ app.delete(
    o fluxo antigo segue valendo — ela decide depois da aula, pelo portal ou com
    a Inêz. */
 async function registrarMatriculaPaga(booking) {
-  if (!ehPagamentoDeMatricula(booking.paymentMethod)) return;
-  const c = await prisma.client.findFirst({ where: { name: booking.clientName } });
-  if (!c || c.matriculaStatus !== "pendente") return;
+  if (!ehPagamentoDeMatricula(booking.paymentMethod)) return null;
+  let c = await prisma.client.findFirst({ where: { name: booking.clientName } });
+  if (!c && booking.phone) {
+    const digits = onlyDigits(booking.phone);
+    if (digits.length >= 8) {
+      c = await prisma.client.findFirst({
+        where: { phone: { contains: digits.slice(-8) } },
+      });
+    }
+  }
+  if (!c) return null;
+  if (c.matriculaStatus !== "pendente" && c.status !== "lead") return null;
   const pagoEm = booking.paymentDate || todayISO();
 
   // Se houver uma 2ª reserva de matrícula (ex.: plano 2x por semana) aguardando hold, confirma-a também:
@@ -2207,6 +2217,103 @@ async function registrarMatriculaPaga(booking) {
     // do ar, por exemplo), a Inêz conclui pelo painel em vez de a aluna perder o pago.
     console.warn(`[matricula] ${atualizado.name}: 1ª mensalidade paga mas a matrícula falhou — ${e.message}`);
     return null;
+  }
+}
+
+/* Confirmação e ativação de aluna em Aula Avulsa paga via Pix ou manual */
+async function registrarAulaAvulsaPaga(booking) {
+  let c = await prisma.client.findFirst({ where: { name: booking.clientName } });
+  if (!c && booking.phone) {
+    const digits = onlyDigits(booking.phone);
+    if (digits.length >= 8) {
+      c = await prisma.client.findFirst({
+        where: { phone: { contains: digits.slice(-8) } },
+      });
+    }
+  }
+  if (!c) return null;
+
+  const pagoEm = booking.paymentDate || todayISO();
+
+  // Se o cliente é lead ou estava na 1ª aula / pendente:
+  if (c.status === "lead" || c.firstClass || c.matriculaStatus === "nao_aplica") {
+    await prisma.client.update({
+      where: { id: c.id },
+      data: {
+        status: "ativo",
+        firstClass: true, // exibe na aba 1ª Aula (Pagas) / novatos
+        matriculaStatus: "nao_aplica",
+        plan: "avulso",
+      },
+    });
+    console.log(`[avulso pago] ${c.name} (id ${c.id}) ativada como aluna avulsa após confirmação de pagamento.`);
+  }
+
+  // Garante fatura quitada no financeiro (Recebimentos do mês)
+  const compAtualStr = competenciaAtual();
+  const valorFinal = Number(booking.value) || Number(SETTINGS.valorAvulsa) || 40;
+  const jaExisteInv = await prisma.invoice.findFirst({
+    where: { clientId: c.id, competencia: compAtualStr },
+  });
+  if (!jaExisteInv) {
+    await prisma.invoice.create({
+      data: {
+        clientId: c.id,
+        competencia: compAtualStr,
+        amountCents: Math.round(valorFinal * 100),
+        dueDate: pagoEm,
+        status: "pago",
+        paidAt: pagoEm,
+        txid: booking.txid || null,
+        baixaManual: !booking.txid,
+      },
+    });
+  } else if (jaExisteInv.status !== "pago") {
+    await prisma.invoice.update({
+      where: { id: jaExisteInv.id },
+      data: { status: "pago", paidAt: pagoEm, txid: booking.txid || jaExisteInv.txid },
+    });
+  }
+  return c;
+}
+
+/* Sincronização automática de Leads que já pagaram mas ficaram pendentes */
+async function sincronizarLeadsPagos() {
+  try {
+    const leads = await prisma.client.findMany({
+      where: {
+        OR: [
+          { status: "lead" },
+          { matriculaStatus: "pendente" },
+        ],
+      },
+    });
+    if (!leads.length) return;
+
+    for (const lead of leads) {
+      const leadPhoneDigits = onlyDigits(lead.phone || "");
+      const bookingPaga = await prisma.booking.findFirst({
+        where: {
+          paid: true,
+          OR: [
+            { clientName: lead.name },
+            ...(leadPhoneDigits.length >= 8 ? [{ phone: { contains: leadPhoneDigits.slice(-8) } }] : []),
+          ],
+        },
+        orderBy: { id: "desc" },
+      });
+
+      if (bookingPaga) {
+        console.log(`[sincronizarLeadsPagos] Lead com pagamento confirmado encontrado: ${lead.name} (id ${lead.id}, booking ${bookingPaga.id}). Atualizando...`);
+        if (ehPagamentoDeMatricula(bookingPaga.paymentMethod) || lead.plan === "mensalista" || (lead.weeklyFreq && lead.weeklyFreq > 0)) {
+          await registrarMatriculaPaga(bookingPaga);
+        } else {
+          await registrarAulaAvulsaPaga(bookingPaga);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn(`[sincronizarLeadsPagos] aviso: ${e.message}`);
   }
 }
 
@@ -2375,19 +2482,25 @@ app.post(
     }
 
     // Baixa manual executada pelo painel administrativo (Inêz / atendente logada):
+    const isMatricula = ehPagamentoDeMatricula(cur?.paymentMethod);
     const booking = await prisma.booking.update({
       where: { id },
       data: {
         paid: true,
         status: "confirmada",
-        paymentMethod: ehPagamentoDeMatricula(cur?.paymentMethod) ? cur.paymentMethod : (req.body.paymentMethod || "Pix"),
+        paymentMethod: isMatricula ? cur.paymentMethod : (req.body.paymentMethod || "Pix"),
         paymentDate: req.body.paymentDate || todayISO(),
-        ...(req.body.value !== undefined && !ehPagamentoDeMatricula(cur?.paymentMethod)
+        ...(req.body.value !== undefined && !isMatricula
           ? { value: Number(req.body.value) }
           : {}),
       },
     });
-    const matricula = await registrarMatriculaPaga(booking);
+    let matricula = null;
+    if (isMatricula) {
+      matricula = await registrarMatriculaPaga(booking);
+    } else {
+      await registrarAulaAvulsaPaga(booking);
+    }
     await avisarMatriculaConfirmada(booking);
     res.json({ ...booking, matricula, pago: true });
   })
@@ -2513,15 +2626,20 @@ async function confirmarPagamentoPorTxid(txid) {
         return true;
       }
     }
+    const isMatricula = ehPagamentoDeMatricula(booking.paymentMethod);
     await prisma.booking.update({
       where: { id: booking.id },
       data: {
         paid: true, status: "confirmada", paymentDate: todayISO(),
         holdUntil: null,
-        paymentMethod: ehPagamentoDeMatricula(booking.paymentMethod) ? booking.paymentMethod : "Pix",
+        paymentMethod: isMatricula ? booking.paymentMethod : (booking.paymentMethod || "Pix"),
       },
     });
-    await registrarMatriculaPaga({ ...booking, paymentDate: todayISO() });
+    if (isMatricula) {
+      await registrarMatriculaPaga({ ...booking, paymentDate: todayISO() });
+    } else {
+      await registrarAulaAvulsaPaga({ ...booking, paymentDate: todayISO() });
+    }
     console.log(`[sicredi] pagamento confirmado — reserva ${booking.id}`);
     // Anúncios: a venda confirmada pelo banco. Dedup com o Pixel pelo event_id.
     if (booking.paymentMethod === "Aula Avulsa" || ehPagamentoDeMatricula(booking.paymentMethod)) {
@@ -7072,8 +7190,33 @@ async function clientByCpf(cpfRaw) {
 // Verifica se o CPF está cadastrado e se já tem PIN
 app.post("/api/auth/check", wrap(async (req, res) => {
   if (onlyDigits(req.body.cpf).length !== 11) return res.status(400).json({ error: "Informe um CPF válido (11 dígitos)." });
-  const client = await clientByCpf(req.body.cpf);
+  let client = await clientByCpf(req.body.cpf);
   if (!client) return res.json({ exists: false, hasPin: false });
+
+  // Auto-cura: se estiver como lead/pendente mas já tiver aula paga, ativa antes de verificar
+  if (client.status === "lead" || client.matriculaStatus === "pendente") {
+    const leadPhoneDigits = onlyDigits(client.phone || "");
+    const bookingPaga = await prisma.booking.findFirst({
+      where: {
+        paid: true,
+        OR: [
+          { clientName: client.name },
+          ...(leadPhoneDigits.length >= 8 ? [{ phone: { contains: leadPhoneDigits.slice(-8) } }] : []),
+        ],
+      },
+      orderBy: { id: "desc" },
+    });
+    if (bookingPaga) {
+      if (ehPagamentoDeMatricula(bookingPaga.paymentMethod) || client.plan === "mensalista" || (client.weeklyFreq && client.weeklyFreq > 0)) {
+        await registrarMatriculaPaga(bookingPaga);
+      } else {
+        await registrarAulaAvulsaPaga(bookingPaga);
+      }
+      const atualizado = await prisma.client.findUnique({ where: { id: client.id } });
+      if (atualizado) client = atualizado;
+    }
+  }
+
   const pode = clientPodeAcessarPortal(client);
   if (!pode.ok) {
     return res.status(403).json({
@@ -7293,6 +7436,8 @@ ensureSchema()
   .catch((e) => console.error("Falha ao carregar configurações:", e.message))
   .then(() => loadFeriados())
   .catch((e) => console.error("Falha ao carregar feriados:", e.message))
+  .then(() => sincronizarLeadsPagos())
+  .catch((e) => console.error("Falha ao sincronizar leads pagos:", e.message))
   .finally(() => {
     app.listen(PORT, () => console.log(`API Fios que Curam rodando em http://localhost:${PORT}`));
     /* Sentinela da invariante "reposição é aula única": qualquer aula de
