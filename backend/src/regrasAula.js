@@ -262,27 +262,64 @@ export function janelaEscala(aulasAtivas, hoje, opts = {}) {
     .sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
 
   if (Number(weeklyFreq) === 2) {
-    const alvo = alvoDate || hoje;
-    const segAlvo = segundaDaSemana(alvo);
     const segHoje = segundaDaSemana(hoje);
     const listaCompleta = todasAulas.length ? todasAulas : (aulasAtivas || []);
+
+    // Aulas da semana atual
+    const aulasSemanaAtual = listaCompleta
+      .filter((b) => contaNoTeto(b) && mesmaSemana(b.date, hoje))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const ultimaAulaSemanaAtual = aulasSemanaAtual[aulasSemanaAtual.length - 1];
+    const ultimaAulaJaPassou = !ultimaAulaSemanaAtual || ultimaAulaSemanaAtual.date <= hoje;
+
+    // Se NÃO passou alvoDate: consulta geral (para saber se o portal/aluna pode marcar algo agora)
+    if (!alvoDate) {
+      if (aulasSemanaAtual.length < 2) {
+        return { aberta: true, proxima: null, motivo: "" };
+      }
+      if (!ultimaAulaJaPassou) {
+        return {
+          aberta: false,
+          proxima: ultimaAulaSemanaAtual,
+          motivo: `Na escala 2x, as aulas da próxima semana são liberadas a partir da sua última aula desta semana (${diaBR(ultimaAulaSemanaAtual.date)}). 💚`,
+        };
+      }
+      const segProx = somarDias(segHoje, 7);
+      const marcadasNaProx = listaCompleta.filter((b) => contaNoTeto(b) && mesmaSemana(b.date, segProx));
+      if (marcadasNaProx.length < 2) {
+        return { aberta: true, proxima: null, motivo: "" };
+      }
+      return {
+        aberta: false,
+        proxima: marcadasNaProx[0],
+        motivo: `Você já tem as 2 aulas agendadas para a próxima semana. 💚`,
+      };
+    }
+
+    const alvo = alvoDate;
+    if (alvo < hoje) {
+      return { aberta: false, proxima: null, motivo: "Não é possível agendar aulas em datas passadas." };
+    }
+    const segAlvo = segundaDaSemana(alvo);
     const marcadasNaSemanaAlvo = listaCompleta.filter(
       (b) => contaNoTeto(b) && mesmaSemana(b.date, alvo)
     );
 
     // Se estiver tentando marcar para uma semana futura:
     if (segAlvo > segHoje) {
-      // Verifica se a última aula da semana atual já passou ou é hoje:
-      const aulasSemanaAtual = listaCompleta
-        .filter((b) => contaNoTeto(b) && mesmaSemana(b.date, hoje))
-        .sort((a, b) => a.date.localeCompare(b.date));
-
-      const ultimaAulaSemanaAtual = aulasSemanaAtual[aulasSemanaAtual.length - 1];
-      if (ultimaAulaSemanaAtual && ultimaAulaSemanaAtual.date > hoje) {
+      if (!ultimaAulaJaPassou) {
         return {
           aberta: false,
           proxima: ultimaAulaSemanaAtual,
           motivo: `Na escala 2x, as aulas da próxima semana são liberadas a partir da sua última aula desta semana (${diaBR(ultimaAulaSemanaAtual.date)}). 💚`,
+        };
+      }
+      const segProx = somarDias(segHoje, 7);
+      if (segAlvo > segProx) {
+        return {
+          aberta: false,
+          proxima: null,
+          motivo: "Na escala 2x, você pode marcar aulas para esta semana ou para a próxima semana. 💚",
         };
       }
     }
@@ -295,7 +332,9 @@ export function janelaEscala(aulasAtivas, hoje, opts = {}) {
     return {
       aberta: false,
       proxima: marcadasNaSemanaAlvo[0],
-      motivo: `Você já tem as 2 aulas agendadas para esta semana. 💚`,
+      motivo: segAlvo === segHoje
+        ? `Você já tem as 2 aulas agendadas para esta semana. 💚`
+        : `Você já tem as 2 aulas agendadas para essa semana. 💚`,
     };
   }
 

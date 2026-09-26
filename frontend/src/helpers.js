@@ -736,6 +736,109 @@ export function tetoMensalEscala(client, date, todasAulasDaAluna) {
   };
 }
 
+export function diaBR(date) {
+  const m = String(date || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return date;
+  const dow = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"][
+    new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()
+  ];
+  return `${dow}, ${m[3]}/${m[2]}`;
+}
+
+export function janelaEscala(aulasAtivas, hoje, opts = {}) {
+  const { weeklyFreq = 1, alvoDate, todasAulas = [] } = opts;
+  const futuras = (aulasAtivas || [])
+    .filter((b) => b && b.status !== "cancelada" && b.date >= hoje)
+    .sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+
+  const contaNoTeto = (b) => b && b.status !== "cancelada" && (b.paymentMethod === "Mensalista" || !b.paymentMethod);
+
+  if (Number(weeklyFreq) === 2) {
+    const segHoje = weekStart(hoje);
+    const listaCompleta = todasAulas.length ? todasAulas : (aulasAtivas || []);
+
+    const aulasSemanaAtual = listaCompleta
+      .filter((b) => contaNoTeto(b) && mesmaSemana(b.date, hoje))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const ultimaAulaSemanaAtual = aulasSemanaAtual[aulasSemanaAtual.length - 1];
+    const ultimaAulaJaPassou = !ultimaAulaSemanaAtual || ultimaAulaSemanaAtual.date <= hoje;
+
+    // Se NÃO passou alvoDate: consulta geral
+    if (!alvoDate) {
+      if (aulasSemanaAtual.length < 2) {
+        return { aberta: true, proxima: null, motivo: "" };
+      }
+      if (!ultimaAulaJaPassou) {
+        return {
+          aberta: false,
+          proxima: ultimaAulaSemanaAtual,
+          motivo: `Na escala 2x, as aulas da próxima semana são liberadas a partir da sua última aula desta semana (${diaBR(ultimaAulaSemanaAtual.date)}). 💚`,
+        };
+      }
+      const segProx = addDays(segHoje, 7);
+      const marcadasNaProx = listaCompleta.filter((b) => contaNoTeto(b) && mesmaSemana(b.date, segProx));
+      if (marcadasNaProx.length < 2) {
+        return { aberta: true, proxima: null, motivo: "" };
+      }
+      return {
+        aberta: false,
+        proxima: marcadasNaProx[0],
+        motivo: `Você já tem as 2 aulas agendadas para a próxima semana. 💚`,
+      };
+    }
+
+    const alvo = alvoDate;
+    if (alvo < hoje) {
+      return { aberta: false, proxima: null, motivo: "Não é possível agendar aulas em datas passadas." };
+    }
+    const segAlvo = weekStart(alvo);
+    const marcadasNaSemanaAlvo = listaCompleta.filter(
+      (b) => contaNoTeto(b) && mesmaSemana(b.date, alvo)
+    );
+
+    if (segAlvo > segHoje) {
+      if (!ultimaAulaJaPassou) {
+        return {
+          aberta: false,
+          proxima: ultimaAulaSemanaAtual,
+          motivo: `Na escala 2x, as aulas da próxima semana são liberadas a partir da sua última aula desta semana (${diaBR(ultimaAulaSemanaAtual.date)}). 💚`,
+        };
+      }
+      const segProx = addDays(segHoje, 7);
+      if (segAlvo > segProx) {
+        return {
+          aberta: false,
+          proxima: null,
+          motivo: "Na escala 2x, você pode marcar aulas para esta semana ou para a próxima semana. 💚",
+        };
+      }
+    }
+
+    if (marcadasNaSemanaAlvo.length < 2) {
+      return { aberta: true, proxima: null, motivo: "" };
+    }
+
+    return {
+      aberta: false,
+      proxima: marcadasNaSemanaAlvo[0],
+      motivo: segAlvo === segHoje
+        ? `Você já tem as 2 aulas agendadas para esta semana. 💚`
+        : `Você já tem as 2 aulas agendadas para essa semana. 💚`,
+    };
+  }
+
+  // Regra padrão 1x por semana:
+  if (futuras.some((b) => b.date === hoje)) return { aberta: true, proxima: null, motivo: "" };
+  if (!futuras.length) return { aberta: true, proxima: null, motivo: "" };
+  const prox = futuras[0];
+  return {
+    aberta: false,
+    proxima: prox,
+    motivo: `Na escala, a próxima aula é marcada no dia da sua aula. Sua próxima é ${diaBR(prox.date)}` +
+      (prox.time ? ` às ${prox.time}` : "") + " — marque por lá. 💚",
+  };
+}
+
 
 /**
  * Validação do algoritmo oficial do CPF (módulo 11 com 2 dígitos verificadores).

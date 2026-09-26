@@ -3805,7 +3805,7 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
   const tipo = tipoMensalista(client);
   const ativasFuturas = bookings.filter((b) => b.status !== "cancelada" && b.date >= t);
   const janela = tipo === "escala"
-    ? janelaEscala(ativasFuturas, t, { weeklyFreq: client.weeklyFreq, alvoDate: t, todasAulas: bookings })
+    ? janelaEscala(ativasFuturas, t, { weeklyFreq: client.weeklyFreq, alvoDate: null, todasAulas: bookings })
     : { aberta: true, proxima: null, motivo: "" };
   const tetoEscala = tipo === "escala"
     ? tetoMensalEscala(client, t, bookings)
@@ -3820,6 +3820,7 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
     invoices: invoices.map(comEncargos),
     regras: {
       tipo,                                  // "fixo" | "escala" | null
+      weeklyFreq: client.weeklyFreq,
       janela,                                // { aberta, proxima, motivo }
       tetoEscala,                            // { competencia, limite, marcadas, restantes, atingido }
     },

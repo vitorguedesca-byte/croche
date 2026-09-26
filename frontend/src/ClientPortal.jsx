@@ -6,7 +6,7 @@ import { toast as toastErro, confirmModal } from "./toast.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
-import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, compPorExtenso, PLANOS_MENSALISTA, valorPlanoMeta, aulasSeChocam } from "./helpers.js";
+import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, compPorExtenso, PLANOS_MENSALISTA, valorPlanoMeta, aulasSeChocam, janelaEscala } from "./helpers.js";
 
 const CPF_KEY = "fqc_portal_cpf";
 // WhatsApp da escola: (31) 98496-6403 — sem o "55", que o waLink já acrescenta
@@ -377,6 +377,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
         )}
 
         <MiniAgenda
+          cliente={cliente}
           bookings={ativos}
           available={data.available}
           unit={data.client && data.client.unit}
@@ -561,7 +562,7 @@ function PaymentScreen({ booking, phone, meta, onBack, onPago, flash }) {
 /* Calendário do portal: consulta e marcação no mesmo lugar.
    Cada dia mostra se ela tem aula e se sobrou vaga; ao tocar no dia, aparecem
    as aulas dela e os horários livres para marcar. */
-function MiniAgenda({ bookings, available, unit, meta, regras, podeMarcarNormal, busy, modo, saldo, onBook, onSairModo }) {
+function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarcarNormal, busy, modo, saldo, onBook, onSairModo }) {
   const t = todayISO();
   const [off, setOff] = useState(0);
   const [dia, setDia] = useState(null);
@@ -571,8 +572,8 @@ function MiniAgenda({ bookings, available, unit, meta, regras, podeMarcarNormal,
   // horários a partir das 18h nem chegam aqui — o backend já não os manda.
   // Reposição e aula extra são sempre escolhas unitárias, fora da grade de 12 meses.
   const foraDoPlano = repondo || extrando;
-  const janela = (regras && regras.janela) || { aberta: true, motivo: "" };
-  const janelaFechada = !foraDoPlano && regras && regras.tipo === "escala" && !janela.aberta;
+  const janelaGeral = (regras && regras.janela) || { aberta: true, motivo: "" };
+  const janelaFechadaGeral = !foraDoPlano && regras && regras.tipo === "escala" && !janelaGeral.aberta;
 
   const aulasPorDia = {};
   bookings.forEach((b) => { (aulasPorDia[b.date] = aulasPorDia[b.date] || []).push(b); });
@@ -630,9 +631,14 @@ function MiniAgenda({ bookings, available, unit, meta, regras, podeMarcarNormal,
   const limiteMes = tetoEscala?.limite || 4;
   const tetoAtingido = !foraDoPlano && regras && regras.tipo === "escala" && marcadasNoMes >= limiteMes;
 
+  const freqEscala = regras?.weeklyFreq || cliente?.weeklyFreq || (tetoEscala?.limite === 8 ? 2 : 1);
+  const janelaDoDia = dia && !foraDoPlano && regras && regras.tipo === "escala"
+    ? janelaEscala(bookings, t, { weeklyFreq: freqEscala, alvoDate: dia, todasAulas: bookings })
+    : { aberta: true, motivo: "" };
+
   const bloqueioDoDia = dia
-    ? janelaFechada
-      ? janela.motivo
+    ? !janelaDoDia.aberta
+      ? janelaDoDia.motivo
       : tetoAtingido
         ? `Você já atingiu o limite de ${limiteMes} aulas do seu plano no mês de ${compPorExtenso(compDia)}. Para agendar mais aulas, adquira uma Aula Extra! 💚`
         : gradeJaReservada
@@ -669,9 +675,9 @@ function MiniAgenda({ bookings, available, unit, meta, regras, podeMarcarNormal,
         </div>
       )}
 
-      {janelaFechada && (
+      {janelaFechadaGeral && (
         <div className="mini-repo-aviso" style={{ borderLeftColor: "var(--warn)" }}>
-          🗓️ {janela.motivo}
+          🗓️ {janelaGeral.motivo}
         </div>
       )}
 

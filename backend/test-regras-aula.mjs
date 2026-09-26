@@ -119,6 +119,46 @@ ok(c(escala2x, { date: "2026-09-01", time: "09:00" }, {
   hoje: "2026-08-27", // quinta: dia da última aula
 }).ok === true, "escala 2x: próxima semana liberada a partir da última aula");
 
+// 6. Sábado após as duas aulas da semana (caso Débora): consulta geral com janela aberta
+ok(janelaEscala([], "2026-09-26", {
+  weeklyFreq: 2,
+  alvoDate: null,
+  todasAulas: [
+    { date: "2026-09-22", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+    { date: "2026-09-23", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+  ],
+}).aberta === true, "escala 2x: consulta geral aberta no sábado quando a próxima semana tem vagas");
+
+// 7. Sábado após as duas aulas: marcar na terça da próxima semana (29/09) passa com sucesso!
+ok(c(escala2x, { date: "2026-09-29", time: "15:00" }, {
+  aulasAtivas: [],
+  todasAulas: [
+    { date: "2026-09-22", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+    { date: "2026-09-23", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+  ],
+  hoje: "2026-09-26",
+}).ok === true, "escala 2x: terça da próxima semana liberada para marcação");
+
+// 8. Tentar marcar para o sábado da semana atual (26/09) quando já fez 2 aulas: bloqueado!
+ok(c(escala2x, { date: "2026-09-26", time: "09:00" }, {
+  aulasAtivas: [],
+  todasAulas: [
+    { date: "2026-09-22", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+    { date: "2026-09-23", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+  ],
+  hoje: "2026-09-26",
+}).codigo === "escala", "escala 2x: 3ª aula na mesma semana atual é bloqueada");
+
+// 9. Tentar marcar 2 semanas à frente: bloqueado!
+ok(c(escala2x, { date: "2026-10-06", time: "09:00" }, {
+  aulasAtivas: [],
+  todasAulas: [
+    { date: "2026-09-22", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+    { date: "2026-09-23", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
+  ],
+  hoje: "2026-09-26",
+}).codigo === "escala", "escala 2x: 2 semanas à frente bloqueada");
+
 console.log("\n— teto mensal da escala (120,00 = 4 aulas / 200,00 = 8 aulas) —");
 const escala120 = { plan: "mensalista", mensalistaTipo: "escala", weeklyFreq: 1, monthlyValue: 120 };
 const escala200 = { plan: "mensalista", mensalistaTipo: "escala", weeklyFreq: 2, monthlyValue: 200 };
