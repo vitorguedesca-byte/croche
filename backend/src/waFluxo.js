@@ -180,6 +180,18 @@ export function planoEscolhido(rid, body) {
   return FREQS_WA.includes(n) ? n : null;
 }
 
+/* Resposta à pergunta "tem código de promoção?": o botão, ou o que ela
+   digitou. "sim" | "nao" | null (não entendi). */
+export function respostaCupom(rid, body) {
+  const id = String(rid || "");
+  if (id === "cupom:sim") return "sim";
+  if (id === "cupom:nao") return "nao";
+  const txt = String(body || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (/^(nao|n|nao tenho|nenhum|sem codigo|sem cupom)\b/.test(txt)) return "nao";
+  if (/^(sim|s|tenho|tenho sim)\b/.test(txt)) return "sim";
+  return null;
+}
+
 /* "2º horário", "3ª aula": a posição do que ela está escolhendo agora. */
 export const ordinal = (n, genero = "o") => `${n}${genero === "a" ? "ª" : "º"}`;
 

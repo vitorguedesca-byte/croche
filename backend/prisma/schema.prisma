@@ -263,7 +263,7 @@ model Testimonial {
 
 model WaConversation {
   phone     String   @id @db.VarChar(20) // wa_id normalizado
-  // start|unit|slot|confirm|cpf|name|nameok|wpp|email|nasc|plano|cobranca|done
+  // start|unit|slot|confirm|cpf|name|nameok|wpp|email|nasc|plano|slot2|cupom|cupomcod|cobranca|done
   step      String   @default("start") @db.VarChar(20)
   unit      String?  @db.VarChar(60)
   slotId    Int? // horário escolhido (aguardando confirmação/nome)
@@ -275,6 +275,13 @@ model WaConversation {
   // Horários da semana escolhidos ALÉM do 1º (JSON de slotIds), no plano 2x a
   // 4x. Guardados aqui porque a escolha leva uma mensagem por horário.
   extraSlots String @default("[]") @db.VarChar(100)
+  /* Código de promoção na conversa (campanhas, 01/10/2026). O robô só pergunta
+     quando há campanha aberta que sirva para ela:
+       null      → ainda não perguntou
+       "-"       → ela disse que não tem (ou desistiu do código)
+       "?CODIGO" → digitou e o código vale, aguardando ela confirmar
+       "CODIGO"  → confirmado: o Pix sai com o desconto */
+  voucher   String?  @db.VarChar(30)
   // CPF do pagador: o Sicredi exige para emitir a cobrança Pix. É também a
   // CHAVE de entrada da conversa — antes de marcar, o bot pergunta o CPF e
   // procura a ficha; quem já existe não preenche cadastro de novo.
@@ -392,6 +399,80 @@ model Settings {
      cada aluna é Booking.taxaMatricula — mudar este valor não reescreve o
      passado. */
   taxaMatricula    Float  @default(20)
+}
+
+/* Campanha promocional com código (voucher), criada pela Inêz no painel.
+
+   É um PLUS por cima do fluxo de pagamento, não um fluxo novo: o código só
+   muda QUANTO se cobra. A matrícula, o Pix, a grade e as mensalidades seguem
+   pelos mesmos caminhos de sempre. Os benefícios combinam entre si (uma mesma
+   campanha pode isentar a taxa E dar desconto de 3 meses E dar um brinde):
+
+   • isentaMatricula   → a taxa de matrícula sai do 1º pagamento
+   • desconto*         → desconto na mensalidade por `descontoMeses` meses. O 1º
+                         mês sai no próprio Pix da matrícula; os seguintes viram
+                         MonthlyPrice (origem "voucher") — o mesmo mecanismo da
+                         promoção manual, que acaba sozinha passada a competência
+   • aulaExperimental  → a aula AVULSA (1ª aula sem plano) sai por
+                         `valorExperimental` (0 = grátis)
+   • premio            → brinde/prêmio, só registrado; quem entrega é a escola
+
+   `limiteUsos` é o "os X primeiros": conta o uso RESERVADO (Pix gerado e ainda
+   no prazo) e o CONFIRMADO (pago). Reserva que expira devolve a vaga. */
+model Voucher {
+  id                Int      @id @default(autoincrement())
+  codigo            String   @unique @db.VarChar(20) // MAIÚSCULO, sem acento nem espaço
+  nome              String   @db.VarChar(120) // nome da campanha (só o painel vê)
+  descricao         String?  @db.VarChar(500) // texto que a aluna vê ao aplicar o código
+  // Quem pode usar: "novas" (matrícula / aula avulsa pelo site) | "alunas"
+  // (mensalidade de quem já estuda, pelo portal) | "todas"
+  publico           String   @default("novas") @db.VarChar(10)
+  isentaMatricula   Boolean  @default(false)
+  // "percentual" (% de desconto) | "valor" (R$ a menos) | "preco" (mensalidade sai por R$ X) | null = sem desconto
+  descontoTipo      String?  @db.VarChar(12)
+  descontoValor     Float?
+  descontoMeses     Int      @default(1) // quantos meses de mensalidade com desconto (1 = só o 1º)
+  aulaExperimental  Boolean  @default(false)
+  valorExperimental Float    @default(0) // preço da aula experimental; 0 = grátis
+  premio            String?  @db.VarChar(200) // ex.: "Kit de agulhas", "1 novelo"
+  planos            String   @default("[]") @db.VarChar(40) // JSON [1,2,...] — planos aceitos; [] = todos
+  unidade           String?  @db.VarChar(100) // null = todas as unidades
+  inicio            String?  @db.VarChar(10) // 'YYYY-MM-DD' — vale a partir de (inclusive)
+  fim               String?  @db.VarChar(10) // 'YYYY-MM-DD' — vale até (inclusive)
+  limiteUsos        Int?     // "os X primeiros"; null = sem limite
+  ativo             Boolean  @default(true) // pausar sem apagar
+  criadoPor         String?  @db.VarChar(60)
+  createdAt         DateTime @default(now())
+  usos              VoucherUso[]
+}
+
+/* Cada vez que um código foi usado. Guarda o suficiente para DESFAZER: os meses
+   que ganharam preço promocional e o preço que havia antes em cada um. */
+model VoucherUso {
+  id            Int      @id @default(autoincrement())
+  voucherId     Int
+  voucher       Voucher  @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  clientId      Int? // ficha da aluna (pode nascer depois do uso, na matrícula pelo site)
+  nome          String   @db.VarChar(120)
+  cpf           String?  @db.VarChar(14) // trava de 1 uso por pessoa antes de a ficha existir
+  // "matricula" (1º pagamento do plano) | "avulsa" (aula avulsa/experimental) | "mensalidade" (aluna atual)
+  contexto      String   @db.VarChar(12)
+  bookingId     Int? // reserva da matrícula / aula avulsa (sem FK: a reserva pode ser excluída)
+  invoiceId     Int? // mensalidade em que foi aplicado (aluna atual)
+  // reservado (aguardando o Pix) | confirmado (pago) | expirado (Pix não pago no prazo) | cancelado (pela escola)
+  status        String   @default("reservado") @db.VarChar(12)
+  descontoCents Int      @default(0) // quanto ela deixou de pagar no ato (1º pagamento / mensalidade aberta)
+  resumo        String?  @db.VarChar(300) // o que foi aplicado, em português
+  // JSON [{ comp, antes, depois }] em centavos — meses com preço do voucher (antes null = não havia preço especial)
+  meses         String   @default("[]") @db.VarChar(2000)
+  premioEntregueAt String? @db.VarChar(10)
+  confirmadoAt  String?  @db.VarChar(10)
+  createdAt     DateTime @default(now())
+
+  @@index([voucherId])
+  @@index([clientId])
+  @@index([bookingId])
+  @@index([invoiceId])
 }
 
 /* Toda mensagem que a ESCOLA inicia, com o que a Meta respondeu DEPOIS.

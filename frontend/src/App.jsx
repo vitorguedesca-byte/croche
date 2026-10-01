@@ -8,6 +8,7 @@ import { SlotForm, BookingForm, ClientForm } from "./modals.jsx";
 import ClienteApp from "./ClienteApp.jsx";
 import Config from "./Config.jsx";
 import Disparo from "./Disparo.jsx";
+import Campanhas from "./Campanhas.jsx";
 import { exportBookingsCsv } from "./exports.js";
 import ClientPortal from "./ClientPortal.jsx";
 import FirstClassBooking from "./FirstClassBooking.jsx";
@@ -43,6 +44,7 @@ const NAV = [
   { view: "disparo", ic: "📣", label: "Disparo WhatsApp" },
   { sep: "Financeiro" },
   { view: "financeiro", ic: "💰", label: "Financeiro" },
+  { view: "campanhas", ic: "🎟️", label: "Campanhas e códigos" },
   { sep: "Site" },
   { view: "depoimentos", ic: "⭐", label: "Depoimentos" },
   { sep: "Sistema" },
@@ -64,6 +66,7 @@ const TITLES = {
   financeiro:   ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
   mensalistas:  ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
   recebimentos: ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
+  campanhas:    ["Campanhas e códigos", "Vouchers de promoção: isenção, desconto, aula experimental e prêmios"],
   depoimentos:  ["Depoimentos",   "Gerencie os depoimentos exibidos no site"],
   config:       ["Configurações", "Padrões do sistema, unidades e profissionais"],
 };
@@ -160,6 +163,7 @@ export default function App() {
     financeiro: Financeiro,
     mensalistas: Financeiro,
     recebimentos: Financeiro,
+    campanhas: Campanhas,
     depoimentos: Depoimentos,
     config: Config,
   }[view] || Dashboard;

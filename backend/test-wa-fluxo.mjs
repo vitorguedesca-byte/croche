@@ -6,6 +6,7 @@
    cadastro por causa de um formato de data. */
 
 import {
+  respostaCupom,
   CONVERSA_EXPIRA_H,
   WA_ANTECEDENCIA_MIN,
   conversaExpirou,
@@ -178,6 +179,12 @@ ok(horariosExtrasPossiveis(s1, [t4, t6, turmas[2]], turmas, regras).length === 0
 
 console.log("\n— texto dos horários —");
 ok(listaComE(["A"]) === "A" && listaComE(["A", "B"]) === "A e B" && listaComE(["A", "B", "C"]) === "A, B e C", "A / A e B / A, B e C");
+
+console.log("\n— código de promoção —");
+ok(respostaCupom("cupom:sim", "") === "sim" && respostaCupom("cupom:nao", "") === "nao", "botões sim / não");
+ok(respostaCupom("", "Não tenho") === "nao" && respostaCupom("", "nao") === "nao", "digitado: não tenho / nao");
+ok(respostaCupom("", "Tenho sim") === "sim" && respostaCupom("", "sim") === "sim", "digitado: tenho sim / sim");
+ok(respostaCupom("", "SIMPLES10") === null && respostaCupom("", "NATAL") === null, "código digitado não vira sim/não");
 
 console.log(falhas ? `\n${falhas} caso(s) falharam.` : "\nTodos os casos passaram.");
 process.exit(falhas ? 1 : 0);

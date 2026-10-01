@@ -302,11 +302,56 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const [toast, setToast] = useState("");
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 3800); };
 
+  /* Código de promoção (campanha da escola). A prévia vem do servidor — é lá
+     que a conta é feita — e é refeita quando ela troca de plano, porque o
+     desconto depende do plano. A vaga na campanha só é ocupada ao gerar o Pix. */
+  const [codigo, setCodigo] = useState("");
+  const [voucher, setVoucher] = useState(null); // { codigo, beneficios, descricao, pagamento }
+  const [erroVoucher, setErroVoucher] = useState("");
+  const [validando, setValidando] = useState(false);
+
   const valorPlano = (f) => valorPlanoMeta(meta, f);
   const valorAvulsa = meta.valorAvulsa ?? 40;
   const mensalidade = isAvulso ? valorAvulsa : valorPlano(freq);
   const taxa = isAvulso ? 0 : Math.max(0, Number(meta.taxaMatricula) || 0);
-  const total = isAvulso ? valorAvulsa : (mensalidade + taxa);
+  const pv = voucher?.pagamento || null; // 1º pagamento com o código, pelo servidor
+  const mensalidadeHoje = pv && !isAvulso ? pv.mensalidade : mensalidade;
+  const taxaHoje = pv && !isAvulso ? pv.taxa : taxa;
+  const total = pv ? pv.total : isAvulso ? valorAvulsa : (mensalidade + taxa);
+
+  const validarCodigo = async (cod, mod = modalidade, silencioso = false) => {
+    const c = String(cod || "").trim();
+    if (!c) return;
+    const avulsa = mod === "avulso";
+    const cpfDig = cpf.replace(/\D/g, "");
+    setValidando(true); setErroVoucher("");
+    try {
+      const r = await api.vouchers.validar({
+        codigo: c, modalidade: avulsa ? "avulso" : "mensal",
+        weeklyFreq: avulsa ? null : (Number(mod.replace("mensal", "")) || 1),
+        unit: slot?.unit || unit, cpf: cpfDig,
+      });
+      setVoucher(r);
+      if (!silencioso) flash("Código aplicado! 🎟️");
+    } catch (e) {
+      /* Código só de aula experimental com um plano mensal escolhido: em vez
+         de só recusar, troca para a opção AVULSO, que é onde ele vale. */
+      if (!avulsa && /AVULSO/.test(e.message || "")) {
+        try {
+          const r = await api.vouchers.validar({ codigo: c, modalidade: "avulso", unit: slot?.unit || unit, cpf: cpfDig });
+          setModalidade("avulso"); setExtras([]); setVoucher(r);
+          flash("Este código é da aula experimental — mudamos para a opção AVULSO. 🎟️");
+          return;
+        } catch { /* fica o erro original */ }
+      }
+      setVoucher(null);
+      setErroVoucher(e.message || "Não consegui conferir o código.");
+    } finally { setValidando(false); }
+  };
+  // trocou de plano com um código aplicado: refaz a conta para o plano novo
+  useEffect(() => {
+    if (voucher && !booking) validarCodigo(voucher.codigo, modalidade, true);
+  }, [modalidade]);
 
   const loadAvail = async (u) => {
     setLoading(true);
@@ -347,9 +392,18 @@ export default function FirstClassBooking({ onBack, fromSite }) {
         value: isAvulso ? valorAvulsa : undefined,
         weeklyFreq: isAvulso ? null : freq,
         mensalistaTipo: isAvulso ? null : tipo,
+        voucher: voucher?.codigo || undefined,
       });
       if (!booking) window.metaTrack?.("Lead", { content_name: isAvulso ? "aula avulsa" : "matricula", value: total, currency: "BRL" }, `lead-${b.id}`);
       setBooking(b);
+      /* O código zerou o pagamento: o servidor já confirmou a vaga (não existe
+         Pix de R$ 0), então vai direto para o "tudo certo". */
+      if (b.pago) {
+        setInscricao(b.matricula || null);
+        setStep("done");
+        flash("Vaga confirmada! 🎉");
+        return;
+      }
       try {
         const inv = await api.createInvoice(b.id, { cpf: cpf.trim(), name: name.trim(), email: email.trim() });
         setPix({ code: inv.pixCode || null });
@@ -415,6 +469,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
     setStep("unit"); setUnit(null); setSlot(null); setExtras([]);
     setName(""); setPhone(""); setCpf(""); setEmail(""); setBirthday("");
     setModalidade("mensal1"); setTipo("escala"); setBooking(null); setInscricao(null); setPix(null);
+    setCodigo(""); setVoucher(null); setErroVoucher("");
     loadAvail();
   };
 
@@ -531,7 +586,8 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 onModalidadeChange={() => setExtras([])}
                 valorAvulsa={valorAvulsa}
                 valorDoPlano={valorPlano}
-                taxa={taxa}
+                // com código que isenta a matrícula, os textos do plano já saem sem a taxa
+                taxa={taxaHoje}
               />
 
               {!isAvulso && freq > 1 && (
@@ -545,22 +601,60 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 />
               )}
 
+              {/* Código de promoção: antes do resumo, para o resumo já sair com o desconto */}
+              <div style={{ marginTop: "1rem" }}>
+                {voucher ? (
+                  <div style={{ padding: ".85rem 1rem", borderRadius: 10, border: "2px solid var(--green-deep)", background: "rgba(28,94,51,.06)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: ".5rem", alignItems: "baseline" }}>
+                      <b style={{ color: "var(--green-deep)" }}>🎟️ Código {voucher.codigo} aplicado!</b>
+                      <button type="button" className="pt-link" style={{ margin: 0, fontSize: ".85rem" }}
+                        onClick={() => { setVoucher(null); setCodigo(""); setErroVoucher(""); }}>Remover</button>
+                    </div>
+                    {voucher.descricao && <div style={{ fontSize: ".92rem", marginTop: ".25rem" }}>{voucher.descricao}</div>}
+                    <ul style={{ margin: ".35rem 0 0 1.1rem", fontSize: ".92rem" }}>
+                      {voucher.beneficios.map((t) => <li key={t}>{t}</li>)}
+                    </ul>
+                  </div>
+                ) : (
+                  <details open={!!codigo || !!erroVoucher}>
+                    <summary style={{ cursor: "pointer", fontWeight: 600, color: "var(--green-deep)" }}>🎟️ Tenho um código de promoção</summary>
+                    <div style={{ display: "flex", gap: ".5rem", marginTop: ".5rem" }}>
+                      <input className="pt-input" style={{ textAlign: "left", fontSize: "1.05rem", textTransform: "uppercase", margin: 0 }}
+                        value={codigo} onChange={(e) => setCodigo(e.target.value)} placeholder="Digite o código"
+                        onKeyDown={(e) => { if (e.key === "Enter") validarCodigo(codigo); }} />
+                      <button type="button" className="pt-btn pt-btn-out" style={{ width: "auto", margin: 0, padding: "0 1.1rem" }}
+                        onClick={() => validarCodigo(codigo)} disabled={validando || !codigo.trim()}>
+                        {validando ? "…" : "Aplicar"}
+                      </button>
+                    </div>
+                    {erroVoucher && <div className="pt-err" style={{ marginTop: ".5rem" }}>{erroVoucher}</div>}
+                  </details>
+                )}
+              </div>
+
               {/* O resumo do que vai ser cobrado fica ANTES do botão */}
-              {!isAvulso && taxa > 0 ? (
+              {!isAvulso && (taxa > 0 || pv) ? (
                 <div className="pt-pix" style={{ marginTop: "1rem" }}>
-                  <div className="pt-pix-row"><span>1ª mensalidade ({freq}x por semana)</span><b>{money(mensalidade)}</b></div>
-                  <div className="pt-pix-row"><span>Taxa de matrícula (uma vez só)</span><b>{money(taxa)}</b></div>
+                  <div className="pt-pix-row"><span>1ª mensalidade ({freq}x por semana)</span>
+                    <b>{pv && mensalidadeHoje !== mensalidade ? <><s style={{ color: "var(--muted)", fontWeight: 400 }}>{money(mensalidade)}</s> {money(mensalidadeHoje)}</> : money(mensalidade)}</b></div>
+                  {taxa > 0 && (
+                    <div className="pt-pix-row"><span>Taxa de matrícula (uma vez só)</span>
+                      <b>{pv && taxaHoje === 0 ? <><s style={{ color: "var(--muted)", fontWeight: 400 }}>{money(taxa)}</s> isenta 🎟️</> : money(taxaHoje)}</b></div>
+                  )}
                   <div className="pt-pix-row"><span><b>Total a pagar hoje</b></span><b>{money(total)}</b></div>
                 </div>
               ) : isAvulso ? (
                 <div className="pt-pix" style={{ marginTop: "1rem" }}>
-                  <div className="pt-pix-row"><span>🧺 Aula Avulsa</span><b>{money(total)}</b></div>
+                  <div className="pt-pix-row"><span>🧺 Aula {pv && pv.total < valorAvulsa ? "experimental" : "Avulsa"}</span>
+                    <b>{pv && pv.total < valorAvulsa ? <><s style={{ color: "var(--muted)", fontWeight: 400 }}>{money(valorAvulsa)}</s> {pv.total === 0 ? "grátis 🎟️" : money(pv.total)}</> : money(total)}</b></div>
                   <div className="pt-pix-row"><span>Taxa de matrícula</span><b>R$ 0,00 (não cobrada)</b></div>
                   <div className="pt-pix-row"><span><b>Total a pagar hoje</b></span><b>{money(total)}</b></div>
                 </div>
               ) : null}
 
-              <button className="pt-btn" onClick={gerarPix} disabled={busy}>{busy ? "Gerando…" : `Gerar Pix de ${money(total)} →`}</button>
+              <button className="pt-btn" onClick={gerarPix} disabled={busy || validando}>
+                {busy ? "Gerando…" : total === 0 ? "Confirmar minha vaga →" : `Gerar Pix de ${money(total)} →`}
+              </button>
             </>) : (<>
               <div className="pt-pay" style={{ borderLeftColor: "var(--green-mid)" }}>
                 <div className="pt-pay-opt-h">💠 Pague com Pix</div>
@@ -584,7 +678,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                   <>
                     🧵 Seu plano: <b>{tipo === "escala" ? "Escala" : "Fixo"} · {freq}x por semana</b> — {money(mensalidade)}/mês.<br />
                     {taxa > 0
-                      ? <>Este Pix é a mensalidade deste mês ({money(mensalidade)}) mais a taxa de matrícula ({money(taxa)}). A <b>próxima</b> vence no mês que vem, no mesmo dia de hoje — e é só {money(mensalidade)}.</>
+                      ? <>Este Pix é a mensalidade deste mês ({money(mensalidadeHoje)}){taxaHoje > 0 ? <> mais a taxa de matrícula ({money(taxaHoje)})</> : <> — a taxa de matrícula ficou isenta pelo código</>}. A <b>próxima</b> vence no mês que vem, no mesmo dia de hoje.</>
                       : <>Este Pix é a mensalidade deste mês. A <b>próxima</b> só vence no mês que vem, no mesmo dia de hoje.</>}
                   </>
                 )}
@@ -676,7 +770,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
               <p><b>{isAvulso ? "Sua aula avulsa" : "Seu plano"}</b></p>
               {isAvulso ? (<>
                 <p>🧺 <b>Aula Avulsa individual</b> — {money(valorAvulsa)}.</p>
-                <p>✅ Sua aula <b>já está confirmada e paga</b>.</p>
+                <p>✅ Sua aula <b>já está confirmada{total > 0 ? " e paga" : ""}</b>.{voucher && total === 0 ? <> Cortesia do código <b>{voucher.codigo}</b>. 🎟️</> : null}</p>
                 <p>⚠️ <b>OBS:</b> Lembramos que não devolveremos o valor da aula avulsa em caso de falta.</p>
               </>) : (<>
                 <p>🧵 <b>{tipo === "escala" ? "Escala" : "Fixo"} · {freq}x por semana</b> — {money(inscricao?.valorMensal ?? mensalidade)}/mês.</p>
@@ -692,8 +786,9 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 {/* A regra (Vitor, 01/09/2026): desistindo depois da 1ª aula, a
                     MENSALIDADE volta inteira; a taxa de matrícula não. O texto
                     antigo dizia o contrário do topo desta mesma página. */}
-                {taxa > 0
-                  ? <p>💬 Se decidir não continuar depois da primeira aula, é só avisar: devolvemos a mensalidade de {money(inscricao?.valorMensal ?? mensalidade)} e cancelamos as próximas cobranças. Só a taxa de matrícula ({money(taxa)}) não é devolvida.</p>
+                {voucher && <p>🎟️ Código <b>{voucher.codigo}</b>: {voucher.beneficios.join(" · ")}.</p>}
+                {taxaHoje > 0
+                  ? <p>💬 Se decidir não continuar depois da primeira aula, é só avisar: devolvemos a mensalidade de {money(mensalidadeHoje)} e cancelamos as próximas cobranças. Só a taxa de matrícula ({money(taxaHoje)}) não é devolvida.</p>
                   : <p>💬 Se decidir não continuar depois da primeira aula, é só avisar: devolvemos a mensalidade e cancelamos as próximas cobranças.</p>}
               </>)}
             </div>

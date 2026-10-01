@@ -148,6 +148,22 @@ export const api = {
     definirAulas: (date, unit, hasClasses) => req("POST", "/api/feriados-dia", { date, unit, hasClasses }),
   },
 
+  /* Campanhas com código (voucher). `validar` é a prévia pública da tela de
+     matrícula — só confere, não ocupa vaga na campanha. Quem ocupa é a criação
+     da reserva, com `voucher` no corpo de createBooking. */
+  vouchers: {
+    list: () => req("GET", "/api/vouchers"),
+    create: (data) => req("POST", "/api/vouchers", data),
+    update: (id, data) => req("PATCH", `/api/vouchers/${id}`, data),
+    remove: (id) => req("DELETE", `/api/vouchers/${id}`),
+    usos: (id) => req("GET", `/api/vouchers/${id}/usos`),
+    cancelarUso: (usoId) => req("POST", `/api/vouchers/usos/${usoId}/cancelar`),
+    premio: (usoId, entregue) => req("POST", `/api/vouchers/usos/${usoId}/premio`, { entregue }),
+    // a escola aplica o código na mensalidade da aluna (ela mandou pelo WhatsApp)
+    aplicarNaAluna: (clientId, codigo) => req("POST", `/api/clients/${clientId}/voucher`, { codigo }),
+    validar: (data) => req("POST", "/api/vouchers/validar", data),
+  },
+
   availableSlots: (unit) => req("GET", `/api/slots/available${unit ? `?unit=${encodeURIComponent(unit)}` : ""}`),
 
   resetPin: (clientId) => req("DELETE", `/api/clients/${clientId}/pin`),
@@ -200,5 +216,7 @@ export const api = {
     // Consultar na API Pix do Sicredi se a reserva ou a mensalidade foi paga
     checkBookingPay: (phone, bookingId) => req("POST", `/api/portal/${encodeURIComponent(phone)}/booking/${bookingId}/check-pay`),
     checkInvoicePay: (phone, invoiceId) => req("POST", `/api/portal/${encodeURIComponent(phone)}/invoice/${invoiceId}/check-pay`),
+    // código de promoção na mensalidade (aluna que já estuda)
+    voucher: (phone, codigo) => req("POST", `/api/portal/${encodeURIComponent(phone)}/voucher`, { codigo }),
   },
 };

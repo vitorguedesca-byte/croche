@@ -56,14 +56,20 @@ Agradecemos pela compreensão e parceria. Essas regras nos ajudam a manter um am
    Com mais de uma, sai a lista — antes a mensagem citava só a 1ª aula, e a
    aluna de 3x ficava sem saber se os outros horários tinham entrado.
    `repetem`: aluna de horário fixo — os horários valem toda semana. */
-export const textoMatriculaConfirmada = ({ nome, unidade, quando, aulas = [], repetem = false, taxa, portalUrl, isAvulso }) => {
+/* `gratis`: o código de promoção zerou o pagamento — não houve Pix, então
+   "recebemos o seu pagamento" seria mentira. */
+export const textoMatriculaConfirmada = ({ nome, unidade, quando, aulas = [], repetem = false, taxa, portalUrl, isAvulso, gratis = false }) => {
   const urlPortal = portalUrl || WA_PORTAL_URL;
+  const primeiro = String(nome || "").split(" ")[0];
+  const abertura = gratis
+    ? `Tudo certo, ${primeiro}! 🎟️ Sua vaga foi confirmada pelo código de promoção.`
+    : null;
   const linhaQuando = aulas.length > 1
     ? `🗓️ Suas aulas desta semana:\n${aulas.map((a) => `• ${a}`).join("\n")}` +
       (repetem ? `\n\nEsses horários se repetem toda semana — já estão reservados para você.` : "")
     : `🗓️ ${quando}`;
   if (isAvulso) {
-    return `Obrigada, ${String(nome || "").split(" ")[0]}! 🙏 Recebemos o seu pagamento da *Aula Avulsa*.
+    return `${abertura || `Obrigada, ${primeiro}! 🙏 Recebemos o seu pagamento da *Aula Avulsa*.`}
 
 *Confirmação de agendamento*
 📍 ${unidade}
@@ -71,11 +77,11 @@ export const textoMatriculaConfirmada = ({ nome, unidade, quando, aulas = [], re
 
 Sua vaga está garantida! 💚
 
-_OBS: não devolveremos o valor da aula avulsa em caso de falta._
+${gratis ? "_Se não puder vir, avise por aqui para liberarmos a vaga para outra aluna._" : "_OBS: não devolveremos o valor da aula avulsa em caso de falta._"}
 
 Seja muito bem-vinda ao ateliê! Se você amar a aula e quiser continuar conosco como mensalista, converse com a professora ou nos avise por aqui! 🧶`;
   }
-  return `Obrigada, ${String(nome || "").split(" ")[0]}! 🙏 Recebemos o seu pagamento.
+  return `${abertura || `Obrigada, ${primeiro}! 🙏 Recebemos o seu pagamento.`}
 
 *Confirmação de agendamento*
 📍 ${unidade}
@@ -111,13 +117,16 @@ ${REGRAS_REPOSICAO}`;
    O QR do Pix traz o total, e um número no texto diferente do número no app do
    banco é o que trava a aluna na hora de pagar — ela para para conferir, e
    quem para não paga. Discriminar também deixa claro que a taxa é uma vez só. */
-export const textoCobrancaReserva = ({ nome, unidade, quando, valor, mensalidade, taxa, minutos, isAvulso }) => {
+/* `cupom` (opcional): a linha do código de promoção aplicado, já pronta —
+   ex.: "Código OUTUBRO10: Isenção da taxa de matrícula". */
+export const textoCobrancaReserva = ({ nome, unidade, quando, valor, mensalidade, taxa, minutos, isAvulso, cupom = "" }) => {
+  const linhaCupom = cupom ? `🎟️ ${cupom}\n` : "";
   if (isAvulso) {
     return `Quase lá, ${String(nome || "").split(" ")[0]}! 💚
 
 📍 ${unidade}
 🗓️ ${quando}
-🧺 *Aula Avulsa: ${valor}*
+${linhaCupom}🧺 *Aula Avulsa: ${valor}*
 
 _OBS: não devolveremos o valor da aula avulsa em caso de falta._
 
@@ -130,7 +139,7 @@ Copie o código Pix abaixo e pague pelo app do seu banco. Assim que o pagamento 
 
 📍 ${unidade}
 🗓️ ${quando}
-${taxa
+${linhaCupom}${taxa
   ? `💰 1ª mensalidade: ${mensalidade}\n🎟️ Taxa de matrícula (uma vez só): ${taxa}\n*Total a pagar: ${valor}*`
   : `💰 1ª mensalidade: ${valor}`}
 
@@ -202,6 +211,8 @@ export const PENDENCIA_POR_PASSO = {
   email: "no seu e-mail",
   nasc: "na sua data de nascimento",
   plano: "na escolha do plano",
+  cupom: "na pergunta sobre o código de promoção",
+  cupomcod: "no código de promoção",
 };
 
 /* Boas-vindas. É a primeira frase que a escola diz para alguém que talvez nunca

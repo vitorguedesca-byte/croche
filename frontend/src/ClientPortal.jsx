@@ -940,6 +940,10 @@ function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago 
   const [verificando, setVerificando] = useState(false);
   const [erro, setErro] = useState("");
   const [verHistorico, setVerHistorico] = useState(false);
+  // código de promoção da escola, aplicado na mensalidade
+  const [codigo, setCodigo] = useState("");
+  const [aplicando, setAplicando] = useState(false);
+  const [erroCodigo, setErroCodigo] = useState("");
 
   const t = todayISO();
   const lista = invoices || [];
@@ -1006,6 +1010,22 @@ function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago 
     } finally { setGerando(false); }
   };
 
+  /* O valor muda no servidor (e o QR antigo deixa de valer): descarta o Pix
+     reemitido nesta tela e recarrega, para a conta e o QR saírem do valor novo. */
+  const aplicarCodigo = async () => {
+    if (!codigo.trim()) return;
+    setAplicando(true); setErroCodigo("");
+    try {
+      const r = await api.portal.voucher(phone, codigo.trim());
+      setPixNovo({});
+      setCodigo("");
+      flash(`Código aplicado! 🎟️ ${(r.beneficios || []).join(" · ")}`);
+      onPago && onPago();
+    } catch (e) {
+      setErroCodigo(e.message || "Não consegui aplicar o código.");
+    } finally { setAplicando(false); }
+  };
+
   const atrasada = !!atual && atual.dueDate < t;
   const diasAtraso = atrasada ? diasEntre(atual.dueDate, t) : 0;
   const original = atual ? atual.amountCents / 100 : 0;
@@ -1063,6 +1083,25 @@ function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago 
         <div className="pt-sub2" style={{ marginTop: ".5rem" }}>
           Você tem <b>{abertas.length} mensalidades em aberto</b>. Comece por esta, a mais antiga.
         </div>
+      )}
+
+      {cliente.plan === "mensalista" && !kiosk && (
+        <details className="pt-pix-det" open={!!erroCodigo}>
+          <summary>🎟️ Tenho um código de promoção</summary>
+          <div style={{ display: "flex", gap: ".5rem", marginTop: ".5rem" }}>
+            <input className="pt-input" style={{ textAlign: "left", fontSize: "1rem", textTransform: "uppercase", margin: 0 }}
+              value={codigo} onChange={(e) => setCodigo(e.target.value)} placeholder="Digite o código"
+              onKeyDown={(e) => { if (e.key === "Enter") aplicarCodigo(); }} />
+            <button type="button" className="pt-btn pt-btn-out" style={{ width: "auto", margin: 0, padding: "0 1rem" }}
+              onClick={aplicarCodigo} disabled={aplicando || !codigo.trim()}>
+              {aplicando ? "…" : "Aplicar"}
+            </button>
+          </div>
+          {erroCodigo && <div className="pt-err" style={{ marginTop: ".5rem" }}>{erroCodigo}</div>}
+          <p className="pt-hint" style={{ marginTop: ".4rem" }}>
+            O desconto entra na mensalidade em aberto{atual ? "" : " (ou na próxima)"} e nos meses da promoção. Cada código vale uma vez por aluna.
+          </p>
+        </details>
       )}
 
       {atual && (pixCode ? (<>

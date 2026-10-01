@@ -48,6 +48,19 @@ import {
   recusaFeriado,
 } from "./feriados.js";
 import { padronizarNome } from "./nomes.js";
+import {
+  normalizarCodigo,
+  motivoRecusa,
+  primeiroPagamentoComVoucher,
+  aplicarDesconto,
+  mesesSeguintes,
+  limparCampanha,
+  descreverBeneficios,
+  situacaoCampanha,
+  planosDe,
+  temDesconto,
+  STATUS_QUE_CONTAM,
+} from "./vouchers.js";
 import { undoManager } from "./undo.js";
 import {
   PENDENCIA_POR_PASSO,
@@ -91,6 +104,7 @@ import {
   ordinal,
   horariosExtrasPossiveis,
   listaComE,
+  respostaCupom,
 } from "./waFluxo.js";
 
 // pasta de fotos de depoimentos (servida estaticamente pelo Vite via frontend/public)
@@ -144,6 +158,10 @@ const PUBLIC_API = [
   ["POST", /^\/api\/bookings\/\d+\/(invoice|pay)$/],
   ["POST", /^\/api\/auth\/(check|set-pin|login)$/],
   [null, /^\/api\/portal\//],
+  /* Prévia do código de promoção na tela pública de matrícula. Só CONSULTA
+     (não reserva vaga da campanha) e tem limite de tentativas por IP — ver
+     /api/vouchers/validar. Quem reserva é a criação da reserva. */
+  ["POST", /^\/api\/vouchers\/validar$/],
   ["GET", /^\/api\/testimonials$/],
   ["GET", /^\/api\/settings$/],
   [null, /^\/api\/wa\/webhook$/],
@@ -1866,6 +1884,18 @@ app.post(
         });
     }
 
+    /* Código de promoção (voucher): só na matrícula / aula avulsa pela tela
+       pública, numa marcação única. Aqui só se localiza a campanha; quem
+       confere as regras e ocupa a vaga dela é reservarUsoVoucher, logo antes
+       de a reserva nascer — depois de todas as recusas de horário. */
+    let voucher = null, usoVoucher = null, pagamentoVoucher = null;
+    if (normalizarCodigo(b.voucher)) {
+      if (!b.firstClass || replicando)
+        return res.status(400).json({ error: "O código de promoção vale na matrícula pelo site. 💚" });
+      voucher = await buscarVoucher(b.voucher);
+      if (!voucher) return res.status(404).json({ error: "Código não encontrado. Confira se digitou certinho. 💚" });
+    }
+
     // Feriado numa marcação de data única: recusa, com o motivo escrito.
     if (!replicando && barrarFeriado(res, datas[0], unit)) return;
 
@@ -1952,7 +1982,32 @@ app.post(
       }
 
       const statusInicial = doPlano ? "confirmada" : "aguardando";
-      const valorBooking = ehMatricula
+      /* Com código, o 1º pagamento sai da conta da campanha (vouchers.js) —
+         sempre pela tabela de preços do servidor, nunca pelo `value` que veio
+         da tela. A vaga na campanha ("os X primeiros") é ocupada aqui. */
+      if (voucher && i === 0 && (ehMatricula || isAvulso)) {
+        pagamentoVoucher = primeiroPagamentoComVoucher(voucher, {
+          avulsa: isAvulso,
+          mensalidade: isAvulso ? 0 : valorDoPlano(freqEscolhida),
+          taxa: isAvulso ? 0 : taxaMatriculaAtual(),
+          valorAvulsa: Number(SETTINGS.valorAvulsa) || 40,
+        });
+        try {
+          usoVoucher = await reservarUsoVoucher(voucher,
+            { contexto: isAvulso ? "avulsa" : "matricula", freq: isAvulso ? null : freqEscolhida, unidade: slot.unit },
+            {
+              clientId: client?.id || null, nome: b.clientName, cpf: onlyDigits(b.cpf) || null,
+              contexto: isAvulso ? "avulsa" : "matricula",
+              descontoCents: pagamentoVoucher.descontoCents,
+              resumo: descreverBeneficios(voucher).join(" · ").slice(0, 300),
+            });
+        } catch (e) {
+          return res.status(e.code || 409).json({ error: e.message });
+        }
+      }
+      const valorBooking = pagamentoVoucher && i === 0
+        ? pagamentoVoucher.total
+        : ehMatricula
         ? valorPrimeiroPagamento(freqEscolhida)
         : isAvulso
         ? (Number(b.value) || Number(SETTINGS.valorAvulsa) || 40)
@@ -1971,7 +2026,8 @@ app.post(
           // como no agendamento em lote e na replicação da turma
           status: statusInicial,
           value: valorBooking,
-          taxaMatricula: taxa || null,
+          // com código, a taxa gravada é a que a campanha deixou (0 na isenção)
+          taxaMatricula: (pagamentoVoucher && i === 0 ? pagamentoVoucher.taxa : taxa) || null,
           paymentMethod: ehMatricula ? MARCA_MATRICULA : isAvulso ? "Aula Avulsa" : doPlano ? PGTO_PLANO : null,
           // Reservas pendentes de pagamento (portal, site, 1ª aula) recebem hold de 10 min
           holdUntil: (!painel && statusInicial === "aguardando") || ((ehMatricula || isAvulso) && statusInicial === "aguardando")
@@ -1982,6 +2038,9 @@ app.post(
       criadas.push(booking);
 
       if (!client) client = await ensureClient(b.clientName, b.phone, unit, [], b.cpf, b.email, b.firstClass, { birthday: b.birthday });
+      if (usoVoucher && i === 0) {
+        await prisma.voucherUso.update({ where: { id: usoVoucher.id }, data: { bookingId: booking.id, clientId: client?.id || null } });
+      }
       if (isAvulso && client) {
         /* Aluna avulsa de primeira aula: entra como LEAD dentro de ALUNOS,
            com plano "avulso" para exibir a legenda de aula avulsa. */
@@ -2025,6 +2084,18 @@ app.post(
       }
     }
 
+    /* O código zerou o 1º pagamento (aula experimental grátis, 1º mês grátis):
+       não há Pix a gerar — o Sicredi nem aceita cobrança de R$ 0. A reserva é
+       confirmada aqui pelo MESMO caminho da baixa do Pix (registrarMatriculaPaga
+       / registrarAulaAvulsaPaga), depois de os demais horários da semana já
+       existirem, para a matrícula confirmar todos e montar a grade. */
+    let matriculaGratis = null;
+    if (usoVoucher && pagamentoVoucher?.total === 0 && criadas[0]) {
+      const r = await confirmarReservaSemCobranca(criadas[0].id);
+      criadas[0] = r.booking;
+      matriculaGratis = r.matricula;
+    }
+
     /* Anúncios: a 1ª aula marcada pelo site é o "Lead" da campanha. O mesmo
        event_id sai do navegador (Pixel) em FirstClassBooking.jsx. */
     if (!painel && b.firstClass && criadas[0]) {
@@ -2040,7 +2111,10 @@ app.post(
     }
 
     // compatibilidade: sem replicação, devolve a marcação criada (como antes)
-    if (!replicando) return res.json(criadas[0]);
+    if (!replicando) {
+      if (usoVoucher && pagamentoVoucher?.total === 0) return res.json({ ...criadas[0], pago: true, matricula: matriculaGratis });
+      return res.json(criadas[0]);
+    }
     res.json({ created: criadas, pulos, feriados: feriadosPulados });
   })
 );
@@ -2176,6 +2250,14 @@ async function registrarMatriculaPaga(booking) {
     where: { id: c.id },
     data: { matriculaStatus: "paga", matriculaAt: pagoEm, status: "ativo" },
   });
+  /* Código de promoção usado nesta matrícula: confirma o uso e grava o preço da
+     campanha nos meses SEGUINTES — antes de converterEmMensalista, que gera a
+     próxima mensalidade logo abaixo e já precisa nascer com o desconto. Falha
+     aqui não pode travar a matrícula de quem pagou: vira aviso no log. */
+  const usoVoucher = await confirmarVoucherDaReserva(booking, atualizado).catch((e) => {
+    console.warn(`[voucher] ${atualizado.name}: matrícula paga, mas o código não foi confirmado — ${e.message}`);
+    return null;
+  });
   if (!atualizado.weeklyFreq || (atualizado.plan === "mensalista" && atualizado.matriculaStatus === "convertida")) return null;
   /* A grade de 12 meses sai de TODOS os horários desta matrícula — o da 1ª
      aula e os demais da semana (2x a 4x) — passados explicitamente. Antes só ia
@@ -2194,7 +2276,12 @@ async function registrarMatriculaPaga(booking) {
          fatura do mês tem que nascer com o valor da mensalidade, senão o
          financeiro da escola passa a mostrar R$ 20 a mais por aluna nova — e a
          devolução de quem desistir sairia errada junto. */
-      mensalidadePaga: { valor: mensalidadeDaReserva(booking), pagoEm, txid: booking.txid },
+      mensalidadePaga: {
+        valor: mensalidadeDaReserva(booking), pagoEm, txid: booking.txid,
+        // 1º mês grátis pelo código: a fatura do mês nasce quitada em R$ 0
+        // (sem ela, o "gerar mês" do painel cobraria este mês de novo)
+        registrarZerada: !!usoVoucher,
+      },
     });
     console.log(`[matricula] ${atualizado.name} matriculada no plano ${atualizado.weeklyFreq}x (${atualizado.mensalistaTipo}). Aulas criadas na grade: ${r?.grade?.total || 0}.`);
     /* Plano de N aulas com menos de N horários na grade (ela tocou em "definir
@@ -2234,6 +2321,9 @@ async function registrarAulaAvulsaPaga(booking) {
   if (!c) return null;
 
   const pagoEm = booking.paymentDate || todayISO();
+  // Aula avulsa/experimental com código de promoção: confirma o uso na campanha
+  await confirmarVoucherDaReserva(booking, c).catch((e) =>
+    console.warn(`[voucher] ${c.name}: aula avulsa paga, mas o código não foi confirmado — ${e.message}`));
 
   // Se o cliente é lead ou estava na 1ª aula / pendente:
   if (c.status === "lead" || c.firstClass || c.matriculaStatus === "nao_aplica") {
@@ -2248,6 +2338,12 @@ async function registrarAulaAvulsaPaga(booking) {
     });
     console.log(`[avulso pago] ${c.name} (id ${c.id}) ativada como aluna avulsa após confirmação de pagamento.`);
   }
+
+  /* Aula experimental GRÁTIS pelo código: não entrou dinheiro, não há o que
+     lançar. Sem esta saída, o `|| valorAvulsa` abaixo registraria R$ 40 que
+     ninguém pagou. Só vale para reserva que tem uso de código — R$ 0 sem
+     código continua no caminho de sempre. */
+  if (Number(booking.value) === 0 && (await usoDeVoucherDaReserva(booking.id))) return c;
 
   // Garante fatura quitada no financeiro (Recebimentos do mês)
   const compAtualStr = competenciaAtual();
@@ -2412,6 +2508,8 @@ async function avisarMatriculaConfirmada(booking) {
         taxa: booking.taxaMatricula ? moedaBR(booking.taxaMatricula) : "",
         portalUrl,
         isAvulso,
+        // código de promoção zerou o pagamento: não houve Pix a receber
+        gratis: Number(booking.value) === 0 && !!(await usoDeVoucherDaReserva(booking.id)),
       }), { kind: "matricula" });
     } else {
       const nome = isAvulso ? "pagamento_aula_avulsa" : "matricula_confirmada";
@@ -2890,6 +2988,20 @@ async function gerarMensalidade(clientId, competencia) {
   if (existing) return existing;
   // Valor DA COMPETÊNCIA: respeita o desconto/promoção marcada para este mês.
   const valor = await valorDaCompetencia(client, comp);
+  /* Mês zerado por código de promoção (ex.: "2º mês grátis"): nasce quitado.
+     O Sicredi não emite Pix de R$ 0, e sem esta saída o mês cairia no erro
+     abaixo. Só o preço gravado pelo VOUCHER entra aqui — R$ 0 de qualquer
+     outra origem continua sendo erro de cadastro, como sempre foi. */
+  if (!valor) {
+    const cortesia = await prisma.monthlyPrice.findFirst({
+      where: { clientId, competencia: comp, origem: "voucher", amountCents: 0 },
+    });
+    if (cortesia) {
+      return prisma.invoice.create({
+        data: { clientId, competencia: comp, amountCents: 0, dueDate: vencimentoDe(client, comp), status: "pago", paidAt: todayISO() },
+      });
+    }
+  }
   if (!valor) throw Object.assign(new Error("Defina o valor da mensalidade (no aluno ou nas Configurações)."), { code: 400 });
   const dueDate = vencimentoDe(client, comp);
   const valorCents = Math.round(valor * 100);
@@ -3336,6 +3448,438 @@ app.post("/api/mensalidades/reajuste", wrap(async (req, res) => {
 
   console.log(`[reajuste] ${tipo} ${n} · tabela ${atualizarTabela ? "sim" : "não"} · ${alteradas.length} valor(es) individual(is).`);
   res.json({ tabela, individuais: alteradas });
+}));
+
+/* ===================== CAMPANHAS COM CÓDIGO (VOUCHER) =====================
+   A Inêz cadastra a campanha no painel; a aluna digita o código na matrícula
+   pelo site (/agendar) ou na mensalidade, pelo portal. As contas moram em
+   src/vouchers.js (com teste); aqui fica só o que mexe no banco.
+
+   O voucher é um PLUS por cima do fluxo de sempre e foi encaixado para não
+   abrir caminho novo de dinheiro:
+   • na MATRÍCULA ele só muda `value` e `taxaMatricula` da reserva ANTES do Pix
+     nascer — o resto (Pix, baixa, grade, 1ª fatura) é o caminho de sempre;
+   • nos MESES SEGUINTES ele grava MonthlyPrice (origem "voucher"), o mesmo
+     mecanismo da promoção manual da ficha: passada a competência, acabou;
+   • na MENSALIDADE de quem já estuda ele usa aplicarValorNaCompetencia, que já
+     sabe não tocar em mês pago e zerar o QR que cobrava o valor velho.
+
+   "Os X primeiros" (limiteUsos): o uso nasce RESERVADO quando a reserva com
+   Pix é criada e vira CONFIRMADO quando o banco confirma. Reserva que expira
+   (a vaga caiu sem pagamento) devolve a vaga da campanha — quem confere isso é
+   conciliarUsosVoucher, chamada antes de cada contagem. A contagem e a reserva
+   acontecem dentro de uma transação com a linha da campanha travada
+   (SELECT … FOR UPDATE): duas alunas pagando ao mesmo tempo não furam o limite. */
+
+// Uso reservado que nunca ganhou reserva/mensalidade (erro no meio do caminho)
+const VOUCHER_RESERVA_ORFA_MIN = 30;
+const erroVoucher = (msg, code = 409) => Object.assign(new Error(msg), { code });
+
+async function conciliarUsosVoucher(voucherId, db = prisma) {
+  const pendentes = await db.voucherUso.findMany({
+    where: { voucherId, OR: [{ status: "reservado" }, { status: "expirado", bookingId: { not: null } }] },
+  });
+  for (const u of pendentes) {
+    let novo = null;
+    if (u.bookingId) {
+      const b = await db.booking.findUnique({ where: { id: u.bookingId } });
+      // pagou (mesmo depois do prazo da vaga): o uso vale — o dinheiro entrou com o desconto
+      if (b?.paid) novo = "confirmado";
+      else if (u.status === "reservado" && (!b || b.status === "cancelada")) novo = "expirado";
+    } else if (u.contexto === "mensalidade") {
+      // nasce e vira confirmado na mesma chamada; não há prazo a vigiar
+    } else if (Date.now() - new Date(u.createdAt).getTime() > VOUCHER_RESERVA_ORFA_MIN * 60_000) {
+      novo = "expirado";
+    }
+    if (novo && novo !== u.status) {
+      await db.voucherUso.update({
+        where: { id: u.id },
+        data: { status: novo, ...(novo === "confirmado" ? { confirmadoAt: u.confirmadoAt || todayISO() } : {}) },
+      });
+    }
+  }
+}
+
+const contarUsosVoucher = (voucherId, db = prisma) =>
+  db.voucherUso.count({ where: { voucherId, status: { in: STATUS_QUE_CONTAM } } });
+
+// Uma vez por pessoa, por campanha: pela ficha OU pelo CPF (a ficha da aluna
+// nova nasce junto com a reserva — antes disso, só o CPF a identifica).
+async function jaUsouVoucher(voucherId, { clientId, cpf }, db = prisma) {
+  const quem = [
+    ...(clientId ? [{ clientId }] : []),
+    ...(onlyDigits(cpf).length === 11 ? [{ cpf: onlyDigits(cpf) }] : []),
+  ];
+  if (!quem.length) return false;
+  return !!(await db.voucherUso.findFirst({
+    where: { voucherId, status: { in: STATUS_QUE_CONTAM }, OR: quem },
+  }));
+}
+
+async function buscarVoucher(codigo) {
+  const c = normalizarCodigo(codigo);
+  return c ? prisma.voucher.findUnique({ where: { codigo: c } }) : null;
+}
+
+/* Confere sem reservar: é o que a tela mostra ao tocar em "Aplicar". */
+async function conferirVoucher(v, { contexto, freq, unidade, clientId, cpf }) {
+  if (v) await conciliarUsosVoucher(v.id);
+  const usados = v ? await contarUsosVoucher(v.id) : 0;
+  const motivo = motivoRecusa(v, { hoje: todayISO(), usados, contexto, freq, unidade });
+  if (motivo) throw erroVoucher(motivo, v ? 409 : 404);
+  if (await jaUsouVoucher(v.id, { clientId, cpf }))
+    throw erroVoucher("Você já usou este código — cada pessoa usa uma vez. 💚");
+  return { usados };
+}
+
+/* Reserva a vaga na campanha, de forma atômica com a contagem. */
+async function reservarUsoVoucher(v, regra, dados) {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM \`Voucher\` WHERE id = ${v.id} FOR UPDATE`;
+    await conciliarUsosVoucher(v.id, tx);
+    const usados = await contarUsosVoucher(v.id, tx);
+    const motivo = motivoRecusa(v, { hoje: todayISO(), usados, ...regra });
+    if (motivo) throw erroVoucher(motivo);
+    if (await jaUsouVoucher(v.id, { clientId: dados.clientId, cpf: dados.cpf }, tx))
+      throw erroVoucher("Você já usou este código — cada pessoa usa uma vez. 💚");
+    return tx.voucherUso.create({ data: { ...dados, voucherId: v.id, status: "reservado" } });
+  });
+}
+
+const motivoDoVoucher = (v) => `Voucher ${v.codigo} — ${v.nome}`.slice(0, 200);
+
+// Escreve na ficha (é onde a Inêz olha) — no topo, como os outros avisos.
+async function anotarNaFicha(clientId, linha) {
+  const c = await prisma.client.findUnique({ where: { id: clientId } });
+  if (!c) return;
+  await prisma.client.update({ where: { id: c.id }, data: { notes: [linha, c.notes].filter(Boolean).join("\n") } });
+}
+
+/* Preço do voucher nos meses seguintes. Guarda o preço especial que havia
+   antes em cada mês, para o cancelamento conseguir devolver tudo como estava. */
+async function gravarMesesDoVoucher(client, v, comps, { baseDoMes = {} } = {}) {
+  const meses = [];
+  for (const comp of comps) {
+    const antes = await prisma.monthlyPrice.findUnique({
+      where: { clientId_competencia: { clientId: client.id, competencia: comp } },
+    });
+    const base = baseDoMes[comp] ?? (await valorDaCompetencia(client, comp));
+    const novo = aplicarDesconto(base, v);
+    const r = await aplicarValorNaCompetencia(client, comp, novo, { origem: "voucher", motivo: motivoDoVoucher(v) });
+    if (r.resultado === "pago") continue; // mês já quitado não se reescreve
+    meses.push({
+      comp, depois: Math.round(novo * 100),
+      antes: antes ? antes.amountCents : null,
+      antesOrigem: antes?.origem || null, antesMotivo: antes?.motivo || null,
+    });
+  }
+  return meses;
+}
+
+/* Confirmação do código usado numa reserva (matrícula ou avulsa), quando o
+   pagamento cai — ou na hora, se o código zerou o valor. Idempotente: o uso
+   já confirmado não é tocado de novo. Na matrícula grava os meses seguintes
+   ANTES de converterEmMensalista, que gera a próxima mensalidade na hora. */
+async function confirmarVoucherDaReserva(booking, client) {
+  if (!booking?.id || !client) return null;
+  const uso = await prisma.voucherUso.findFirst({
+    where: { bookingId: booking.id, status: { in: ["reservado", "expirado"] } },
+    include: { voucher: true },
+  });
+  if (!uso) return null;
+  const v = uso.voucher;
+  let meses = [];
+  if (uso.contexto === "matricula" && temDesconto(v)) {
+    meses = await gravarMesesDoVoucher(client, v, mesesSeguintes(v, competenciaAtual(), somarComp));
+  }
+  const confirmado = await prisma.voucherUso.update({
+    where: { id: uso.id },
+    data: { status: "confirmado", confirmadoAt: todayISO(), clientId: client.id, meses: JSON.stringify(meses) },
+  });
+  await anotarNaFicha(client.id,
+    `🎟️ ${fmtDiaBR(todayISO())}: ${uso.contexto === "avulsa" ? "aula avulsa" : "matrícula"} com o código ${v.codigo} (${v.nome}) — ${uso.resumo || descreverBeneficios(v).join(" · ")}.` +
+    (v.premio ? ` 🎁 Entregar o prêmio: ${v.premio}.` : ""));
+  console.log(`[voucher] ${client.name}: código ${v.codigo} confirmado (${uso.contexto}), ${meses.length} mês(es) seguinte(s) com preço da campanha.`);
+  return confirmado;
+}
+
+/* O código zerou o 1º pagamento: não há Pix a gerar (o Sicredi não emite
+   cobrança de R$ 0). A reserva é confirmada pelo MESMO caminho da baixa do Pix
+   — registrarMatriculaPaga / registrarAulaAvulsaPaga — e a aluna recebe a
+   confirmação de sempre. Chamar depois de os demais horários da semana já
+   existirem, para a matrícula confirmar todos e montar a grade. */
+async function confirmarReservaSemCobranca(bookingId) {
+  const pago = await prisma.booking.update({
+    where: { id: bookingId },
+    data: { paid: true, status: "confirmada", paymentDate: todayISO(), holdUntil: null },
+  });
+  let matricula = null;
+  if (ehPagamentoDeMatricula(pago.paymentMethod)) matricula = await registrarMatriculaPaga(pago);
+  else await registrarAulaAvulsaPaga(pago);
+  await avisarMatriculaConfirmada(pago);
+  return { booking: pago, matricula };
+}
+
+/* Há alguma campanha que esta aluna nova poderia usar AGORA? É o que decide se
+   o robô do WhatsApp pergunta pelo código: sem campanha aberta que sirva para
+   ela, a pergunta não aparece e a conversa segue como sempre foi. */
+async function campanhaAbertaParaNova({ contexto, freq, unidade }) {
+  try {
+    const ativas = await prisma.voucher.findMany({
+      where: { ativo: true, publico: { in: ["novas", "todas"] } },
+    });
+    for (const v of ativas) {
+      await conciliarUsosVoucher(v.id);
+      const usados = await contarUsosVoucher(v.id);
+      if (!motivoRecusa(v, { hoje: todayISO(), usados, contexto, freq, unidade })) return true;
+    }
+    return false;
+  } catch (e) {
+    // Falha aqui não pode travar a matrícula: sem a pergunta, a conversa segue como sempre
+    console.warn(`[voucher] não consegui consultar as campanhas: ${e.message}`);
+    return false;
+  }
+}
+
+const usoDeVoucherDaReserva = (bookingId) =>
+  prisma.voucherUso.findFirst({ where: { bookingId, status: { in: STATUS_QUE_CONTAM } } });
+
+/* Código na MENSALIDADE de quem já é aluna (portal ou painel). Vale a partir
+   da mensalidade em aberto mais antiga — ou, sem nenhuma em aberto, da próxima
+   que vai nascer — e segue pelos meses da campanha. */
+async function aplicarVoucherNaMensalidade(client, codigo, { porAdmin = null } = {}) {
+  const v = await buscarVoucher(codigo);
+  if (!v) throw erroVoucher("Código não encontrado. Confira se digitou certinho. 💚", 404);
+  if (client.plan !== "mensalista" || client.status === "cancelado")
+    throw erroVoucher("Este código vale para a mensalidade de alunas mensalistas. 💚", 400);
+  const aberta = await prisma.invoice.findFirst({
+    where: { clientId: client.id, status: "pendente" },
+    orderBy: { competencia: "asc" },
+  });
+  const comp0 = aberta?.competencia || (await proximaCobranca(client))?.competencia || competenciaAtual();
+  const regra = { contexto: "mensalidade", freq: client.weeklyFreq, unidade: client.unit };
+  const uso = await reservarUsoVoucher(v, regra, {
+    clientId: client.id, nome: client.name, cpf: onlyDigits(client.cpf) || null,
+    contexto: "mensalidade", invoiceId: aberta?.id || null,
+    resumo: descreverBeneficios(v).join(" · ").slice(0, 300),
+  });
+  try {
+    const comps = temDesconto(v) ? [comp0, ...mesesSeguintes(v, comp0, somarComp)] : [];
+    const meses = await gravarMesesDoVoucher(client, v, comps, {
+      // a mensalidade em aberto pode ter sido ajustada à mão: o desconto sai do valor dela
+      baseDoMes: aberta ? { [aberta.competencia]: aberta.amountCents / 100 } : {},
+    });
+    let descontoCents = 0;
+    const primeiro = meses.find((m) => m.comp === comp0);
+    if (aberta && primeiro) {
+      descontoCents = Math.max(0, aberta.amountCents - primeiro.depois);
+      /* Mês zerado pelo código não tem o que cobrar: o Sicredi não emite Pix de
+         R$ 0. Fica quitado como cortesia — sem `baixaManual`, que tiraria o Pix
+         da mensalidade seguinte. */
+      if (primeiro.depois === 0) {
+        await prisma.invoice.update({
+          where: { id: aberta.id },
+          data: { status: "pago", paidAt: todayISO(), pixCode: null, pixExpiresOn: null },
+        });
+      }
+    }
+    /* Para quem já é aluna, aplicar É usar: o preço dos meses já ficou gravado.
+       (Na matrícula é diferente — lá o uso só vale quando o Pix cai.) */
+    const final = await prisma.voucherUso.update({
+      where: { id: uso.id },
+      data: { meses: JSON.stringify(meses), descontoCents, status: "confirmado", confirmadoAt: todayISO() },
+    });
+    await anotarNaFicha(client.id,
+      `🎟️ ${fmtDiaBR(todayISO())}: código ${v.codigo} (${v.nome}) aplicado na mensalidade${porAdmin ? ` por ${porAdmin}` : " pelo portal"} — ${uso.resumo}.` +
+      (meses.length ? ` Meses: ${meses.map((m) => compPorExtenso(m.comp)).join(", ")}.` : "") +
+      (v.premio ? ` 🎁 Entregar o prêmio: ${v.premio}.` : ""));
+    return { uso: final, voucher: v, meses };
+  } catch (e) {
+    // Sem o preço gravado o uso não vale: devolve a vaga da campanha
+    await prisma.voucherUso.update({ where: { id: uso.id }, data: { status: "cancelado" } }).catch(() => {});
+    throw e;
+  }
+}
+
+/* Desfaz um uso (só a escola). Os meses que ganharam preço do voucher voltam
+   ao que eram — menos mês já pago (dinheiro que entrou não se reescreve) e mês
+   cujo preço alguém mexeu depois (não piso no ajuste de ninguém). O Pix que já
+   foi gerado para uma reserva não muda: o código só libera a vaga na campanha. */
+async function cancelarUsoVoucher(uso) {
+  const meses = JSON.parse(uso.meses || "[]");
+  const client = uso.clientId ? await prisma.client.findUnique({ where: { id: uso.clientId } }) : null;
+  const resultado = [];
+  for (const m of client ? meses : []) {
+    const atual = await prisma.monthlyPrice.findUnique({
+      where: { clientId_competencia: { clientId: client.id, competencia: m.comp } },
+    });
+    if (!atual || atual.origem !== "voucher" || atual.amountCents !== m.depois) {
+      resultado.push({ comp: m.comp, resultado: "mexido_depois" });
+      continue;
+    }
+    const r = m.antes == null
+      ? await aplicarValorNaCompetencia(client, m.comp, null)
+      : await aplicarValorNaCompetencia(client, m.comp, m.antes / 100, { origem: m.antesOrigem || "ajuste", motivo: m.antesMotivo });
+    resultado.push({ comp: m.comp, resultado: r.resultado });
+  }
+  await prisma.voucherUso.update({ where: { id: uso.id }, data: { status: "cancelado" } });
+  return resultado;
+}
+
+/* Campanha + números, para a tela do painel. */
+async function resumoCampanha(v) {
+  const usos = await prisma.voucherUso.findMany({ where: { voucherId: v.id }, select: { status: true, descontoCents: true, premioEntregueAt: true } });
+  const n = (s) => usos.filter((u) => u.status === s).length;
+  const usados = usos.filter((u) => STATUS_QUE_CONTAM.includes(u.status)).length;
+  return {
+    ...v,
+    planos: planosDe(v),
+    beneficios: descreverBeneficios(v),
+    situacao: situacaoCampanha(v, { hoje: todayISO(), usados }),
+    usos: { reservados: n("reservado"), confirmados: n("confirmado"), expirados: n("expirado"), cancelados: n("cancelado"), usados, total: usos.length },
+    restantes: v.limiteUsos == null ? null : Math.max(0, v.limiteUsos - usados),
+    descontoTotalCents: usos.filter((u) => u.status === "confirmado").reduce((s, u) => s + (u.descontoCents || 0), 0),
+    premiosPendentes: v.premio ? usos.filter((u) => u.status === "confirmado" && !u.premioEntregueAt).length : 0,
+  };
+}
+
+// ---------- rotas do painel ----------
+app.get("/api/vouchers", wrap(async (_req, res) => {
+  const lista = await prisma.voucher.findMany({ orderBy: { createdAt: "desc" } });
+  for (const v of lista) await conciliarUsosVoucher(v.id);
+  res.json(await Promise.all(lista.map(resumoCampanha)));
+}));
+
+app.post("/api/vouchers", wrap(async (req, res) => {
+  const { erro, dados } = limparCampanha(req.body, { hoje: todayISO() });
+  if (erro) return res.status(400).json({ error: erro });
+  if (await prisma.voucher.findUnique({ where: { codigo: dados.codigo } }))
+    return res.status(409).json({ error: `Já existe uma campanha com o código ${dados.codigo}.` });
+  const v = await prisma.voucher.create({ data: { ...dados, criadoPor: req.admin?.username || null } });
+  res.json(await resumoCampanha(v));
+}));
+
+app.patch("/api/vouchers/:id", wrap(async (req, res) => {
+  const atual = await prisma.voucher.findUnique({ where: { id: Number(req.params.id) } });
+  if (!atual) return res.status(404).json({ error: "Campanha não encontrada." });
+  const { erro, dados } = limparCampanha({ ...atual, planos: planosDe(atual), ...req.body }, { hoje: todayISO() });
+  if (erro) return res.status(400).json({ error: erro });
+  if (dados.codigo !== atual.codigo) {
+    if (await prisma.voucherUso.count({ where: { voucherId: atual.id } }))
+      return res.status(409).json({ error: "Este código já foi usado — não dá para trocá-lo. Crie uma campanha nova se precisar de outro código." });
+    if (await prisma.voucher.findUnique({ where: { codigo: dados.codigo } }))
+      return res.status(409).json({ error: `Já existe uma campanha com o código ${dados.codigo}.` });
+  }
+  const v = await prisma.voucher.update({ where: { id: atual.id }, data: dados });
+  res.json(await resumoCampanha(v));
+}));
+
+// Só apaga campanha que nunca foi usada; usada, ela é pausada (o histórico fica).
+app.delete("/api/vouchers/:id", wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  if (await prisma.voucherUso.count({ where: { voucherId: id } }))
+    return res.status(409).json({ error: "Esta campanha já foi usada e o histórico precisa ficar. Use “Pausar” para ninguém mais usar." });
+  await prisma.voucher.delete({ where: { id } });
+  res.json({ ok: true });
+}));
+
+app.get("/api/vouchers/:id/usos", wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  await conciliarUsosVoucher(id);
+  const usos = await prisma.voucherUso.findMany({ where: { voucherId: id }, orderBy: { createdAt: "asc" } });
+  res.json(usos.map((u) => ({ ...u, meses: JSON.parse(u.meses || "[]") })));
+}));
+
+app.post("/api/vouchers/usos/:id/cancelar", wrap(async (req, res) => {
+  const uso = await prisma.voucherUso.findUnique({ where: { id: Number(req.params.id) } });
+  if (!uso) return res.status(404).json({ error: "Uso não encontrado." });
+  if (uso.status === "cancelado") return res.json({ ok: true, meses: [] });
+  const meses = await cancelarUsoVoucher(uso);
+  if (uso.clientId) {
+    const v = await prisma.voucher.findUnique({ where: { id: uso.voucherId } });
+    await anotarNaFicha(uso.clientId, `🎟️ ${fmtDiaBR(todayISO())}: uso do código ${v?.codigo} cancelado por ${req.admin?.username || "a escola"}.`);
+  }
+  res.json({ ok: true, meses });
+}));
+
+app.post("/api/vouchers/usos/:id/premio", wrap(async (req, res) => {
+  const uso = await prisma.voucherUso.update({
+    where: { id: Number(req.params.id) },
+    data: { premioEntregueAt: req.body?.entregue === false ? null : todayISO() },
+  });
+  res.json(uso);
+}));
+
+// A Inêz aplica o código pela aluna (ex.: ela mandou o código pelo WhatsApp)
+app.post("/api/clients/:id/voucher", wrap(async (req, res) => {
+  const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
+  if (!client) return res.status(404).json({ error: "Aluna não encontrada." });
+  try {
+    const r = await aplicarVoucherNaMensalidade(client, req.body?.codigo, { porAdmin: req.admin?.username || "a escola" });
+    res.json({ ok: true, uso: r.uso, meses: r.meses, beneficios: descreverBeneficios(r.voucher) });
+  } catch (e) {
+    res.status(e.code || 500).json({ error: e.message });
+  }
+}));
+
+// ---------- rotas públicas ----------
+/* Tentativas de código por IP: sem isto a rota pública vira um jeito de
+   adivinhar códigos no chute. 15 a cada 10 minutos sobra para quem digita
+   errado algumas vezes. */
+const VOUCHER_TENTATIVAS = new Map();
+function excedeuTentativasVoucher(req) {
+  const ip = String(req.headers["x-forwarded-for"] || req.ip || "").split(",")[0].trim() || "?";
+  const agora = Date.now();
+  const lista = (VOUCHER_TENTATIVAS.get(ip) || []).filter((t) => agora - t < 10 * 60_000);
+  lista.push(agora);
+  VOUCHER_TENTATIVAS.set(ip, lista);
+  if (VOUCHER_TENTATIVAS.size > 5000) VOUCHER_TENTATIVAS.clear();
+  return lista.length > 15;
+}
+
+/* Prévia do código na tela de matrícula: diz se vale e quanto fica o 1º
+   pagamento. NÃO reserva — a vaga na campanha só é ocupada quando a reserva
+   com Pix é criada (POST /api/bookings com `voucher`). */
+app.post("/api/vouchers/validar", wrap(async (req, res) => {
+  if (excedeuTentativasVoucher(req))
+    return res.status(429).json({ error: "Muitas tentativas. Espere alguns minutos e tente de novo. 💚" });
+  const b = req.body || {};
+  const avulsa = b.modalidade === "avulso";
+  const freq = avulsa ? null : freqDoPlano(b.weeklyFreq);
+  const v = await buscarVoucher(b.codigo);
+  try {
+    await conferirVoucher(v, { contexto: avulsa ? "avulsa" : "matricula", freq, unidade: b.unit || null, cpf: b.cpf });
+  } catch (e) {
+    return res.status(e.code || 409).json({ error: e.message });
+  }
+  res.json({
+    codigo: v.codigo,
+    descricao: v.descricao,
+    beneficios: descreverBeneficios(v),
+    // se a campanha também serve à outra modalidade, a tela avisa ao trocar
+    aulaExperimental: !!v.aulaExperimental,
+    pagamento: primeiroPagamentoComVoucher(v, {
+      avulsa,
+      mensalidade: avulsa ? 0 : valorDoPlano(freq),
+      taxa: avulsa ? 0 : taxaMatriculaAtual(),
+      valorAvulsa: Number(SETTINGS.valorAvulsa) || 40,
+    }),
+  });
+}));
+
+app.post("/api/portal/:key/voucher", wrap(async (req, res) => {
+  if (excedeuTentativasVoucher(req))
+    return res.status(429).json({ error: "Muitas tentativas. Espere alguns minutos e tente de novo. 💚" });
+  const client = await clientByPortalKey(req.params.key);
+  if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const pode = clientPodeAcessarPortal(client);
+  if (!pode.ok) return res.status(403).json({ error: pode.motivo });
+  try {
+    const r = await aplicarVoucherNaMensalidade(client, req.body?.codigo);
+    res.json({ ok: true, beneficios: descreverBeneficios(r.voucher), meses: r.meses.map((m) => ({ comp: m.comp, valor: m.depois / 100 })) });
+  } catch (e) {
+    res.status(e.code || 500).json({ error: e.message });
+  }
 }));
 
 /**
@@ -4345,7 +4889,7 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
      registrado aqui como mensalidade quitada para o dinheiro aparecer no
      financeiro (Recebimentos e Mensalistas) em vez de sumir dentro da reserva. */
   let mensalidadeDoMes = null;
-  if (mensalidadePaga && Number(mensalidadePaga.valor) > 0) {
+  if (mensalidadePaga && (Number(mensalidadePaga.valor) > 0 || mensalidadePaga.registrarZerada)) {
     const compAtualStr = competenciaAtual();
     const jaExiste = await prisma.invoice.findFirst({
       where: { clientId: atualizado.id, competencia: compAtualStr },
@@ -5398,7 +5942,9 @@ async function segurarHorariosExtras({ clientName, phone }, slot, extraSlotIds, 
   return { extras, extraSlots };
 }
 
-async function createWaBooking(client, slot, { weeklyFreq, extraSlotIds = [] }) {
+/* `pagamento` (opcional): o 1º pagamento já calculado com o código de promoção
+   (primeiroPagamentoComVoucher). Sem ele, o valor de sempre. */
+async function createWaBooking(client, slot, { weeklyFreq, extraSlotIds = [], pagamento = null }) {
   const isAvulso = weeklyFreq === "avulso";
   // A aluna do WhatsApp entra como FIXO, então os quatro planos valem aqui
   const freq = freqDoPlano(weeklyFreq);
@@ -5408,8 +5954,9 @@ async function createWaBooking(client, slot, { weeklyFreq, extraSlotIds = [] }) 
       date: slot.date, time: slot.time, prof: slot.prof, slotId: slot.id,
       status: "aguardando",
       // Se avulso, cobra apenas o valor da aula avulsa sem taxa de matrícula
-      value: isAvulso ? (Number(SETTINGS.valorAvulsa) || 40) : valorPrimeiroPagamento(freq),
-      taxaMatricula: isAvulso ? null : (taxaMatriculaAtual() || null),
+      value: pagamento ? pagamento.total
+        : isAvulso ? (Number(SETTINGS.valorAvulsa) || 40) : valorPrimeiroPagamento(freq),
+      taxaMatricula: isAvulso ? null : ((pagamento ? pagamento.taxa : taxaMatriculaAtual()) || null),
       paymentMethod: isAvulso ? "Aula Avulsa" : MARCA_MATRICULA,
       holdUntil: new Date(Date.now() + HOLD_MIN * 60_000),
     },
@@ -5605,7 +6152,7 @@ const CONVERSA_ZERADA = {
   step: "start", unit: null, slotId: null, offered: "[]",
   pendingName: null, pendingEmail: null, pendingBirthday: null, pendingPhone: null,
   weeklyFreq: null, extraSlots: "[]", cpf: null, clientId: null, bookingId: null,
-  humanoPedidos: 0, retomadaAt: null,
+  humanoPedidos: 0, retomadaAt: null, voucher: null,
 };
 const NUM_EMOJI = { 1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣" };
 
@@ -5792,7 +6339,8 @@ async function handleWaMessage(msg) {
      motivo o texto já avisa que a taxa não volta se ela desistir. */
   const telaPlano = async (nome, prefix = "") => {
     // Voltar ao plano zera os horários extras: o número deles depende do plano
-    await setConv({ step: "plano", extraSlots: "[]", ...(nome ? { pendingName: padronizarNome(nome) } : {}) });
+    await setConv({ step: "plano", extraSlots: "[]", voucher: null, ...(nome ? { pendingName: padronizarNome(nome) } : {}) });
+    conv = { ...conv, voucher: null };
     const primeiro = String(nome || "").split(" ")[0];
     const taxa = taxaMatriculaAtual();
     const vAvulsa = Number(SETTINGS.valorAvulsa) || 40;
@@ -5836,6 +6384,17 @@ async function handleWaMessage(msg) {
     if (!cpf) return telaCpf();
     if (!nome) return telaNome();
 
+    /* Código de promoção: só pergunta quando há campanha aberta que sirva para
+       ela (unidade, plano, prazo, vaga). Sem nenhuma, nada muda na conversa. */
+    const isAvulsoAqui = freq === "avulso";
+    const regraCupom = { contexto: isAvulsoAqui ? "avulsa" : "matricula", freq: isAvulsoAqui ? null : freq, unidade: slot.unit };
+    if (conv.voucher == null && (await campanhaAbertaParaNova(regraCupom))) {
+      // avulso fica guardado como 0 enquanto ela responde (null já quer dizer "sem plano")
+      await setConv({ step: "cupom", weeklyFreq: isAvulsoAqui ? 0 : freq, extraSlots: JSON.stringify(extraSlotIds) });
+      return telaCupom();
+    }
+    const codigoCupom = conv.voucher && conv.voucher !== "-" && !conv.voucher.startsWith("?") ? conv.voucher : null;
+
     // A ficha entra ANTES da reserva: é o CPF dela que vai no Pix.
     const client = await upsertClienteWa({
       nome,
@@ -5847,7 +6406,47 @@ async function handleWaMessage(msg) {
     });
     console.log(`[wa] cadastro via WhatsApp: ${client.name} (ficha ${client.id}, CPF ${cpf.slice(0, 3)}***).`);
 
-    const { booking, extras, extraSlots } = await createWaBooking(client, slot, { weeklyFreq: freq, extraSlotIds });
+    /* Com código confirmado: a conta sai da campanha e a vaga nela é ocupada
+       agora, junto da reserva. Se a campanha esgotou nesse meio-tempo, ela
+       decide: tentar outro código ou seguir sem. */
+    let cupom = null;
+    if (codigoCupom) {
+      const v = await buscarVoucher(codigoCupom);
+      const pagamento = v && primeiroPagamentoComVoucher(v, {
+        avulsa: isAvulsoAqui,
+        mensalidade: isAvulsoAqui ? 0 : valorDoPlano(freq),
+        taxa: isAvulsoAqui ? 0 : taxaMatriculaAtual(),
+        valorAvulsa: Number(SETTINGS.valorAvulsa) || 40,
+      });
+      try {
+        if (!v) throw erroVoucher("Esse código não existe mais. 💚", 404);
+        const uso = await reservarUsoVoucher(v, regraCupom, {
+          clientId: client.id, nome: client.name, cpf: onlyDigits(cpf) || null,
+          contexto: regraCupom.contexto, descontoCents: pagamento.descontoCents,
+          resumo: descreverBeneficios(v).join(" · ").slice(0, 300),
+        });
+        cupom = { v, pagamento, uso };
+      } catch (e) {
+        await setConv({ step: "cupomcod", voucher: "-", weeklyFreq: isAvulsoAqui ? 0 : freq, extraSlots: JSON.stringify(extraSlotIds) });
+        return waButtons(msg.from, `${e.message}\n\nSe tiver outro código, é só digitar aqui. Ou siga sem código 👇`, [
+          { id: "cupom:nao", title: "Seguir sem código" },
+        ]);
+      }
+    }
+
+    const { booking, extras, extraSlots } = await createWaBooking(client, slot, { weeklyFreq: freq, extraSlotIds, pagamento: cupom?.pagamento });
+    if (cupom) await prisma.voucherUso.update({ where: { id: cupom.uso.id }, data: { bookingId: booking.id } });
+
+    /* O código zerou o pagamento: sem Pix. A vaga é confirmada na hora e a
+       mensagem de confirmação de sempre (avisarMatriculaConfirmada) fecha a
+       conversa — por isso a reserva já fica ligada à conversa antes. */
+    if (cupom && cupom.pagamento.total === 0) {
+      await setConv({ step: "cobranca", bookingId: booking.id, clientId: client.id, weeklyFreq: isAvulsoAqui ? null : freq, extraSlots: "[]", pendingName: null });
+      await waSend(msg.from, `🎟️ Código *${cupom.v.codigo}* aplicado: ${descreverBeneficios(cupom.v).join(" · ")}.\n\nNão há nada a pagar agora — já confirmei a sua vaga! 💚`);
+      await confirmarReservaSemCobranca(booking.id);
+      return;
+    }
+
     let pixCode = "";
     try {
       ({ pixCode } = await emitirPixDaReserva(booking, { cpf, name: client.name }));
@@ -5882,11 +6481,12 @@ async function handleWaMessage(msg) {
       quando: quandoStr,
       // A cobrança mostra as duas parcelas e o total: o Pix vem no valor cheio,
       // e o número do QR tem que bater com o que ela acabou de ler.
-      mensalidade: isAvulso ? "" : moedaBR(valorDoPlano(freq)),
+      mensalidade: isAvulso ? "" : moedaBR(cupom ? cupom.pagamento.mensalidade : valorDoPlano(freq)),
       taxa: booking.taxaMatricula ? moedaBR(booking.taxaMatricula) : "",
       valor: moedaBR(booking.value),
       minutos: HOLD_MIN,
       isAvulso,
+      cupom: cupom ? `Código *${cupom.v.codigo}*: ${descreverBeneficios(cupom.v).join(" · ")}` : "",
     }));
     // O código vai SOZINHO numa mensagem: assim ela copia com um toque, sem
     // arrastar junto o texto acima.
@@ -5948,6 +6548,29 @@ Toque abaixo para escolher 👇`,
     );
   };
 
+  /* ----- código de promoção (campanhas) -----
+     Plano e horários já escolhidos ficam na conversa (`weeklyFreq`, 0 = avulso,
+     e `extraSlots`); a resposta dela retoma cadastrarECobrar de onde parou. */
+  const freqDaConversa = () => (conv.weeklyFreq === 0 ? "avulso" : freqDoPlano(conv.weeklyFreq));
+  const telaCupom = async (prefix = "") => {
+    await setConv({ step: "cupom" });
+    return waButtons(msg.from, `${prefix}Antes do pagamento: você tem um *código de promoção*? 🎟️`, [
+      { id: "cupom:sim", title: "🎟️ Tenho um código" },
+      { id: "cupom:nao", title: "Não tenho" },
+    ]);
+  };
+  const telaDigitarCodigo = async (prefix = "") => {
+    await setConv({ step: "cupomcod", voucher: null });
+    return waButtons(msg.from, `${prefix}Digite o código aqui na conversa 👇`, [
+      { id: "cupom:nao", title: "Seguir sem código" },
+    ]);
+  };
+  const seguirSemCodigo = async () => {
+    await setConv({ voucher: "-" });
+    conv = { ...conv, voucher: "-" };
+    return cadastrarECobrar(freqDaConversa(), extrasDaConversa());
+  };
+
   /* ----- atendimento humano: vale em QUALQUER passo, e vem antes de tudo -----
      O contador sobe a cada pedido e o número só sai na 3ª vez (ver
      textoAtendenteHumano). Não trava a conversa: o bot segue respondendo se ela
@@ -5999,6 +6622,8 @@ Toque abaixo para escolher 👇`,
     if (conv.step === "email") return telaEmail("Retomando! ");
     if (conv.step === "nasc") return telaNasc("Retomando! ");
     if (conv.step === "plano") return telaPlano(conv.pendingName || "", "Retomando! ");
+    if (conv.step === "cupom") return telaCupom("Retomando! ");
+    if (conv.step === "cupomcod") return telaDigitarCodigo("Retomando! ");
     if (conv.step === "slot2" && conv.slotId) {
       const s = await prisma.slot.findUnique({ where: { id: conv.slotId } });
       if (s) return telaHorarioExtra(s, "Retomando! ");
@@ -6195,6 +6820,58 @@ Toque abaixo para escolher 👇`,
     }
     if (slot1) return telaHorarioExtra(slot1, "Toque em uma das opções da lista para escolher. ");
     return cadastrarECobrar(freq, escolhidos);
+  }
+
+  if (conv.step === "cupom") {
+    const r = respostaCupom(rid, body);
+    if (r === "nao") return seguirSemCodigo();
+    if (r === "sim") return telaDigitarCodigo();
+    if (!body || rid) return telaCupom("Não entendi 🤔. ");
+    // digitou direto o código, sem tocar em "Tenho um código": confere já
+    await setConv({ step: "cupomcod" });
+    conv = { ...conv, step: "cupomcod" };
+  }
+
+  /* Ela digita o código; o robô confere (sem ocupar vaga ainda), mostra o que
+     muda e pede confirmação. A vaga na campanha só é ocupada junto da reserva. */
+  if (conv.step === "cupomcod") {
+    if (rid === "cupom:nao") return seguirSemCodigo();
+    if (rid === "cupom:ok" && conv.voucher?.startsWith("?")) {
+      const codigo = conv.voucher.slice(1);
+      await setConv({ voucher: codigo });
+      conv = { ...conv, voucher: codigo };
+      return cadastrarECobrar(freqDaConversa(), extrasDaConversa());
+    }
+    if (rid === "cupom:sim") return telaDigitarCodigo();
+    if (!body) return telaDigitarCodigo("Não entendi 🤔. ");
+    const slot = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
+    if (!slot) return telaUnidade("Esse horário expirou. ");
+    const freq = freqDaConversa();
+    const avulsa = freq === "avulso";
+    const v = await buscarVoucher(body);
+    try {
+      await conferirVoucher(v, { contexto: avulsa ? "avulsa" : "matricula", freq: avulsa ? null : freq, unidade: slot.unit, cpf: conv.cpf });
+    } catch (e) {
+      await setConv({ voucher: null });
+      return waButtons(msg.from, `${e.message}\n\nConfira e digite de novo, ou siga sem código 👇`, [
+        { id: "cupom:nao", title: "Seguir sem código" },
+      ]);
+    }
+    const p = primeiroPagamentoComVoucher(v, {
+      avulsa,
+      mensalidade: avulsa ? 0 : valorDoPlano(freq),
+      taxa: avulsa ? 0 : taxaMatriculaAtual(),
+      valorAvulsa: Number(SETTINGS.valorAvulsa) || 40,
+    });
+    await setConv({ voucher: "?" + v.codigo });
+    return waButtons(msg.from,
+      `🎟️ Código *${v.codigo}* válido!${v.descricao ? "\n" + v.descricao : ""}\n\n` +
+      descreverBeneficios(v).map((t) => `• ${t}`).join("\n") + "\n\n" +
+      `Pagamento de hoje: de ~${moedaBR(p.totalSem)}~ por *${moedaBR(p.total)}*.\n\nPosso usar este código?`,
+      [
+        { id: "cupom:ok", title: "✅ Usar o código" },
+        { id: "cupom:nao", title: "Seguir sem código" },
+      ]);
   }
 
   /* Aguardando o Pix. A conversa não avança sozinha: quem move daqui é o
@@ -7328,6 +8005,7 @@ const COLUNAS_ESPERADAS = [
   ["WaConversation", "pendingPhone", "VARCHAR(20) NULL"],
   ["WaConversation", "clientId", "INT NULL"],
   ["WaConversation", "humanoPedidos", "INT NOT NULL DEFAULT 0"],
+  ["WaConversation", "voucher", "VARCHAR(30) NULL"],
   ["WaConversation", "lastInboundAt", "DATETIME(3) NULL"],
   // "Cadastro via WhatsApp" no painel
   ["Client", "origem", "VARCHAR(20) NULL"],
@@ -7344,6 +8022,56 @@ const COLUNAS_ESPERADAS = [
    Prisma que cria a mesma tabela. Sem `Holiday`, toda checagem de feriado
    quebraria — e a checagem roda em todo caminho de marcação. */
 const TABELAS_ESPERADAS = [
+  /* Campanhas com código (30/09/2026). O `prisma db push` do container já
+     cria as duas; ficam aqui também para o backend que sobe sem ele. */
+  ["Voucher", `CREATE TABLE IF NOT EXISTS \`Voucher\` (
+      \`id\` INTEGER NOT NULL AUTO_INCREMENT,
+      \`codigo\` VARCHAR(20) NOT NULL,
+      \`nome\` VARCHAR(120) NOT NULL,
+      \`descricao\` VARCHAR(500) NULL,
+      \`publico\` VARCHAR(10) NOT NULL DEFAULT 'novas',
+      \`isentaMatricula\` BOOLEAN NOT NULL DEFAULT false,
+      \`descontoTipo\` VARCHAR(12) NULL,
+      \`descontoValor\` DOUBLE NULL,
+      \`descontoMeses\` INTEGER NOT NULL DEFAULT 1,
+      \`aulaExperimental\` BOOLEAN NOT NULL DEFAULT false,
+      \`valorExperimental\` DOUBLE NOT NULL DEFAULT 0,
+      \`premio\` VARCHAR(200) NULL,
+      \`planos\` VARCHAR(40) NOT NULL DEFAULT '[]',
+      \`unidade\` VARCHAR(100) NULL,
+      \`inicio\` VARCHAR(10) NULL,
+      \`fim\` VARCHAR(10) NULL,
+      \`limiteUsos\` INTEGER NULL,
+      \`ativo\` BOOLEAN NOT NULL DEFAULT true,
+      \`criadoPor\` VARCHAR(60) NULL,
+      \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      UNIQUE INDEX \`Voucher_codigo_key\`(\`codigo\`),
+      PRIMARY KEY (\`id\`)
+    ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
+  ["VoucherUso", `CREATE TABLE IF NOT EXISTS \`VoucherUso\` (
+      \`id\` INTEGER NOT NULL AUTO_INCREMENT,
+      \`voucherId\` INTEGER NOT NULL,
+      \`clientId\` INTEGER NULL,
+      \`nome\` VARCHAR(120) NOT NULL,
+      \`cpf\` VARCHAR(14) NULL,
+      \`contexto\` VARCHAR(12) NOT NULL,
+      \`bookingId\` INTEGER NULL,
+      \`invoiceId\` INTEGER NULL,
+      \`status\` VARCHAR(12) NOT NULL DEFAULT 'reservado',
+      \`descontoCents\` INTEGER NOT NULL DEFAULT 0,
+      \`resumo\` VARCHAR(300) NULL,
+      \`meses\` VARCHAR(2000) NOT NULL DEFAULT '[]',
+      \`premioEntregueAt\` VARCHAR(10) NULL,
+      \`confirmadoAt\` VARCHAR(10) NULL,
+      \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      INDEX \`VoucherUso_voucherId_idx\`(\`voucherId\`),
+      INDEX \`VoucherUso_clientId_idx\`(\`clientId\`),
+      INDEX \`VoucherUso_bookingId_idx\`(\`bookingId\`),
+      INDEX \`VoucherUso_invoiceId_idx\`(\`invoiceId\`),
+      PRIMARY KEY (\`id\`),
+      CONSTRAINT \`VoucherUso_voucherId_fkey\` FOREIGN KEY (\`voucherId\`)
+        REFERENCES \`Voucher\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
+    ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
   ["Holiday", `CREATE TABLE IF NOT EXISTS \`Holiday\` (
       \`id\` INTEGER NOT NULL AUTO_INCREMENT,
       \`date\` VARCHAR(10) NOT NULL,
