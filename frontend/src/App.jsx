@@ -8,7 +8,7 @@ import { SlotForm, BookingForm, ClientForm } from "./modals.jsx";
 import ClienteApp from "./ClienteApp.jsx";
 import Config from "./Config.jsx";
 import Disparo from "./Disparo.jsx";
-import Campanhas from "./Campanhas.jsx";
+import Campanhas, { CampanhaForm } from "./Campanhas.jsx";
 import { exportBookingsCsv } from "./exports.js";
 import ClientPortal from "./ClientPortal.jsx";
 import FirstClassBooking from "./FirstClassBooking.jsx";
@@ -152,6 +152,7 @@ export default function App() {
     agenda: <button className="btn" onClick={() => open(<SlotForm />)}>＋ Novo horário</button>,
     marcacoes: <button className="btn" onClick={() => open(<BookingForm />)}>＋ Nova marcação</button>,
     clientes: <button className="btn" onClick={() => open(<ClientForm />)}>＋ Novo aluno</button>,
+    campanhas: <button className="btn" onClick={() => open(<CampanhaForm />)}>＋ Nova campanha</button>,
   };
   const Body = instrutora ? Agenda : {
     dashboard: Dashboard,

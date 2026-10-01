@@ -152,7 +152,7 @@ function Feriados() {
 /* Interruptor liga/desliga com o efeito escrito por extenso nos dois estados —
    estas travas mudam o que a aluna vê no portal, então vale dizer o que
    acontece antes de virar a chave, não depois. */
-function Chave({ on, onToggle, titulo, ligado, desligado }) {
+export function Chave({ on, onToggle, titulo, ligado, desligado }) {
   return (
     <button
       type="button"
