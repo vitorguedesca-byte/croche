@@ -3580,6 +3580,25 @@ async function gravarMesesDoVoucher(client, v, comps, { baseDoMes = {} } = {}) {
    pagamento cai — ou na hora, se o código zerou o valor. Idempotente: o uso
    já confirmado não é tocado de novo. Na matrícula grava os meses seguintes
    ANTES de converterEmMensalista, que gera a próxima mensalidade na hora. */
+/* AULA AVULSA DE PRESENTE. Vira o mesmo passe da aula extra comprada no
+   portal (ExtraPass), só que já nasce "pago", com R$ 0 e sem Pix: o portal
+   mostra "escolha o horário" e a marcação segue o caminho de sempre
+   (marcarAulaExtra com passe). `voucherUsoId` liga o passe ao uso do código —
+   é por ele que o cancelamento do uso recolhe a aula ainda não marcada.
+   Devolve quantos passes criou. */
+async function darAulasDePresente(uso, clientId, quantidade, { origem = "campanha" } = {}) {
+  const n = Math.max(0, Math.min(10, parseInt(quantidade, 10) || 0));
+  if (!n || !clientId) return 0;
+  const hoje = todayISO();
+  for (let i = 0; i < n; i++) {
+    await prisma.extraPass.create({
+      data: { clientId, amountCents: 0, status: "pago", paidAt: hoje, voucherUsoId: uso.id },
+    });
+  }
+  console.log(`[voucher] ficha ${clientId}: ${n} aula(s) avulsa(s) de presente (uso ${uso.id}, ${origem}).`);
+  return n;
+}
+
 async function confirmarVoucherDaReserva(booking, client) {
   if (!booking?.id || !client) return null;
   const uso = await prisma.voucherUso.findFirst({
@@ -3596,6 +3615,10 @@ async function confirmarVoucherDaReserva(booking, client) {
     where: { id: uso.id },
     data: { status: "confirmado", confirmadoAt: todayISO(), clientId: client.id, meses: JSON.stringify(meses) },
   });
+  // Uso que voltou de "expirado" (pagou depois do prazo) pode já ter recebido a
+  // aula numa confirmação anterior: só dá se ainda não deu.
+  const jaDeu = await prisma.extraPass.count({ where: { voucherUsoId: uso.id } });
+  if (!jaDeu) await darAulasDePresente(uso, client.id, v.aulasExtras);
   await anotarNaFicha(client.id,
     `🎟️ ${fmtDiaBR(todayISO())}: ${uso.contexto === "avulsa" ? "aula avulsa" : "matrícula"} com o código ${v.codigo} (${v.nome}) — ${uso.resumo || descreverBeneficios(v).join(" · ")}.` +
     (v.premio ? ` 🎁 Entregar o prêmio: ${v.premio}.` : ""));
@@ -3689,6 +3712,7 @@ async function aplicarVoucherNaMensalidade(client, codigo, { porAdmin = null } =
       where: { id: uso.id },
       data: { meses: JSON.stringify(meses), descontoCents, status: "confirmado", confirmadoAt: todayISO() },
     });
+    await darAulasDePresente(uso, client.id, v.aulasExtras);
     await anotarNaFicha(client.id,
       `🎟️ ${fmtDiaBR(todayISO())}: código ${v.codigo} (${v.nome}) aplicado na mensalidade${porAdmin ? ` por ${porAdmin}` : " pelo portal"} — ${uso.resumo}.` +
       (meses.length ? ` Meses: ${meses.map((m) => compPorExtenso(m.comp)).join(", ")}.` : "") +
@@ -3722,13 +3746,22 @@ async function cancelarUsoVoucher(uso) {
       : await aplicarValorNaCompetencia(client, m.comp, m.antes / 100, { origem: m.antesOrigem || "ajuste", motivo: m.antesMotivo });
     resultado.push({ comp: m.comp, resultado: r.resultado });
   }
+  /* Aula de presente ainda não marcada volta para a escola. A que já virou
+     aula fica: a vaga está na agenda dela, e tirar seria desmarcar uma aula
+     sem ela pedir — isso a Inêz faz na agenda, se quiser. */
+  const recolhidas = await prisma.extraPass.updateMany({
+    where: { voucherUsoId: uso.id, status: "pago" },
+    data: { status: "cancelado" },
+  });
+  if (recolhidas.count) resultado.push({ comp: null, resultado: "aulas_recolhidas", quantidade: recolhidas.count });
   await prisma.voucherUso.update({ where: { id: uso.id }, data: { status: "cancelado" } });
   return resultado;
 }
 
 /* Campanha + números, para a tela do painel. */
 async function resumoCampanha(v) {
-  const usos = await prisma.voucherUso.findMany({ where: { voucherId: v.id }, select: { status: true, descontoCents: true, premioEntregueAt: true } });
+  const usos = await prisma.voucherUso.findMany({ where: { voucherId: v.id }, select: { id: true, status: true, descontoCents: true, premioEntregueAt: true } });
+  const usosIds = usos.map((u) => u.id);
   const n = (s) => usos.filter((u) => u.status === s).length;
   const usados = usos.filter((u) => STATUS_QUE_CONTAM.includes(u.status)).length;
   return {
@@ -3740,6 +3773,7 @@ async function resumoCampanha(v) {
     restantes: v.limiteUsos == null ? null : Math.max(0, v.limiteUsos - usados),
     descontoTotalCents: usos.filter((u) => u.status === "confirmado").reduce((s, u) => s + (u.descontoCents || 0), 0),
     premiosPendentes: v.premio ? usos.filter((u) => u.status === "confirmado" && !u.premioEntregueAt).length : 0,
+    aulasDadas: await prisma.extraPass.count({ where: { voucherUsoId: { in: usosIds }, status: { not: "cancelado" } } }),
   };
 }
 
@@ -3787,7 +3821,58 @@ app.get("/api/vouchers/:id/usos", wrap(async (req, res) => {
   const id = Number(req.params.id);
   await conciliarUsosVoucher(id);
   const usos = await prisma.voucherUso.findMany({ where: { voucherId: id }, orderBy: { createdAt: "asc" } });
-  res.json(usos.map((u) => ({ ...u, meses: JSON.parse(u.meses || "[]") })));
+  const passes = await prisma.extraPass.findMany({
+    where: { voucherUsoId: { in: usos.map((u) => u.id) }, status: { not: "cancelado" } },
+    select: { voucherUsoId: true, status: true },
+  });
+  res.json(usos.map((u) => {
+    const meus = passes.filter((p) => p.voucherUsoId === u.id);
+    return {
+      ...u, meses: JSON.parse(u.meses || "[]"),
+      // aulas de presente: quantas recebeu e quantas já virou aula marcada
+      aulas: { total: meus.length, marcadas: meus.filter((p) => p.status === "usado").length },
+    };
+  }));
+}));
+
+/* A Inêz dá aula(s) avulsa(s) de presente na mão. Vale para quem está na
+   campanha com o uso confirmado — inclusive em campanha que não tinha esse
+   benefício ligado. Uma aluna por vez, ou todas de uma vez. */
+const QTD_AULA_MANUAL_MAX = 5;
+async function darAulaNaMao(uso, quantidade, quem) {
+  if (uso.status !== "confirmado" || !uso.clientId)
+    throw erroVoucher("Só dá para dar a aula a quem já usou o código (uso confirmado).", 409);
+  const cli = await prisma.client.findUnique({ where: { id: uso.clientId } });
+  if (!cli || cli.status === "cancelado")
+    throw erroVoucher(`${uso.nome} está com a inscrição cancelada — reative a ficha antes de dar a aula.`, 409);
+  const n = await darAulasDePresente(uso, uso.clientId, quantidade, { origem: `dada por ${quem}` });
+  const v = await prisma.voucher.findUnique({ where: { id: uso.voucherId } });
+  await anotarNaFicha(uso.clientId,
+    `🎁 ${fmtDiaBR(todayISO())}: ${n === 1 ? "1 aula avulsa de presente" : `${n} aulas avulsas de presente`} pela campanha ${v?.codigo} (dada por ${quem}). Ela escolhe o horário no portal.`);
+  return n;
+}
+
+app.post("/api/vouchers/usos/:id/aula", wrap(async (req, res) => {
+  const uso = await prisma.voucherUso.findUnique({ where: { id: Number(req.params.id) } });
+  if (!uso) return res.status(404).json({ error: "Uso não encontrado." });
+  const qtd = Math.max(1, Math.min(QTD_AULA_MANUAL_MAX, parseInt(req.body?.quantidade, 10) || 1));
+  try {
+    res.json({ ok: true, dadas: await darAulaNaMao(uso, qtd, req.admin?.username || "a escola") });
+  } catch (e) {
+    res.status(e.code || 500).json({ error: e.message });
+  }
+}));
+
+app.post("/api/vouchers/:id/aula-todas", wrap(async (req, res) => {
+  const qtd = Math.max(1, Math.min(QTD_AULA_MANUAL_MAX, parseInt(req.body?.quantidade, 10) || 1));
+  const usos = await prisma.voucherUso.findMany({ where: { voucherId: Number(req.params.id), status: "confirmado", clientId: { not: null } } });
+  let alunas = 0, aulas = 0;
+  const puladas = [];
+  for (const uso of usos) {
+    try { aulas += await darAulaNaMao(uso, qtd, req.admin?.username || "a escola"); alunas++; }
+    catch (e) { puladas.push({ nome: uso.nome, motivo: e.message }); }
+  }
+  res.json({ ok: true, alunas, aulas, puladas });
 }));
 
 app.post("/api/vouchers/usos/:id/cancelar", wrap(async (req, res) => {
@@ -4566,6 +4651,8 @@ const resumoPasse = (p) => ({
   valor: p.amountCents / 100,
   pixCode: p.status === "pendente" ? p.pixCode : null,
   paidAt: p.paidAt || null,
+  // aula de presente de uma campanha: a tela não fala em "paga" nem mostra preço
+  presente: !!p.voucherUsoId,
 });
 
 // Converter em mensalista pelo portal (usado no tablet da sala)
@@ -8006,6 +8093,8 @@ const COLUNAS_ESPERADAS = [
   ["WaConversation", "clientId", "INT NULL"],
   ["WaConversation", "humanoPedidos", "INT NOT NULL DEFAULT 0"],
   ["WaConversation", "voucher", "VARCHAR(30) NULL"],
+  ["Voucher", "aulasExtras", "INT NOT NULL DEFAULT 0"],
+  ["ExtraPass", "voucherUsoId", "INT NULL"],
   ["WaConversation", "lastInboundAt", "DATETIME(3) NULL"],
   // "Cadastro via WhatsApp" no painel
   ["Client", "origem", "VARCHAR(20) NULL"],
@@ -8036,6 +8125,7 @@ const TABELAS_ESPERADAS = [
       \`descontoMeses\` INTEGER NOT NULL DEFAULT 1,
       \`aulaExperimental\` BOOLEAN NOT NULL DEFAULT false,
       \`valorExperimental\` DOUBLE NOT NULL DEFAULT 0,
+      \`aulasExtras\` INTEGER NOT NULL DEFAULT 0,
       \`premio\` VARCHAR(200) NULL,
       \`planos\` VARCHAR(40) NOT NULL DEFAULT '[]',
       \`unidade\` VARCHAR(100) NULL,

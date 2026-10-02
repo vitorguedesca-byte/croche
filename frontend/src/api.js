@@ -159,6 +159,9 @@ export const api = {
     usos: (id) => req("GET", `/api/vouchers/${id}/usos`),
     cancelarUso: (usoId) => req("POST", `/api/vouchers/usos/${usoId}/cancelar`),
     premio: (usoId, entregue) => req("POST", `/api/vouchers/usos/${usoId}/premio`, { entregue }),
+    // aula avulsa de presente: para uma aluna da campanha, ou para todas de uma vez
+    darAula: (usoId, quantidade = 1) => req("POST", `/api/vouchers/usos/${usoId}/aula`, { quantidade }),
+    darAulaTodas: (voucherId, quantidade = 1) => req("POST", `/api/vouchers/${voucherId}/aula-todas`, { quantidade }),
     // a escola aplica o código na mensalidade da aluna (ela mandou pelo WhatsApp)
     aplicarNaAluna: (clientId, codigo) => req("POST", `/api/clients/${clientId}/voucher`, { codigo }),
     validar: (data) => req("POST", "/api/vouchers/validar", data),

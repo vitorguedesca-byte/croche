@@ -63,6 +63,7 @@ const VAZIO = {
   temDesconto: false, descontoTipo: "percentual", descontoValor: "", descontoMeses: 1,
   aulaExperimental: false, valorExperimental: 0,
   temPremio: false, premio: "",
+  temAulas: false, aulasExtras: 1,
   limiteUsos: "", inicio: "", fim: "", unidade: "", planos: [], ativo: true,
 };
 
@@ -90,6 +91,10 @@ function beneficiosDoForm(form, meta) {
       : `Mensalidade por ${money(x)} ${alcance}`);
   }
   if (form.aulaExperimental) out.push(Number(form.valorExperimental) > 0 ? `Aula experimental por ${money(form.valorExperimental)}` : "Aula experimental grátis");
+  if (form.temAulas) {
+    const n = Math.max(1, Number(form.aulasExtras) || 1);
+    out.push(n === 1 ? "1 aula avulsa de presente" : `${n} aulas avulsas de presente`);
+  }
   if (form.temPremio && form.premio.trim()) out.push(`Prêmio: ${form.premio.trim()}`);
   return out;
 }
@@ -115,6 +120,7 @@ export function CampanhaForm({ campanha }) {
     descontoValor: campanha.descontoValor ?? "", descontoMeses: campanha.descontoMeses || 1,
     aulaExperimental: campanha.aulaExperimental, valorExperimental: campanha.valorExperimental || 0,
     temPremio: !!campanha.premio, premio: campanha.premio || "",
+    temAulas: (campanha.aulasExtras || 0) > 0, aulasExtras: campanha.aulasExtras || 1,
     limiteUsos: campanha.limiteUsos ?? "", inicio: campanha.inicio || "", fim: campanha.fim || "",
     unidade: campanha.unidade || "", planos: campanha.planos || [], ativo: campanha.ativo,
   } : VAZIO);
@@ -152,6 +158,7 @@ export function CampanhaForm({ campanha }) {
         aulaExperimental: form.aulaExperimental,
         valorExperimental: Number(form.valorExperimental) || 0,
         premio: form.temPremio ? form.premio : "",
+        aulasExtras: form.temAulas ? Math.max(1, Number(form.aulasExtras) || 1) : 0,
         limiteUsos: form.limiteUsos === "" ? null : Number(form.limiteUsos),
         inicio: form.inicio || null, fim: form.fim || null,
         unidade: form.unidade || null, planos: form.planos, ativo: form.ativo,
@@ -236,6 +243,17 @@ export function CampanhaForm({ campanha }) {
           <div className="field" style={{ maxWidth: 240, margin: ".2rem 0 .8rem" }}>
             <label>Valor da aula experimental (R$)</label>
             <input type="number" min="0" step="0.01" value={form.valorExperimental} onChange={(e) => set("valorExperimental", e.target.value)} />
+          </div>
+        )}
+
+        <Chave on={form.temAulas} onToggle={() => set("temAulas", !form.temAulas)}
+          titulo="Aula avulsa de presente"
+          ligado="Quem usar o código ganha a aula e escolhe o horário pelo portal, como numa aula extra — sem pagar. Você também pode dar a aula na mão em Usos."
+          desligado="Sem aula de presente automática (dá para dar na mão em Usos)." />
+        {form.temAulas && (
+          <div className="field" style={{ maxWidth: 240, margin: ".2rem 0 .8rem" }}>
+            <label>Quantas aulas por aluna</label>
+            <input type="number" min="1" max="10" value={form.aulasExtras} onChange={(e) => set("aulasExtras", e.target.value)} />
           </div>
         )}
 
@@ -351,7 +369,7 @@ function UsosDaCampanha({ campanha: c }) {
   const cancelar = async (u) => {
     const ok = await confirmModal({
       title: "Cancelar uso do código",
-      message: `Cancelar o uso de ${u.nome}?\n\nOs meses seguintes ainda não pagos voltam ao valor normal e a vaga volta para a campanha. Mês já pago não muda, e um Pix já gerado continua com o valor dele.`,
+      message: `Cancelar o uso de ${u.nome}?\n\nOs meses seguintes ainda não pagos voltam ao valor normal, a aula de presente ainda não marcada é recolhida e a vaga volta para a campanha. Mês já pago e aula já marcada não mudam, e um Pix já gerado continua com o valor dele.`,
       confirmLabel: "Cancelar uso", tone: "danger",
     });
     if (!ok) return;
@@ -368,10 +386,44 @@ function UsosDaCampanha({ campanha: c }) {
     catch (e) { toast.error(e.message); }
   };
 
+  /* Aula avulsa de presente na mão: vira um passe de aula extra já pago, e a
+     aluna escolhe o horário pelo portal. Não manda mensagem sozinha — avise
+     a aluna pelo WhatsApp. */
+  const darAula = async (u) => {
+    const ok = await confirmModal({
+      title: "Dar aula avulsa de presente",
+      message: `Dar 1 aula avulsa de presente para ${u.nome}?
+
+Ela escolhe o dia e o horário pelo portal, sem pagar. Avise a aluna pelo WhatsApp.`,
+      confirmLabel: "Dar a aula",
+    });
+    if (!ok) return;
+    try { await api.vouchers.darAula(u.id, 1); toast(`Aula de presente liberada para ${u.nome}. 🎁`); carregar(); avisarLista(); }
+    catch (e) { toast.error(e.message); }
+  };
+  const confirmadas = (usos || []).filter((u) => u.status === "confirmado" && u.clientId);
+  const darAulaTodas = async () => {
+    const ok = await confirmModal({
+      title: "Dar aula avulsa a todas",
+      message: `Dar 1 aula avulsa de presente para cada uma das ${confirmadas.length} aluna(s) que usaram o código ${c.codigo}?
+
+Cada uma escolhe o horário pelo portal, sem pagar.`,
+      confirmLabel: `Dar ${confirmadas.length} aula(s)`,
+    });
+    if (!ok) return;
+    try {
+      const r = await api.vouchers.darAulaTodas(c.id, 1);
+      toast(`${r.aulas} aula(s) de presente liberada(s)${r.puladas?.length ? ` · ${r.puladas.length} aluna(s) pulada(s): ${r.puladas.map((p) => p.nome).join(", ")}` : ""}. 🎁`);
+      carregar(); avisarLista();
+    } catch (e) { toast.error(e.message); }
+  };
+
   return (
     <Modal size="md" title={`Usos do código ${c.codigo}`}
       subheader={<div className="day-sub">{c.nome} · {c.usos.usados}{c.limiteUsos != null ? ` de ${c.limiteUsos}` : ""} uso(s)</div>}
       footer={<button className="btn ghost" onClick={close}>Fechar</button>}>
+      {/* mesmo acabamento das Configurações nos textos de ajuda */}
+      <div className="cfg-sec" style={{ padding: 0 }}>
       {c.publico !== "novas" && (
         <div className="cfg-preview" style={{ marginTop: 0, marginBottom: "1rem" }}>
           <div className="field" style={{ marginBottom: ".6rem" }}>
@@ -380,6 +432,13 @@ function UsosDaCampanha({ campanha: c }) {
           </div>
           <button className="btn sec sm" onClick={aplicar} disabled={!aluna}>Aplicar código</button>
           <div className="help">Para quando ela mandar o código pelo WhatsApp.</div>
+        </div>
+      )}
+
+      {confirmadas.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: ".6rem", flexWrap: "wrap", marginBottom: ".8rem" }}>
+          <div className="help" style={{ margin: 0 }}>Quer dar uma aula avulsa de presente? Ela escolhe o horário pelo portal.</div>
+          <button className="btn sec sm" onClick={darAulaTodas}>🎁 Dar aula a todas ({confirmadas.length})</button>
         </div>
       )}
 
@@ -402,6 +461,7 @@ function UsosDaCampanha({ campanha: c }) {
                     <td data-l="Desconto">
                       {u.descontoCents > 0 ? money(u.descontoCents / 100) : "—"}
                       {u.meses?.length > 0 && <div className="cli-sub">{u.meses.map((m) => `${compLabel(m.comp)}: ${money(m.depois / 100)}`).join(" · ")}</div>}
+                      {u.aulas?.total > 0 && <div className="cli-sub">🎁 {u.aulas.total} aula(s) de presente · {u.aulas.marcadas} marcada(s)</div>}
                     </td>
                     <td data-l="Situação"><span className={`badge ${cor}`}>{txt}</span></td>
                     <td data-l="">
@@ -410,6 +470,9 @@ function UsosDaCampanha({ campanha: c }) {
                           <button className={`btn sm ${u.premioEntregueAt ? "ghost" : "sec"}`} onClick={() => premio(u)}>
                             {u.premioEntregueAt ? `🎁 Entregue ${fmtDate(u.premioEntregueAt)}` : "🎁 Marcar entregue"}
                           </button>
+                        )}
+                        {u.status === "confirmado" && u.clientId && (
+                          <button className="btn ghost sm" onClick={() => darAula(u)}>🎁 Dar aula</button>
                         )}
                         {u.status !== "cancelado" && u.status !== "expirado" && (
                           <button className="btn ghost sm" onClick={() => cancelar(u)}>Cancelar uso</button>
@@ -422,6 +485,7 @@ function UsosDaCampanha({ campanha: c }) {
             </tbody>
           </table>
         )}
+      </div>
     </Modal>
   );
 }
@@ -517,6 +581,7 @@ export default function Campanhas() {
                   <td data-l="Usos">
                     <b>{c.usos.usados}{c.limiteUsos != null ? ` / ${c.limiteUsos}` : ""}</b>
                     {c.premiosPendentes > 0 && <div className="cli-sub">🎁 {c.premiosPendentes} a entregar</div>}
+                    {c.aulasDadas > 0 && <div className="cli-sub">➕ {c.aulasDadas} aula(s) de presente</div>}
                   </td>
                   <td data-l="Situação"><span className={`badge ${SITUACAO_COR[c.situacao.codigo] || "b-muted"}`}>{c.situacao.texto}</span></td>
                   <td data-l="">

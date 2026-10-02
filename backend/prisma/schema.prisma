@@ -100,10 +100,14 @@ model ExtraPass {
   paidAt        String?  @db.VarChar(10)
   usedBookingId Int? // aula marcada com este passe (sem FK: a aula pode ser excluída)
   usedAt        String?  @db.VarChar(10)
+  // Aula de presente de uma campanha (passe nasce "pago" com R$ 0, sem Pix).
+  // null = aula extra comprada pela aluna, como sempre foi.
+  voucherUsoId  Int?
   createdAt     DateTime @default(now())
 
   @@index([clientId])
   @@index([txid])
+  @@index([voucherUsoId])
 }
 
 // Créditos de reposição do mensalista.
@@ -416,6 +420,10 @@ model Settings {
    • aulaExperimental  → a aula AVULSA (1ª aula sem plano) sai por
                          `valorExperimental` (0 = grátis)
    • premio            → brinde/prêmio, só registrado; quem entrega é a escola
+   • aulasExtras       → aula(s) avulsa(s) de presente: vira ExtraPass já pago
+                         (R$ 0), e a aluna escolhe o horário no portal pelo
+                         mesmo caminho da aula extra comprada. A Inêz também
+                         pode dar a aula na mão, uso a uso (02/10/2026)
 
    `limiteUsos` é o "os X primeiros": conta o uso RESERVADO (Pix gerado e ainda
    no prazo) e o CONFIRMADO (pago). Reserva que expira devolve a vaga. */
@@ -435,6 +443,7 @@ model Voucher {
   aulaExperimental  Boolean  @default(false)
   valorExperimental Float    @default(0) // preço da aula experimental; 0 = grátis
   premio            String?  @db.VarChar(200) // ex.: "Kit de agulhas", "1 novelo"
+  aulasExtras       Int      @default(0) // aulas avulsas de presente por uso (0 = não dá)
   planos            String   @default("[]") @db.VarChar(40) // JSON [1,2,...] — planos aceitos; [] = todos
   unidade           String?  @db.VarChar(100) // null = todas as unidades
   inicio            String?  @db.VarChar(10) // 'YYYY-MM-DD' — vale a partir de (inclusive)

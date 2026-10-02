@@ -12,6 +12,8 @@ const centavos = (v) => Math.round((Number(v) || 0) * 100) / 100;
 export const PUBLICOS = ["novas", "alunas", "todas"];
 export const TIPOS_DESCONTO = ["percentual", "valor", "preco"];
 export const VOUCHER_MESES_MAX = 12;
+export const VOUCHER_AULAS_MAX = 10; // aulas avulsas de presente por uso
+const aulasDe = (v) => Math.max(0, Math.min(VOUCHER_AULAS_MAX, parseInt(v?.aulasExtras, 10) || 0));
 // "reservado" e "confirmado" ocupam vaga no limite; os outros devolvem
 export const STATUS_QUE_CONTAM = ["reservado", "confirmado"];
 
@@ -73,6 +75,7 @@ export function descreverBeneficios(v) {
       ? `Aula experimental por ${moeda(v.valorExperimental)}`
       : "Aula experimental grátis");
   }
+  if (aulasDe(v)) out.push(aulasDe(v) === 1 ? "1 aula avulsa de presente" : `${aulasDe(v)} aulas avulsas de presente`);
   if (v.premio) out.push(`Prêmio: ${v.premio}`);
   return out;
 }
@@ -105,20 +108,22 @@ export function motivoRecusa(v, { hoje, usados = 0, contexto, freq = null, unida
 
   if (v.unidade && unidade && v.unidade !== unidade) return `Este código vale só para a unidade ${v.unidade}. 💚`;
 
+  // aula de presente e prêmio valem em qualquer lugar onde o código é aceito
+  const extraOuPremio = !!v.premio || aulasDe(v) > 0;
   if (contexto === "avulsa") {
-    if (!v.aulaExperimental && !v.premio)
+    if (!v.aulaExperimental && !extraOuPremio)
       return "Este código vale para os planos mensais, não para a aula avulsa. 💚";
   } else if (contexto === "matricula") {
     const planos = planosDe(v);
     if (planos.length && freq && !planos.includes(Number(freq)))
       return `Este código vale só para o plano ${planos.map((p) => `${p}x`).join(", ")} por semana. 💚`;
-    if (!v.isentaMatricula && !temDesconto(v) && !v.premio)
+    if (!v.isentaMatricula && !temDesconto(v) && !extraOuPremio)
       return "Este código é da aula experimental — escolha a opção AVULSO para usar. 💚";
   } else if (contexto === "mensalidade") {
     const planos = planosDe(v);
     if (planos.length && freq && !planos.includes(Number(freq)))
       return `Este código vale só para o plano ${planos.map((p) => `${p}x`).join(", ")} por semana. 💚`;
-    if (!temDesconto(v) && !v.premio)
+    if (!temDesconto(v) && !extraOuPremio)
       return "Este código é para alunas novas, na matrícula pelo site. 💚";
   }
   return null;
@@ -174,10 +179,11 @@ export function limparCampanha(body, { hoje } = {}) {
   const valorExperimental = Math.max(0, Number(b.valorExperimental) || 0);
   const isentaMatricula = !!b.isentaMatricula;
   const premio = String(b.premio || "").trim().slice(0, 200) || null;
-  if (!isentaMatricula && !descontoTipo && !aulaExperimental && !premio)
-    return { erro: "Escolha pelo menos um benefício: isenção da matrícula, desconto, aula experimental ou prêmio." };
-  if (publico === "alunas" && !descontoTipo && !premio)
-    return { erro: "Para alunas que já estudam, o código precisa dar desconto na mensalidade ou um prêmio." };
+  const aulasExtras = aulasDe(b);
+  if (!isentaMatricula && !descontoTipo && !aulaExperimental && !premio && !aulasExtras)
+    return { erro: "Escolha pelo menos um benefício: isenção da matrícula, desconto, aula experimental, aula de presente ou prêmio." };
+  if (publico === "alunas" && !descontoTipo && !premio && !aulasExtras)
+    return { erro: "Para alunas que já estudam, o código precisa dar desconto na mensalidade, aula de presente ou prêmio." };
 
   const planos = (Array.isArray(b.planos) ? b.planos : []).map(Number).filter((n) => [1, 2, 3, 4].includes(n));
   const dataOk = (d) => !d || /^\d{4}-\d{2}-\d{2}$/.test(d);
@@ -194,7 +200,7 @@ export function limparCampanha(body, { hoje } = {}) {
       codigo, nome, publico,
       descricao: String(b.descricao || "").trim().slice(0, 500) || null,
       isentaMatricula, descontoTipo, descontoValor, descontoMeses,
-      aulaExperimental, valorExperimental, premio,
+      aulaExperimental, valorExperimental, premio, aulasExtras,
       planos: JSON.stringify([...new Set(planos)].sort()),
       unidade: String(b.unidade || "").trim() || null,
       inicio, fim, limiteUsos,

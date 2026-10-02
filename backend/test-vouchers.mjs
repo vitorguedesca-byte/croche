@@ -86,5 +86,16 @@ const lc = limparCampanha({ codigo: "volta às aulas", nome: "Volta", isentaMatr
 ok(lc.dados?.codigo === "VOLTAASAULAS" && lc.dados.limiteUsos === 10 && lc.dados.planos === "[1,2]", "limpa e normaliza");
 ok(descreverBeneficios(v2).length === 2, "descreve isenção + desconto");
 
+console.log("\n— aula avulsa de presente —");
+const va = { ...base, aulasExtras: 2 };
+ok(descreverBeneficios(va).includes("2 aulas avulsas de presente"), "descreve 2 aulas de presente");
+ok(descreverBeneficios({ ...base, aulasExtras: 1 }).includes("1 aula avulsa de presente"), "descreve 1 aula (singular)");
+ok(motivoRecusa(va, { ...ctx, contexto: "matricula", freq: 1 }) === null, "só aula de presente vale na matrícula");
+ok(motivoRecusa(va, { ...ctx, contexto: "avulsa" }) === null, "só aula de presente vale na avulsa");
+ok(motivoRecusa({ ...va, publico: "alunas" }, { ...ctx, contexto: "mensalidade" }) === null, "só aula de presente vale para quem já estuda");
+ok(!limparCampanha({ codigo: "TESTE1", nome: "x", aulasExtras: 1 }).erro, "campanha só com aula de presente é aceita");
+ok(limparCampanha({ codigo: "TESTE1", nome: "x", aulasExtras: 50 }).dados.aulasExtras === 10, "no máximo 10 aulas por uso");
+ok(limparCampanha({ codigo: "TESTE1", nome: "x", isentaMatricula: true }).dados.aulasExtras === 0, "sem aula de presente por padrão");
+
 console.log(falhas ? `\n${falhas} FALHA(S)` : "\nTudo certo.");
 process.exit(falhas ? 1 : 0);

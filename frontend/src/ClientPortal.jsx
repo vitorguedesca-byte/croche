@@ -365,7 +365,9 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
 
         <RepoCard makeup={data.makeup} onRepor={() => { setModo("repor"); irParaAgenda(); }} />
 
-        {cliente.plan === "mensalista" && cliente.status !== "cancelado" && (
+        {/* Mensalista compra aula extra aqui. Quem ganhou aula de presente numa
+            campanha também vê o cartão, mesmo sem ser mensalista. */}
+        {(cliente.plan === "mensalista" || data.extra?.status === "pago") && cliente.status !== "cancelado" && (
           <AulaExtraCard
             extra={data.extra}
             valor={data.valorAulaExtra}
@@ -1240,19 +1242,20 @@ function AulaExtraCard({ extra, valor, phone, flash, onMudou, onEscolherHorario 
     <div className="pt-repo" style={{ borderLeftColor: "var(--green-mid)" }}>
       <div className="pt-repo-top">
         <div>
-          <div className="pt-repo-t">➕ Aula extra</div>
+          <div className="pt-repo-t">{pago && pass.presente ? "🎁 Aula de presente" : "➕ Aula extra"}</div>
           <div className="pt-sub2">
-            {pago ? "Sua aula extra está paga! Escolha o dia e o horário."
+            {pago && pass.presente ? "Você ganhou uma aula avulsa de presente! Escolha o dia e o horário."
+              : pago ? "Sua aula extra está paga! Escolha o dia e o horário."
               : pendente ? "Assim que o seu Pix cair, o calendário abre para você escolher o horário."
               : "Quer praticar mais, além das aulas do seu plano? Compre uma aula extra por aqui."}
           </div>
         </div>
-        {!pendente && <div className="pt-pay-val">{money(valor || 0)}</div>}
+        {!pendente && !(pago && pass.presente) && <div className="pt-pay-val">{money(valor || 0)}</div>}
       </div>
 
       {pago ? (
         <button className="pt-btn" style={{ marginTop: ".8rem" }} onClick={onEscolherHorario}>
-          📅 Escolher o horário da minha aula extra
+          📅 Escolher o horário da minha {pass.presente ? "aula de presente" : "aula extra"}
         </button>
       ) : pendente ? (<>
         {pass.pixCode ? (<>
