@@ -2265,12 +2265,19 @@ async function registrarMatriculaPaga(booking) {
      só acontecia com ficha de aluna nova (firstClass): a ex-aluna que voltava
      pelo WhatsApp saía com a grade de um horário só. */
   const slotIdsMatricula = [booking.slotId, ...outrasMatricula.map((om) => om.slotId)].filter(Boolean);
+  /* ESCALA NÃO TEM GRADE: ela marca cada aula, e converterEmMensalista recusa
+     horário para escala ("não pode receber horários replicados"). Mandar os
+     horários da matrícula aqui fazia TODA matrícula em escala falhar depois de
+     o Pix cair (de 23/09 a 02/10/2026): a aluna pagava e a ficha não virava
+     mensalista — sem plano, sem a fatura do mês, sem a próxima mensalidade.
+     As aulas da semana da matrícula já existem; na escala não há o que replicar. */
+  const ehEscala = atualizado.mensalistaTipo === "escala";
   try {
     const r = await converterEmMensalista(atualizado, {
       weeklyFreq: atualizado.weeklyFreq,
       mensalistaTipo: atualizado.mensalistaTipo,
       billingDay: diaDoMes(pagoEm),
-      slotIds: slotIdsMatricula,
+      slotIds: ehEscala ? [] : slotIdsMatricula,
       /* O que vira mensalidade do mês corrente é o PAGAMENTO MENOS A TAXA DE
          MATRÍCULA. `booking.value` é o que ela pagou (mensalidade + taxa); a
          fatura do mês tem que nascer com o valor da mensalidade, senão o
