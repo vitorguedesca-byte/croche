@@ -654,13 +654,25 @@ export function marcadoresDoAluno(data, booking, dataAula) {
   return marcas;
 }
 
+/* A mensalidade de UMA aluna num mês. O mês pode ter mais de uma (duplicata
+   antiga cancelada ao lado da que ela pagou — Nayara, out/2026) e a lista vem
+   da mais nova para a mais velha: pegar a primeira mostrava "Fatura cancelada"
+   para quem estava em dia. A que vale é a paga, depois a em aberto; a
+   cancelada só aparece quando não há outra. */
+const PESO_FATURA = { pago: 0, pendente: 1 };
+export function faturaDaComp(invoices, clientId, comp) {
+  return (invoices || [])
+    .filter((i) => i.clientId === clientId && i.competencia === comp)
+    .sort((a, b) => (PESO_FATURA[a.status] ?? 2) - (PESO_FATURA[b.status] ?? 2))[0];
+}
+
 export function situacaoMensalidade(data, client, comp = compAtual()) {
   const base = { valor: 0, inv: null, client };
   // Quem não é mensalista não entra na régua mensal — nem cobrar, nem alarmar.
   if (!client || client.plan !== "mensalista") {
     return { ...base, estado: "sem_mensalidade", ...SIT_MENSALIDADE.sem_mensalidade };
   }
-  const inv = (data.invoices || []).find((i) => i.clientId === client.id && i.competencia === comp);
+  const inv = faturaDaComp(data.invoices, client.id, comp);
   if (!inv) {
     return {
       ...base, estado: "sem_boleto", ...SIT_MENSALIDADE.sem_boleto,

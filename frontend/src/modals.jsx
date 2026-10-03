@@ -15,7 +15,7 @@ import {
   WEEKDAYS_SHORT, dowMon, datesForWeekdays, addDays, SEMANAS_PADRAO, MESES_PADRAO,
   tipoMensalista, TIPO_MENSALISTA_LABEL,
   validarCPF, formatarCPF,
-  proximaCobranca, fraseProximaCobranca,
+  proximaCobranca, fraseProximaCobranca, faturaDaComp,
   PLANOS_MENSALISTA, FREQ_MAX_ESCALA, valorPlanoMeta,
 } from "./helpers.js";
 
@@ -1601,7 +1601,7 @@ export function AlterarMensalidade({ client, compInicial }) {
   const atual = compAtual();
   const recorrenteAtual = mensalidadeDe(client, data.meta);
   const invs = (data.invoices || []).filter((i) => i.clientId === client.id);
-  const invDe = (comp) => invs.find((i) => i.competencia === comp);
+  const invDe = (comp) => faturaDaComp(invs, client.id, comp);
 
   const [valor, setValor] = useState(String(recorrenteAtual || ""));
   /* Vindo da tela Mensalistas (com um mês na mão), o gesto é "mexer no valor
@@ -2194,7 +2194,7 @@ function MensalidadesPanel({ client }) {
 
       <div>
         {linhas.map((comp) => {
-          const inv = invs.find((i) => i.competencia === comp);
+          const inv = faturaDaComp(invs, client.id, comp);
           const combinado = precoDaComp(data.precos, client.id, comp);
           // Sem boleto ainda, o valor que aparece é o que ele vai nascer cobrando
           const valor = inv ? inv.amountCents / 100 : (combinado ? combinado.amountCents / 100 : valorPadrao);

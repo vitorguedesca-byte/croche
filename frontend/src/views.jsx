@@ -16,7 +16,7 @@ import {
   mensalidadeDaComp, precoDaComp, situacaoMensalidade, clientOfBooking, ehPagamentoDeMatricula,
   clientMonthClasses, classifyClient, isNewLead,
   aniversariantes, diaMesNasc, diaMesLabel, faltamLabel,
-  proximaCobranca, fraseProximaCobranca, contemBusca,
+  proximaCobranca, fraseProximaCobranca, contemBusca, faturaDaComp,
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
@@ -940,7 +940,7 @@ function FinanceiroOperacao() {
     .filter((c) => { const ini = matriculaISO(c); return !ini || ini.slice(0, 7) <= comp; })
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const invOf = (c) => (data.invoices || []).find((i) => i.clientId === c.id && i.competencia === comp);
+  const invOf = (c) => faturaDaComp(data.invoices, c.id, comp);
   const valorDe = (c) => mensalidadeDaComp(c, comp, data.meta, data.precos);
   const vencDe = (c) => Math.min(28, Math.max(1, c.billingDay || data.meta.vencimentoDia || 10));
 
@@ -1311,9 +1311,9 @@ function FinanceiroOperacao() {
                       <span
                         className="badge b-muted"
                         style={{ background: "rgba(220,53,69,0.08)", color: "var(--danger)", border: "1px solid rgba(220,53,69,0.25)" }}
-                        title="Mensalidade cancelada automaticamente devido à inativação da aluna"
+                        title={c.status === "cancelado" ? "Mensalidade cancelada automaticamente devido à inativação da aluna" : "Mensalidade deste mês cancelada no painel"}
                       >
-                        🚫 Inativada · Fatura cancelada
+                        🚫 {c.status === "cancelado" ? "Inativada · " : ""}Fatura cancelada
                       </span>
                     ) : inv.encargos?.atrasada ? (
                       <span className="badge b-danger">⚠️ em atraso há {inv.encargos.dias} dia(s)</span>
