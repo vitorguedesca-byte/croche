@@ -32,6 +32,12 @@ export function exportClientsCsv(data) {
   download(`fios-alunos-${stamp()}.csv`, "﻿" + csv, "text/csv;charset=utf-8");
 }
 
+// CSV genérico dos relatórios do Financeiro (cabeçalho + linhas já prontas)
+export function exportCsv(nome, head, rows) {
+  const csv = [head, ...rows].map((r) => r.map(cell).join(";")).join("\n");
+  download(`fios-${nome}-${stamp()}.csv`, "﻿" + csv, "text/csv;charset=utf-8");
+}
+
 export function downloadBackup(data) {
   download(`fios-backup-${stamp()}.json`, JSON.stringify(data, null, 2), "application/json");
 }

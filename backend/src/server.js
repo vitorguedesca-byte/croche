@@ -4004,6 +4004,101 @@ app.post("/api/invoices/gerar-mes", wrap(async (_req, res) => {
   res.json({ geradas: feitas.length, novas: novas.length });
 }));
 
+/* ---------- RELATÓRIO DE VENDAS (Financeiro › Vendas) ----------
+   O dinheiro que ENTROU no período, linha a linha; a tela soma por unidade.
+   Cada Pix entra uma vez só — e é por isso que a fonte de cada tipo é uma:
+
+   • Matrícula (1ª mensalidade) e taxa de matrícula → a RESERVA da aula de
+     matrícula. A fatura que registrarMatriculaPaga cria dela é pulada aqui,
+     senão a 1ª mensalidade contaria duas vezes. Ir pela reserva, e não pela
+     fatura, também pega a matrícula cuja conversão falhou (sem fatura).
+     Matrícula devolvida: a mensalidade voltou, a taxa fica (Vitor, 01/09/2026).
+   • Aula avulsa → a reserva paga (registrarAulaAvulsaPaga também cria fatura;
+     pulada pelo mesmo motivo).
+   • Aula extra → o ExtraPass pago/usado (presente de campanha é R$ 0, fica fora).
+   • Mensalidade → a fatura paga que não nasceu de nenhuma das reservas acima.
+
+   A fatura "nasceu da reserva" quando tem o mesmo txid, ou — baixa manual, sem
+   txid — quando é da mesma aluna e foi paga no mesmo dia da reserva.
+   Unidade: a da reserva (matrícula, taxa, avulsa) ou a da ficha da aluna. */
+app.get("/api/relatorios/vendas", wrap(async (req, res) => {
+  const ehDia = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+  const de = String(req.query.de || ""), ate = String(req.query.ate || "");
+  if (!ehDia(de) || !ehDia(ate) || de > ate) return res.status(400).json({ error: "Período inválido." });
+  const noPeriodo = (d) => !!d && d >= de && d <= ate;
+  const dia = (v) => String(v || "").slice(0, 10);
+
+  const [clients, reservas, faturas, passes] = await Promise.all([
+    prisma.client.findMany({ select: { id: true, name: true, phone: true, unit: true, plan: true, matriculaStatus: true, weeklyFreq: true } }),
+    prisma.booking.findMany({
+      where: { paid: true, value: { gt: 0 }, paymentMethod: { notIn: [PGTO_PLANO, PGTO_REPOSICAO, PGTO_EXTRA] } },
+      select: { id: true, clientName: true, phone: true, unit: true, value: true, taxaMatricula: true, paymentMethod: true, paymentDate: true, txid: true, date: true },
+    }),
+    prisma.invoice.findMany({ where: { status: "pago", amountCents: { gt: 0 } } }),
+    prisma.extraPass.findMany({ where: { status: { in: ["pago", "usado"] }, amountCents: { gt: 0 } } }),
+  ]);
+
+  const porId = new Map(clients.map((c) => [c.id, c]));
+  const porNome = new Map(clients.map((c) => [c.name, c]));
+  const clienteDaReserva = (b) => {
+    if (porNome.has(b.clientName)) return porNome.get(b.clientName);
+    const tel = onlyDigits(b.phone || "").slice(-8);
+    return tel.length === 8 ? clients.find((c) => onlyDigits(c.phone || "").endsWith(tel)) : null;
+  };
+  const unidade = (u) => u || "Sem unidade";
+  const plano = (c) => (c?.weeklyFreq ? `${c.weeklyFreq}x por semana` : "");
+
+  /* Aula de mensalista marcada como paga no painel não é venda: o dinheiro
+     dela é a mensalidade (era o R$ 20 por aula que saiu em 30/08/2026). */
+  const vendas = reservas
+    .map((b) => ({ b, c: clienteDaReserva(b) }))
+    .filter(({ b, c }) => ehPagamentoDeMatricula(b.paymentMethod) || b.paymentMethod === "Aula Avulsa" || c?.plan !== "mensalista");
+
+  const itens = [];
+  let devolvidas = 0;
+  for (const { b, c } of vendas) {
+    const pagoEm = b.paymentDate || b.date;
+    if (!noPeriodo(pagoEm)) continue;
+    const base = { data: pagoEm, unidade: unidade(b.unit), aluna: b.clientName, clientId: c?.id || null };
+    if (ehPagamentoDeMatricula(b.paymentMethod)) {
+      const taxa = Number(b.taxaMatricula) || 0;
+      if (c?.matriculaStatus === "devolvida") devolvidas++;
+      else itens.push({ ...base, tipo: "matricula", valor: mensalidadeDaReserva(b), detalhe: plano(c) });
+      if (taxa > 0) itens.push({ ...base, tipo: "taxa", valor: taxa, detalhe: "" });
+    } else {
+      itens.push({ ...base, tipo: "avulsa", valor: Number(b.value) || 0, detalhe: b.paymentMethod || "" });
+    }
+  }
+
+  // Faturas que nasceram das reservas acima (mesmo txid, ou mesma aluna no mesmo dia)
+  const txidsDeReserva = new Set(vendas.map(({ b }) => b.txid).filter(Boolean));
+  const reservaNoDia = new Set(vendas.map(({ b }) => `${b.clientName}|${b.paymentDate || b.date}`));
+  for (const i of faturas) {
+    const pagoEm = dia(i.paidAt);
+    if (!noPeriodo(pagoEm)) continue;
+    const c = porId.get(i.clientId);
+    if (i.txid && txidsDeReserva.has(i.txid)) continue;
+    if (!i.txid && c && reservaNoDia.has(`${c.name}|${pagoEm}`)) continue;
+    itens.push({
+      tipo: "mensalidade", data: pagoEm, unidade: unidade(c?.unit), aluna: c?.name || `aluno #${i.clientId}`,
+      clientId: i.clientId, valor: i.amountCents / 100,
+      detalhe: `${i.competencia}${i.baixaManual ? " · baixa manual" : ""}`,
+    });
+  }
+
+  for (const p of passes) {
+    if (!noPeriodo(p.paidAt)) continue;
+    const c = porId.get(p.clientId);
+    itens.push({
+      tipo: "extra", data: p.paidAt, unidade: unidade(c?.unit), aluna: c?.name || `aluno #${p.clientId}`,
+      clientId: p.clientId, valor: p.amountCents / 100, detalhe: p.status === "usado" ? "aula já marcada" : "a marcar",
+    });
+  }
+
+  itens.sort((a, b) => b.data.localeCompare(a.data) || a.aluna.localeCompare(b.aluna));
+  res.json({ de, ate, itens, devolvidas });
+}));
+
 /* Automático: uma vez por dia, gera as mensalidades de quem está a
    ANTECEDENCIA_DIAS ou menos do vencimento.
 

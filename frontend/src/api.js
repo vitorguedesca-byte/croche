@@ -167,6 +167,9 @@ export const api = {
     validar: (data) => req("POST", "/api/vouchers/validar", data),
   },
 
+  // Financeiro › Vendas: o que entrou no período, linha a linha (a tela soma por unidade)
+  relatorioVendas: (de, ate) => req("GET", `/api/relatorios/vendas?de=${de}&ate=${ate}`),
+
   availableSlots: (unit) => req("GET", `/api/slots/available${unit ? `?unit=${encodeURIComponent(unit)}` : ""}`),
 
   resetPin: (clientId) => req("DELETE", `/api/clients/${clientId}/pin`),

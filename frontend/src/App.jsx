@@ -4,6 +4,7 @@ import AdminLogin from "./AdminLogin.jsx";
 import { useStore } from "./store.jsx";
 import { useModal } from "./ui.jsx";
 import { Dashboard, Agenda, Marcacoes, Clientes, Financeiro, Depoimentos, Aniversariantes } from "./views.jsx";
+import { RelatorioVendas, RelatorioVagas } from "./Relatorios.jsx";
 import { SlotForm, BookingForm, ClientForm } from "./modals.jsx";
 import ClienteApp from "./ClienteApp.jsx";
 import Config from "./Config.jsx";
@@ -44,6 +45,8 @@ const NAV = [
   { view: "disparo", ic: "📣", label: "Disparo WhatsApp" },
   { sep: "Financeiro" },
   { view: "financeiro", ic: "💰", label: "Financeiro" },
+  { view: "rel-vendas", ic: "📈", label: "Relatório de vendas" },
+  { view: "rel-vagas", ic: "🪑", label: "Relatório de vagas" },
   { view: "campanhas", ic: "🎟️", label: "Campanhas e códigos" },
   { sep: "Site" },
   { view: "depoimentos", ic: "⭐", label: "Depoimentos" },
@@ -66,6 +69,8 @@ const TITLES = {
   financeiro:   ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
   mensalistas:  ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
   recebimentos: ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
+  "rel-vendas": ["Relatório de vendas", "O que entrou no período, por unidade e no total"],
+  "rel-vagas":  ["Relatório de vagas",  "Vagas livres por dia, turma e alunas — por unidade e no total"],
   campanhas:    ["Campanhas e códigos", "Vouchers de promoção: isenção, desconto, aula experimental e prêmios"],
   depoimentos:  ["Depoimentos",   "Gerencie os depoimentos exibidos no site"],
   config:       ["Configurações", "Padrões do sistema, unidades e profissionais"],
@@ -164,6 +169,8 @@ export default function App() {
     financeiro: Financeiro,
     mensalistas: Financeiro,
     recebimentos: Financeiro,
+    "rel-vendas": RelatorioVendas,
+    "rel-vagas": RelatorioVagas,
     campanhas: Campanhas,
     depoimentos: Depoimentos,
     config: Config,
