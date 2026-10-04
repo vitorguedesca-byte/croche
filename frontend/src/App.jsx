@@ -70,7 +70,7 @@ const TITLES = {
   mensalistas:  ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
   recebimentos: ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
   "rel-vendas": ["Relatório de vendas", "O que entrou no período, por unidade e no total"],
-  "rel-vagas":  ["Relatório de vagas",  "Vagas livres por dia, turma e alunas — por unidade e no total"],
+  "rel-vagas":  ["Relatório de vagas",  "Capacidade, ocupação e tipos de aluna — por unidade e no total"],
   campanhas:    ["Campanhas e códigos", "Vouchers de promoção: isenção, desconto, aula experimental e prêmios"],
   depoimentos:  ["Depoimentos",   "Gerencie os depoimentos exibidos no site"],
   config:       ["Configurações", "Padrões do sistema, unidades e profissionais"],
