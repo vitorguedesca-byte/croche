@@ -267,8 +267,12 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
     if (r && r.motivo) return `${base} ${r.motivo}`;
     return base;
   };
+  /* Com a mensalidade em atraso a liberação não gera crédito, e pagar depois não
+     gera para trás. Ela precisa saber ANTES de liberar, não descobrir depois. */
+  const emAtrasoRepo = !!(data.makeup && data.makeup.codigo === "atraso");
+  const avisoAtrasoRepo = "Sua mensalidade está em atraso: esta aula não vai gerar crédito de reposição, nem depois do pagamento.";
   const doCancel = async (b) => {
-    if (!(await confirmModal({ title: "Cancelar aula", message: `Cancelar a sua aula de ${fmtDateLong(b.date)} às ${b.time}?\n\nA vaga ficará livre para outra pessoa.`, confirmLabel: "Cancelar aula", cancelLabel: "Voltar", tone: "danger" }))) return;
+    if (!(await confirmModal({ title: "Cancelar aula", message: `Cancelar a sua aula de ${fmtDateLong(b.date)} às ${b.time}?\n\nA vaga ficará livre para outra pessoa.${emAtrasoRepo ? `\n\n⚠️ ${avisoAtrasoRepo}` : ""}`, confirmLabel: "Cancelar aula", cancelLabel: "Voltar", tone: "danger" }))) return;
     setBusy(true);
     try {
       const r = await api.portal.cancel(phone, b.id);
@@ -423,6 +427,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
               <div className="pt-absence">
                 <label className="pt-absence-l">Conte rapidinho o motivo (opcional):</label>
                 <textarea className="pt-absence-t" value={absenceText} onChange={(e) => setAbsenceText(e.target.value)} placeholder="Ex.: tive um imprevisto, vou ao médico…" />
+                {emAtrasoRepo && <div className="pt-sub2" style={{ marginTop: ".4rem" }}>⚠️ {avisoAtrasoRepo}</div>}
                 <div className="pt-absence-actions">
                   <button className="pt-link" onClick={() => { setAbsenceFor(null); setAbsenceText(""); }}>Voltar</button>
                   <button className="pt-btn-out" onClick={() => doAbsence(b)} disabled={busy}>Enviar aviso</button>
@@ -1347,6 +1352,9 @@ function RepoCard({ makeup, onRepor }) {
           <li>O crédito vale até o <b>fim do mês seguinte</b> ao da aula que você liberou.</li>
           <li>A reposição é marcada <b>depois que a data da aula liberada passa</b> — repor é remarcar uma aula que deixou de acontecer, não adiantar a próxima.</li>
           <li><b>Não se repõe a reposição:</b> se você liberar a sua aula de reposição, o crédito se encerra ali.</li>
+          {regras.atrasoBloqueia && (
+            <li>Vale só com a <b>mensalidade em dia</b>: aula liberada com mensalidade em atraso não gera crédito, <b>nem depois do pagamento</b>.</li>
+          )}
           <li>A aula de reposição <b>não ocupa</b> vaga das aulas do seu plano na semana.</li>
           <li>É preciso estar com a inscrição ativa.</li>
         </ul>

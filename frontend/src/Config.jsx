@@ -302,7 +302,7 @@ export default function Config() {
             on={travaAtraso}
             onToggle={() => setTravaAtraso(!travaAtraso)}
             titulo="Mensalidade vencida bloqueia a reposição"
-            ligado="A aluna com mensalidade em atraso não ganha nem usa crédito de reposição."
+            ligado="A aluna com mensalidade em atraso não ganha nem usa crédito de reposição. Aula liberada no atraso não vira crédito depois do pagamento."
             desligado="A aluna repõe normalmente, mesmo com mensalidade em atraso."
           />
           <Chave

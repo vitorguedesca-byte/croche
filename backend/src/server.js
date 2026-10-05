@@ -400,7 +400,8 @@ async function exigirRegras(client, alvo, { forcar = false, ignorarJanela = fals
       conseguiria repor 4 vezes num mês só.
    4. O crédito vale até o fim do mês seguinte ao da aula liberada.
    5. Só para mensalista ativa e com mensalidade em dia — esta última só vale
-      com SETTINGS.travaAtraso ligada (hoje desligada, até a Inêz confirmar).
+      com SETTINGS.travaAtraso ligada. Aula liberada no atraso não vira crédito
+      nem depois do pagamento (ver ATRASO_GANHAR).
    6. Quem rompe com o curso (status "cancelado") não ganha nem usa crédito.
    7. O crédito só fica USÁVEL depois que a data da aula liberada passa: repor é
       remarcar uma aula que já deixou de acontecer, não adiantar a próxima.
@@ -439,17 +440,37 @@ async function mensalidadeEmDia(clientId) {
   return atrasadas === 0;
 }
 
-// { ok, motivo } — se a aluna pode ganhar/usar crédito de reposição agora
+/* ============ ATRASO: O CRÉDITO NÃO NASCE DEPOIS ============
+   Vitor, 05/10/2026.
+
+   Aula liberada com a mensalidade em atraso não gera crédito, e pagar depois
+   NÃO gera esse crédito para trás: o crédito nasce (ou não) no momento da
+   liberação, e ninguém volta para conferir. É o que o regulamento já dizia
+   ("válido somente para quem está com a mensalidade em dia").
+
+   O texto antigo, "Regularize para poder repor", saía TAMBÉM na hora de
+   liberar a aula — e uma aluna leu ali a promessa de que, pagando, o crédito
+   daquela aula viria. Por isso agora são dois textos: um para quem está
+   liberando (esta aula não gera crédito, nem depois) e outro para quem quer
+   usar (o que já tinha volta a valer quando pagar; o que liberou no atraso,
+   não). Nenhum dos dois pode prometer crédito retroativo. */
+const ATRASO_USAR =
+  "Há mensalidade em atraso, por isso a reposição está bloqueada. Os créditos que você já tinha voltam a valer quando a mensalidade for paga — " +
+  "mas aula liberada durante o atraso não gera crédito, nem depois do pagamento.";
+const ATRASO_GANHAR =
+  "Como há mensalidade em atraso, esta aula não gerou crédito de reposição — e o pagamento depois não gera esse crédito. " +
+  "Só a aula liberada com a mensalidade em dia vira crédito.";
+
+// { ok, motivo, codigo } — se a aluna pode ganhar/usar crédito de reposição agora
 async function elegivelReposicao(client) {
   if (client.status === "cancelado")
-    return { ok: false, motivo: "Inscrição cancelada — não há direito a reposição." };
+    return { ok: false, codigo: "cancelado", motivo: "Inscrição cancelada — não há direito a reposição." };
   if (client.plan !== "mensalista")
-    return { ok: false, motivo: "A reposição é um benefício das alunas mensalistas." };
-  // Trava desligada por ora: mensalidade vencida não bloqueia a reposição até a
-  // Inêz confirmar que quer cobrar assim. Religa em Configurações.
+    return { ok: false, codigo: "plano", motivo: "A reposição é um benefício das alunas mensalistas." };
+  // A trava é chave em Configurações (nasceu desligada até a Inêz confirmar).
   if (SETTINGS.travaAtraso && !(await mensalidadeEmDia(client.id)))
-    return { ok: false, motivo: "Há mensalidade em atraso. Regularize para poder repor." };
-  return { ok: true, motivo: "" };
+    return { ok: false, codigo: "atraso", motivo: ATRASO_USAR };
+  return { ok: true, codigo: "", motivo: "" };
 }
 
 /* Crédito pronto para usar: não gasto, dentro da validade e — a regra nova — com
@@ -538,6 +559,7 @@ async function resumoReposicao(client) {
   return {
     elegivel: eleg.ok,
     motivo: eleg.motivo,
+    codigo: eleg.codigo,
     saldo: marcados.filter((c) => c.situacao === "disponivel").length,
     // créditos que existem mas ainda não podem ser usados, e quando o 1º libera
     aguardando: aguardando.length,
@@ -553,6 +575,7 @@ async function resumoReposicao(client) {
       maxPorMes: REPO_MAX_MES,
       horasMin: REPO_HORAS_MIN,
       manhaAte: REPO_MANHA_ATE,
+      atrasoBloqueia: !!SETTINGS.travaAtraso,
     },
   };
 }
@@ -561,7 +584,8 @@ async function resumoReposicao(client) {
 // (com o motivo) — liberar fora do prazo continua valendo, só não gera crédito.
 async function concederCredito(client, booking) {
   const eleg = await elegivelReposicao(client);
-  if (!eleg.ok) return { credito: null, motivo: eleg.motivo };
+  // Na liberação, o atraso fala de ESTA aula — ver ATRASO_GANHAR.
+  if (!eleg.ok) return { credito: null, motivo: eleg.codigo === "atraso" ? ATRASO_GANHAR : eleg.motivo };
   /* Feriado e antecedência: as duas recusas que não dependem do banco, e nesta
      ordem — feriado primeiro. Ver motivoSemCredito() e o bloco FERIADO NÃO GERA
      CRÉDITO em regrasAula.js, que é onde a regra tem teste. */
