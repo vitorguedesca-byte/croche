@@ -1814,19 +1814,21 @@ app.get(
 );
 
 /* ---------- BOOKINGS ---------- */
+// se o cliente já existe mas ainda não tem CPF/email/nascimento, completa com o informado
+async function completarFicha(found, { cpf, email, birthday, firstClass }) {
+  const patch = {};
+  if (cpf && !found.cpf) patch.cpf = onlyDigits(cpf);
+  if (email && !found.email) patch.email = email.trim();
+  if (birthday && !found.birthday) patch.birthday = birthday;
+  if (firstClass && !found.firstClass) patch.firstClass = true;
+  if (Object.keys(patch).length) return prisma.client.update({ where: { id: found.id }, data: patch });
+  return found;
+}
+
 async function ensureClient(nomeBruto, phone, unit, tags, cpf, email, firstClass, extra = {}) {
   const name = padronizarNome(nomeBruto);
   const found = await prisma.client.findFirst({ where: { name } });
-  if (found) {
-    // se o cliente já existe mas ainda não tem CPF/email/nascimento, completa com o informado
-    const patch = {};
-    if (cpf && !found.cpf) patch.cpf = onlyDigits(cpf);
-    if (email && !found.email) patch.email = email.trim();
-    if (extra.birthday && !found.birthday) patch.birthday = extra.birthday;
-    if (firstClass && !found.firstClass) patch.firstClass = true;
-    if (Object.keys(patch).length) return prisma.client.update({ where: { id: found.id }, data: patch });
-    return found;
-  }
+  if (found) return completarFicha(found, { cpf, email, birthday: extra.birthday, firstClass });
   return prisma.client.create({
     data: {
       name, phone: phone || "", email: (email || "").trim() || null, cpf: onlyDigits(cpf) || null,
@@ -1850,9 +1852,58 @@ async function ensureClient(nomeBruto, phone, unit, tags, cpf, email, firstClass
    Camila Marcelina (2x, ativa) entrou pelo robô para marcar uma aula a mais, foi
    tratada como aluna nova — cobrança de R$ 140 de matrícula — e a ficha dela
    caiu para "lead". Ex-aluna (cancelado) continua podendo se matricular de novo. */
-const jaFezMatricula = (c) => !!c && (
+/* LEAD QUE VOLTA (Vitor, 05/10/2026). Lead é quem começou a matrícula ou a
+   aula avulsa pelo site ou pelo WhatsApp e não pagou. A ficha dela fica com
+   `trialDate` preenchido e `matriculaStatus` "pendente" — justamente as duas
+   marcas que esta conta lê como "já passou por aqui". Resultado: quem voltava
+   dias depois para começar de verdade ficava trancada do lado de fora em todas
+   as portas — o site dizia "sua matrícula já está registrada", o robô mandava
+   para o portal e o portal recusava por falta de pagamento. Sem pagamento não
+   houve matrícula: o lead refaz o fluxo quantas vezes precisar.
+   Mensalista que caiu para "lead" (o caso da Camila) NÃO entra aqui: plano
+   mensalista é aluna, com ou sem marca. */
+const ehLead = (c) => !!c && c.status === "lead" && c.plan !== "mensalista" &&
+  (c.matriculaStatus === "pendente" || c.matriculaStatus === "nao_aplica");
+
+const jaFezMatricula = (c) => !!c && !ehLead(c) && (
   !!c.trialDate || c.matriculaStatus !== "nao_aplica" ||
   (c.plan === "mensalista" && c.status !== "cancelado"));
+
+const ehReservaDeEntrada = (b) => ehPagamentoDeMatricula(b.paymentMethod) || b.paymentMethod === "Aula Avulsa";
+
+/* O que sobrou da tentativa anterior do lead, ANTES de ela refazer a entrada.
+   - Reserva com o prazo de 10 minutos ainda correndo → devolvida em `viva`.
+     O Pix dela pode cair a qualquer segundo; abrir outra agora seria arriscar
+     duas cobranças da mesma matrícula. Quem chama explica e manda esperar.
+   - Prazo vencido que a rodada ainda não soltou (ela roda de minuto em minuto)
+     → pergunta ao Sicredi, como a rodada faria. Pago: dá a baixa (`pagou`) e
+     ela deixa de ser lead. Não pago: solta aqui. Se ficasse para a rodada,
+     expirarReservaWa cancelaria junto a reserva NOVA e mandaria o aviso de
+     vaga perdida no meio da matrícula nova.
+   Pagamento que cair depois de a reserva ser solta não se perde: o
+   confirmarPagamentoPorTxid devolve a aula se ainda houver vaga. */
+async function sobrasDoLead(client) {
+  const pendentes = (await prisma.booking.findMany({
+    where: { clientName: client.name, status: "aguardando", paid: false },
+  })).filter(ehReservaDeEntrada);
+  const agora = Date.now();
+  const vivas = pendentes.filter((b) => b.holdUntil && new Date(b.holdUntil).getTime() > agora);
+  // a reserva "de verdade" é a que tem o Pix (os demais horários da semana vão com valor 0)
+  if (vivas.length) return { viva: vivas.find((b) => b.pixCode) || vivas.find((b) => b.txid) || vivas[0] };
+  for (const b of pendentes) {
+    if (b.txid && (await confirmarPagamentoPorTxid(b.txid).catch(() => false))) return { pagou: true };
+  }
+  if (pendentes.length) {
+    await prisma.booking.updateMany({
+      where: { id: { in: pendentes.map((b) => b.id) }, status: "aguardando", paid: false },
+      data: { status: "cancelada", holdUntil: null, absenceReason: "Reserva não paga — a aluna refez a entrada" },
+    });
+    console.log(`[lead] ${client.name}: ${pendentes.length} reserva(s) antiga(s) não paga(s) soltas — refazendo a entrada.`);
+  }
+  return {};
+}
+
+const minutosAte = (quando) => Math.max(1, Math.ceil((new Date(quando).getTime() - Date.now()) / 60_000));
 
 app.post(
   "/api/bookings",
@@ -1893,14 +1944,35 @@ app.post(
     /* A ficha ANTES do laço: é ela que diz o plano da aluna, e o plano é que
        diz quantas aulas por semana ela pode ter. Antes a ficha só era buscada
        depois de a reserva já existir — e o teto ficava sem quem o medisse. */
-    let client = await prisma.client.findFirst({ where: { name: b.clientName } });
+    const entradaPublica = b.firstClass && !b.viaPainel;
+    /* Na entrada pelo site, o CPF é a chave — como no WhatsApp (upsertClienteWa).
+       Quem volta (o lead de semana passada, sobretudo) nem sempre digita o nome
+       igual; achada pelo nome só, ganhava uma 2ª ficha com o mesmo CPF, e o
+       portal — que entra pelo CPF — abria a ficha velha, ainda de lead, mesmo
+       depois de ela pagar. Achou pelo CPF: a reserva vai no nome da ficha, que
+       é por onde as aulas se ligam à aluna. */
+    const fichaPorCpf = entradaPublica && onlyDigits(b.cpf).length === 11
+      ? await prisma.client.findFirst({ where: { cpf: onlyDigits(b.cpf) } })
+      : null;
+    if (fichaPorCpf) b.clientName = fichaPorCpf.name;
+    let client = fichaPorCpf || await prisma.client.findFirst({ where: { name: b.clientName } });
 
     /* Uma matrícula por aluna. Quem já passou por ela (ou faltou na 1ª aula)
        não refaz o fluxo — o caminho dela agora é marcar pelo portal. Este
        bloqueio é do fluxo público; a Inêz continua podendo marcar o que
-       precisar pelo painel (que não manda firstClass). */
-    if (b.firstClass && !b.viaPainel) {
-      const existente = await prisma.client.findFirst({ where: { name: b.clientName } });
+       precisar pelo painel (que não manda firstClass). O lead que não pagou
+       passa (ver ehLead), depois de acertar o que sobrou da tentativa anterior. */
+    if (entradaPublica) {
+      let existente = client;
+      if (ehLead(existente)) {
+        const sobra = await sobrasDoLead(existente);
+        if (sobra.viva)
+          return res.status(409).json({
+            error: `Você já tem uma reserva aguardando o pagamento do Pix — ela fica segurada por mais ${minutosAte(sobra.viva.holdUntil)} min. ` +
+              "Se já pagou, é só aguardar a confirmação. Se não, assim que esse prazo acabar você pode escolher o horário de novo por aqui. 💚",
+          });
+        if (sobra.pagou) existente = client = await prisma.client.findUnique({ where: { id: existente.id } });
+      }
       if (jaFezMatricula(existente))
         return res.status(409).json({
           error: "Você já tem a sua matrícula registrada — ela é uma só. " +
@@ -2061,7 +2133,12 @@ app.post(
       });
       criadas.push(booking);
 
+      /* Ficha que já existia (o lead que voltou) também passa por aqui: completa
+         CPF, e-mail e nascimento que faltavam — sem o CPF o portal não a acha
+         depois de pagar — e volta a ser "aluna nova" (firstClass), que a
+         expiração da tentativa anterior tinha desligado. */
       if (!client) client = await ensureClient(b.clientName, b.phone, unit, [], b.cpf, b.email, b.firstClass, { birthday: b.birthday });
+      else if (entradaPublica) client = await completarFicha(client, { cpf: b.cpf, email: b.email, birthday: b.birthday, firstClass: b.firstClass });
       if (usoVoucher && i === 0) {
         await prisma.voucherUso.update({ where: { id: usoVoucher.id }, data: { bookingId: booking.id, clientId: client?.id || null } });
       }
@@ -6207,12 +6284,16 @@ async function expirarReservaWa(booking) {
     where: { id: booking.id },
     data: { status: "cancelada", holdUntil: null, absenceReason: "Reserva não paga no prazo — vaga liberada" },
   });
-  // Cancela também eventuais outras reservas de matrícula aguardando da aluna
+  /* Cancela também os demais horários da semana DESTA reserva (nascem no mesmo
+     instante, com o mesmo prazo). Só os de prazo vencido: o lead que voltou e
+     abriu uma reserva nova (ver sobrasDoLead) tem prazo correndo, e ela não
+     pode cair junto com a velha. */
   await prisma.booking.updateMany({
     where: {
       clientName: booking.clientName,
       paymentMethod: MARCA_MATRICULA,
       status: "aguardando",
+      OR: [{ holdUntil: null }, { holdUntil: { lte: new Date(Date.now() + 60_000) } }],
     },
     data: { status: "cancelada", holdUntil: null, absenceReason: "Reserva não paga no prazo — vaga liberada" },
   });
@@ -6915,11 +6996,30 @@ Toque abaixo para escolher 👇`,
   if (conv.step === "cpf") {
     const cpf = onlyDigits(body);
     if (!cpfValido(cpf)) return telaCpf("Esse CPF não parece válido 🤔. Confere pra mim? ");
-    const existente = await prisma.client.findFirst({ where: { cpf } });
+    let existente = await prisma.client.findFirst({ where: { cpf } });
     await setConv({ cpf, clientId: existente?.id ?? null });
     conv = { ...conv, cpf, clientId: existente?.id ?? null };
 
     if (!existente) return telaNome();
+
+    /* Lead que voltou (ver ehLead): segue para o plano como qualquer ficha sem
+       matrícula. Só não abre reserva nova enquanto a anterior ainda está com o
+       Pix valendo — aí a conversa volta para ela, com o Pix à mão. */
+    if (ehLead(existente)) {
+      const sobra = await sobrasDoLead(existente);
+      if (sobra.viva) {
+        await setConv({ step: "cobranca", bookingId: sobra.viva.id, slotId: null });
+        return waButtons(msg.from,
+          `${existente.name.split(" ")[0]}, você já tem uma reserva aguardando o pagamento do Pix — ` +
+          `${fmtSlotBR(sobra.viva)}, segurada por mais ${minutosAte(sobra.viva.holdUntil)} min. 💚\n\n` +
+          `Se já pagou, é só aguardar que eu confirmo aqui. Se não, quando esse prazo acabar a gente escolhe o horário de novo.`,
+          [
+            ...(sobra.viva.pixCode ? [{ id: "duvida:pix", title: "💠 Reenviar o Pix" }] : []),
+            { id: "humano", title: "Falar com atendente" },
+          ]);
+      }
+      if (sobra.pagou) existente = await prisma.client.findUnique({ where: { id: existente.id } });
+    }
 
     /* Já é nossa aluna: este fluxo cobra a 1ª MENSALIDADE, que é o que matricula
        quem está chegando. Quem já se matriculou não pode entrar aqui — a aula
@@ -8065,7 +8165,10 @@ function clientPodeAcessarPortal(client) {
     return {
       ok: false,
       leadPendente: true,
-      motivo: "O portal da aluna é exclusivo para alunas cadastradas com matrícula e pagamento confirmados. Seu pagamento ainda não foi identificado. 💚 Se você já realizou o Pix, aguarde alguns instantes pela confirmação bancária.",
+      // Lead que voltou: o caminho dela é refazer a entrada (ver ehLead), não esperar.
+      motivo: "O portal da aluna abre assim que a matrícula é paga, e o seu pagamento ainda não foi identificado. 💚 " +
+        "Se você acabou de fazer o Pix, aguarde alguns instantes pela confirmação. " +
+        "Se não chegou a pagar, toque em “Agendar aula” na página inicial (ou chame a gente no WhatsApp) para escolher o seu horário e concluir.",
     };
   }
   return { ok: true };
