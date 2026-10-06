@@ -59,12 +59,13 @@
    uma aula por vez. A única exceção é a PRIMEIRA marcação — a matrícula, que
    monta a grade de 12 meses de uma vez. Depois disso, nunca mais em lote.
 
-   TRÊS AULAS NUNCA ENTRAM NO LOTE, em nenhum dos caminhos: a reposição
-   (PGTO_REPOSICAO), a aula extra (PGTO_EXTRA) e a aula da avulsa/matrícula.
-   As três são ocorrências únicas — existem por causa de um crédito, de um
-   pagamento à parte ou de uma visita, e não por causa de uma grade. Copiá-las
-   inventaria aula que ninguém contratou. Quem replica tem que filtrar por
-   PGTO_PLANO em vez de copiar tudo que encontrar na turma.
+   QUATRO AULAS NUNCA ENTRAM NO LOTE, em nenhum dos caminhos: a reposição
+   (PGTO_REPOSICAO), a aula extra (PGTO_EXTRA), a aula de presente
+   (PGTO_PRESENTE) e a aula da avulsa/matrícula. São ocorrências únicas —
+   existem por causa de um crédito, de um pagamento à parte, de um presente ou
+   de uma visita, e não por causa de uma grade. Copiá-las inventaria aula que
+   ninguém contratou. Quem replica tem que filtrar por PGTO_PLANO em vez de
+   copiar tudo que encontrar na turma.
 
    Alterar/excluir em lote é diferente de replicar: mover a turma das 09:00 para
    as 09:30 move junto quem estiver dentro dela, reposição inclusive — a aula
@@ -114,6 +115,51 @@ export const PGTO_REPOSICAO = "Reposição";
 
 // Aula extra comprada à parte (ou cortesia da Inêz). Também não se replica.
 export const PGTO_EXTRA = "Avulsa";
+
+/* ===================== AULA DE PRESENTE (Vitor, 05/10/2026) =====================
+   A ADMIN presenteia a aluna, na ficha dela, com aula(s) além do plano. É um
+   PRESENTE de verdade: fica fora de toda conta da escola —
+   • não é aula do plano (não conta no teto da semana nem no do mês da escala);
+   • não é aula extra (não usa nem bloqueia a compra pelo portal, não entra no
+     relatório de vendas);
+   • não gera nem consome crédito de reposição.
+
+   As regras combinadas:
+   1. Só a ADMIN dá, e só para aluna já cadastrada (com o portal aberto).
+   2. A aula aparece no portal dela como PRESENTE, e ela escolhe o horário.
+   3. Vale por PRESENTE_VALIDADE_DIAS dias: a aula tem que ACONTECER até o fim
+      da validade — o calendário do portal não oferece data depois disso.
+   4. Não há remarcação: se ela desistir ou avisar que não pode ir, o presente
+      se encerra ali. (A escola desfazendo a aula — excluir, desmarcar a turma —
+      devolve o presente, como faz com o crédito de reposição.)
+
+   A aula marcada com o presente leva esta marca no paymentMethod. É por ela que
+   todo o resto do sistema a deixa de fora das contas, e ela não se replica. */
+export const PGTO_PRESENTE = "Presente";
+export const PRESENTE_VALIDADE_DIAS = 30;
+export const PRESENTE_MAX_POR_VEZ = 5;
+
+// Último dia em que a aula de um presente dado hoje pode acontecer (inclusive).
+export const validadePresente = (hoje) => somarDias(hoje, PRESENTE_VALIDADE_DIAS);
+
+/* disponivel | usado | vencido | cancelado. "vencido" não é gravado no banco:
+   é a data que decide, então nenhum presente fica "disponível" por esquecimento
+   de uma rodada que não rodou. */
+export function situacaoPresente(p, hoje) {
+  if (!p) return null;
+  if (p.status === "cancelado") return "cancelado";
+  if (p.status === "usado" || p.usedBookingId) return "usado";
+  return String(p.expiresOn || "") < hoje ? "vencido" : "disponivel";
+}
+
+/* Qual presente gastar numa aula em `date`: entre os que ainda alcançam aquela
+   data, o que vence primeiro — assim um presente novo não é queimado no lugar
+   de um que está para vencer. null = nenhum serve. */
+export function presenteParaAula(presentes, date, hoje) {
+  return (presentes || [])
+    .filter((p) => situacaoPresente(p, hoje) === "disponivel" && String(date || "") <= p.expiresOn)
+    .sort((a, b) => a.expiresOn.localeCompare(b.expiresOn) || a.id - b.id)[0] || null;
+}
 
 /* ===================== O PRIMEIRO PAGAMENTO DA ALUNA NOVA =====================
    A aluna nova paga a MENSALIDADE mais a TAXA DE MATRÍCULA, uma vez só (Vitor,
@@ -382,8 +428,8 @@ export function tetoSemanal(client, date, aulasAtivas) {
    Vitor, 03/09/2026:
    • Aluna de escala no plano 1x (R$ 120,00): tem direito a 4 aulas no mês.
    • Aluna de escala no plano 2x (R$ 200,00): tem direito a 8 aulas no mês.
-   Aulas canceladas, reposições (PGTO_REPOSICAO) e aulas extras (PGTO_EXTRA)
-   NÃO consomem essas aulas do plano mensal. */
+   Aulas canceladas, reposições (PGTO_REPOSICAO), aulas extras (PGTO_EXTRA) e
+   aulas de presente (PGTO_PRESENTE) NÃO consomem essas aulas do plano mensal. */
 
 export function compPorExtenso(comp) {
   const m = String(comp || "").match(/^(\d{4})-(\d{2})$/);

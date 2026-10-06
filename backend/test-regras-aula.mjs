@@ -7,6 +7,7 @@ import {
   encargosDaMensalidade, diasEntreISO, MULTA_ATRASO_REAIS, JUROS_DIA_PERCENTUAL,
   primeiroPagamento, mensalidadeDoPagamento,
   prazoLiberacao, liberouATempo, REPO_HORAS_MIN, motivoSemCredito,
+  contaNoTeto, PGTO_PRESENTE, PRESENTE_VALIDADE_DIAS, validadePresente, situacaoPresente, presenteParaAula,
 } from "./src/regrasAula.js";
 
 let falhas = 0;
@@ -398,6 +399,33 @@ ok(semCred({ date: "2026-09-10", time: "09:00", agora: "2026-09-10T06:00:00" }).
   "sem feriado, a recusa volta a ser a da antecedência");
 ok(semCred({ date: "2026-09-10", time: "15:00", agora: "2026-09-10T09:01:00" }).includes("6h"),
   "tarde: a recusa cita as 6 horas prometidas");
+
+/* AULA DE PRESENTE (Vitor, 05/10/2026). O que este bloco prende: a validade de
+   30 dias é da AULA (a data dela), o presente que vence primeiro é o gasto
+   primeiro, e a aula de presente fica fora do teto do plano. */
+console.log("\n— aula de presente —");
+ok(PRESENTE_VALIDADE_DIAS === 30, "a validade prometida continua sendo 30 dias");
+ok(validadePresente("2026-10-05") === "2026-11-04", "dado em 05/10, vale até 04/11");
+ok(validadePresente("2026-12-15") === "2027-01-14", "a validade atravessa a virada do ano");
+
+const pres = (o) => ({ id: 1, status: "disponivel", expiresOn: "2026-11-04", usedBookingId: null, ...o });
+ok(situacaoPresente(pres(), "2026-10-20") === "disponivel", "dentro da validade: disponível");
+ok(situacaoPresente(pres(), "2026-11-04") === "disponivel", "no último dia ainda vale");
+ok(situacaoPresente(pres(), "2026-11-05") === "vencido", "no dia seguinte venceu — sem rodada nenhuma");
+ok(situacaoPresente(pres({ status: "usado", usedBookingId: 9 }), "2026-11-05") === "usado", "usado continua usado depois da validade");
+ok(situacaoPresente(pres({ status: "cancelado" }), "2026-10-20") === "cancelado", "recolhido pela escola");
+
+const lista = [
+  pres({ id: 1, expiresOn: "2026-11-20" }),
+  pres({ id: 2, expiresOn: "2026-11-04" }),
+  pres({ id: 3, expiresOn: "2026-10-01" }), // já venceu
+];
+ok(presenteParaAula(lista, "2026-10-20", "2026-10-10")?.id === 2, "gasta primeiro o que vence primeiro");
+ok(presenteParaAula(lista, "2026-11-10", "2026-10-10")?.id === 1, "aula depois de uma validade usa o que ainda alcança a data");
+ok(presenteParaAula(lista, "2026-11-25", "2026-10-10") === null, "aula depois de todas as validades: nenhum serve");
+ok(presenteParaAula([pres({ status: "usado", usedBookingId: 5 })], "2026-10-20", "2026-10-10") === null, "presente usado não serve");
+
+ok(!contaNoTeto({ status: "confirmada", paymentMethod: PGTO_PRESENTE }), "aula de presente não conta no teto do plano");
 
 console.log(falhas ? `\n${falhas} FALHA(S)` : "\nTodos os casos passaram.");
 process.exit(falhas ? 1 : 0);

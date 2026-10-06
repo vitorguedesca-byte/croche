@@ -16,7 +16,7 @@ import {
   tipoMensalista, TIPO_MENSALISTA_LABEL,
   validarCPF, formatarCPF,
   proximaCobranca, fraseProximaCobranca, faturaDaComp,
-  PLANOS_MENSALISTA, FREQ_MAX_ESCALA, valorPlanoMeta,
+  PLANOS_MENSALISTA, FREQ_MAX_ESCALA, valorPlanoMeta, PGTO_PRESENTE,
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
@@ -536,6 +536,8 @@ export function ManageBooking({ booking, onBack }) {
      aula comum já está paga dentro da mensalidade do mês; cobrar por ela era o
      R$ 20 fantasma que saiu do sistema em 30/08/2026. */
   const cobraNaReserva = ehPagamentoDeMatricula(booking.paymentMethod) || booking.paymentMethod === "Avulsa";
+  // Aula de presente: liberar ENCERRA o presente (ela desistiu); excluir devolve (foi a escola).
+  const ehPresente = booking.paymentMethod === PGTO_PRESENTE;
   /* Este modal é só de CONSULTA + as três ações que a Inêz de fato usa:
      cobrar o Pix, liberar a vaga e tirar a aluna da turma.
      Editar status / presença / data / hora à mão saiu daqui em 26/08/2026: o
@@ -546,7 +548,10 @@ export function ManageBooking({ booking, onBack }) {
   const liberar = async () => {
     const motivo = await promptModal({
       title: "Liberar vaga",
-      message: `Liberar a aula de ${booking.clientName} em ${fmtDate(booking.date)} às ${booking.time}?\n\nA vaga fica livre e o sistema avalia se gera crédito de reposição.`,
+      message: `Liberar a aula de ${booking.clientName} em ${fmtDate(booking.date)} às ${booking.time}?\n\n` +
+        (ehPresente
+          ? "🎁 É a aula de PRESENTE: liberando, o presente se encerra — não é remarcado nem vira crédito."
+          : "A vaga fica livre e o sistema avalia se gera crédito de reposição."),
       label: "Motivo informado pela aluna (opcional)",
       confirmLabel: "Liberar vaga",
     });
@@ -555,6 +560,7 @@ export function ManageBooking({ booking, onBack }) {
       const r = await run(api.releaseBooking(booking.id, motivo));
       toast(r?.credito ? "Vaga liberada e 1 crédito de reposição concedido. 💚"
         : r?.devolvido ? "Reposição cancelada e o crédito voltou para a aluna."
+        : ehPresente ? "Vaga liberada. A aula de presente se encerrou (não é remarcada)."
         : `Vaga liberada.${r?.motivo ? " " + r.motivo : ""}`, r?.credito ? "success" : "info");
       close();
     } catch { /* erro já reportado pelo run */ }
@@ -574,8 +580,11 @@ export function ManageBooking({ booking, onBack }) {
     );
     if (!sibs.length) {
       const msg = `Tirar ${booking.clientName} da aula de ${diaSemana}, ${fmtDate(booking.date)} às ${booking.time}?` +
-        (booking.paid ? "\n\nAtenção: esta aula consta como paga." : "") +
-        "\n\nA vaga volta a ficar livre na turma. Não gera crédito de reposição.";
+        (booking.paid && !ehPresente ? "\n\nAtenção: esta aula consta como paga." : "") +
+        "\n\nA vaga volta a ficar livre na turma. Não gera crédito de reposição." +
+        (ehPresente && booking.status !== "cancelada"
+          ? "\n\n🎁 É a aula de PRESENTE: o presente volta para ela marcar outro horário (se ainda estiver na validade)."
+          : "");
       if (!(await confirmModal({ title: "Excluir aluno(a) da turma", message: msg, confirmLabel: "Excluir da turma", tone: "danger" }))) return;
       await run(api.deleteBooking(booking.id));
       toast(`✅ ${booking.clientName} removida desta turma.`);
@@ -625,6 +634,9 @@ export function ManageBooking({ booking, onBack }) {
       <div className="info-line"><b>Telefone</b><span>{booking.phone || "—"}</span></div>
       <div className="info-line"><b>Unidade</b><span>{booking.unit}</span></div>
       <div className="info-line"><b>Aula</b><span>{fmtDateLong(booking.date)} · {faixaHorario(booking.time, data.meta?.duracaoAulaMin)}</span></div>
+      {ehPresente && (
+        <div className="info-line"><b>Tipo</b><span><span className="badge b-warn">🎁 Aula de presente</span> fora do plano, sem cobrança</span></div>
+      )}
       {/* A aula não tem preço próprio: só a reserva da matrícula carrega
           dinheiro (é a 1ª mensalidade da aluna). Nas demais, o que importa é
           como está a mensalidade do mês dela. */}
@@ -684,6 +696,7 @@ export function ManageBooking({ booking, onBack }) {
         <b>Liberar</b> cancela a aula e aplica as regras de reposição — vira crédito só se o aviso vier
         com 6h de antecedência (ou até 23:59 do dia anterior, se a aula for antes das 10h).
         <br /><b>Excluir aluno(a)</b> tira a pessoa desta turma de vez, sem gerar crédito — a vaga volta a ficar livre.
+        {ehPresente && <><br />🎁 Na aula de presente, <b>liberar</b> encerra o presente (ela desistiu) e <b>excluir</b> devolve o presente para ela marcar de novo.</>}
       </div>
     </Modal>
   );
@@ -2244,7 +2257,12 @@ function atividadesDoAluno(data, c) {
   data.bookings.filter((b) => b.clientName === c.name).forEach((b) => {
     add(b.createdAt, "🆕", `Aula marcada — ${fmtDate(b.date)} às ${b.time}`, b.unit);
     if (b.status === "cancelada") add(b.date, "❌", `Aula cancelada — ${fmtDate(b.date)}`, b.absenceReason || b.unit);
-    if (b.paid && b.paymentDate) add(b.paymentDate, "💰", `Pagou a aula — ${money(b.value)}`, b.paymentMethod || "");
+    // aula de presente nasce "paga" com R$ 0 — não é pagamento, é presente
+    if (b.paid && b.paymentDate && b.paymentMethod !== PGTO_PRESENTE) add(b.paymentDate, "💰", `Pagou a aula — ${money(b.value)}`, b.paymentMethod || "");
+  });
+  (data.presentes || []).filter((p) => p.clientId === c.id).forEach((p) => {
+    add(diaDoPresente(p), "🎁", "Ganhou uma aula de presente", `vale até ${fmtDate(p.expiresOn)}${p.motivo ? ` · ${p.motivo}` : ""}`);
+    if (p.usedAt) add(p.usedAt, "📅", "Marcou a aula de presente", "");
   });
   (data.invoices || []).filter((i) => i.clientId === c.id).forEach((i) => {
     if (i.paidAt) add(i.paidAt, "🧾", `Mensalidade paga — ${compLabel(i.competencia)}`, money(i.amountCents / 100));
@@ -2280,12 +2298,14 @@ export function ClientProfile({ client, initialTab }) {
   const [tab, setTab] = useState(initialTab || "principal");
   const form = useClientForm(c, () => setTab("principal"));
   const atividades = atividadesDoAluno(data, c);
+  const presentesDisp = (data.presentes || []).filter((p) => p.clientId === c.id && p.situacao === "disponivel").length;
 
   const abas = [
     { k: "principal", ic: "⭐", label: "Principal", n: null },
     { k: "aulas", ic: "📋", label: "Aulas", n: hist.length },
     ...(ehMensalista ? [{ k: "mens", ic: "🧾", label: "Mensalidades", n: pendentes || null }] : []),
     ...(ehMensalista || temMatricula ? [{ k: "repo", ic: "🔁", label: "Reposição", n: null }] : []),
+    { k: "presentes", ic: "🎁", label: "Presentes", n: presentesDisp || null },
     { k: "editar", ic: "✏️", label: "Editar", n: null },
   ];
 
@@ -2311,6 +2331,7 @@ export function ClientProfile({ client, initialTab }) {
   ) : (
     <>
       <button className="btn wa" onClick={() => openWa(c.phone, `Olá ${c.name}! 💚`)}><WaIcon /> WhatsApp</button>
+      {c.status !== "cancelado" && <button className="btn sec" onClick={() => open(<PresentearForm client={c} />)}>🎁 Presentear</button>}
       {ehMensalista && <button className="btn" onClick={() => open(<BatchBookForm client={c} />)}>📅 Agendar em lote</button>}
       {ehMensalista && temAulaFutura && <button className="btn sec" onClick={() => open(<BatchUnbookForm client={c} />)}>🗑 Tirar em lote</button>}
       {c.hasPin && <button className="btn ghost" onClick={resetPin}>🔑 Redefinir PIN</button>}
@@ -2477,6 +2498,8 @@ export function ClientProfile({ client, initialTab }) {
           {ehMensalista && <MakeupBlock client={c} />}
         </div>
       )}
+
+      {tab === "presentes" && <PresentesBlock client={c} />}
 
       {tab === "editar" && <ClientFormFields f={form} />}
     </Modal>
@@ -2762,25 +2785,26 @@ function MakeupBlock({ client }) {
 
 /* Escolha de turma para marcar o aluno — só turmas futuras com vaga livre.
    Serve tanto para a reposição (consome crédito) quanto para a aula extra (paga). */
-function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso }) {
+function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso, ate = null, aba }) {
   const { data, run } = useStore();
   const { open } = useModal();
   const t = todayISO();
+  // `ate`: última data aceita (a validade da aula de presente)
   const livres = data.slots
-    .filter((s) => s.date >= t && slotBookings(data, s.id).length < slotCapacity(s))
+    .filter((s) => s.date >= t && (!ate || s.date <= ate) && slotBookings(data, s.id).length < slotCapacity(s))
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-  /* Reposição e aula extra usam uma única turma e nunca criam recorrência. */
+  /* Reposição, aula extra e presente usam uma única turma e nunca criam recorrência. */
   const marcar = async (s) => {
     if (!(await confirmModal({ title: titulo, message: confirmar(s), confirmLabel: titulo }))) return;
     try {
       await run(acao(s, false)); // run já avisa o erro na tela
       toast(sucesso);
-      open(<ClientProfile client={client} />);
+      open(<ClientProfile client={client} initialTab={aba} />);
     } catch { /* erro já reportado pelo run */ }
   };
   return (
     <Modal title={titulo} footer={<>
-      <button className="btn ghost" onClick={() => open(<ClientProfile client={client} />)}>← Voltar ao perfil</button>
+      <button className="btn ghost" onClick={() => open(<ClientProfile client={client} initialTab={aba} />)}>← Voltar ao perfil</button>
     </>}>
       <div className="help">{ajuda}</div>
       <div style={{ marginTop: ".8rem" }}>
@@ -2827,6 +2851,180 @@ export function ExtraBookForm({ client }) {
       confirmar={(s) => `Marcar ${client.name} em uma aula extra de cortesia (sem cobrança)?\n\n${s.unit}\n${fmtDateLong(s.date)} às ${s.time}`}
       acao={(s, forcar) => api.extraBook(client.id, s.id, forcar)}
       sucesso="Aula extra marcada. 💚"
+    />
+  );
+}
+
+/* ============ Aula de presente (admin) ============
+   Regras combinadas com o Vitor (05/10/2026) — o backend é quem garante, ver
+   PGTO_PRESENTE em backend/src/regrasAula.js:
+   1. a escola dá, na ficha, para aluna já cadastrada;
+   2. aparece no portal dela como PRESENTE e ela escolhe o horário;
+   3. vale 30 dias (a aula tem que acontecer até lá);
+   4. desistiu ou não pode ir: não é remarcada.
+   Fica fora de toda conta — plano, aula extra, reposição, vendas. */
+const PRESENTE_DIAS = 30; // espelho de PRESENTE_VALIDADE_DIAS (backend/src/regrasAula.js)
+// createdAt vem em UTC: das 21h à meia-noite o slice(0, 10) já mostraria o dia seguinte
+const diaDoPresente = (p) => new Date(p.createdAt).toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+const PRESENTE_ROTULO = {
+  disponivel: ["b-ok", "disponível"],
+  usado: ["b-muted", "aula marcada"],
+  vencido: ["b-danger", "venceu"],
+  cancelado: ["b-muted", "recolhido"],
+};
+
+function PresentesBlock({ client }) {
+  const { data, run } = useStore();
+  const { open } = useModal();
+  const presentes = (data.presentes || []).filter((p) => p.clientId === client.id);
+  const disponiveis = presentes.filter((p) => p.situacao === "disponivel");
+  const aulaDe = (p) => (data.bookings || []).find((b) => b.id === p.usedBookingId);
+
+  const recolher = async (p) => {
+    if (!(await confirmModal({
+      title: "Recolher presente",
+      message: `Recolher 1 aula de presente de ${client.name} (válida até ${fmtDate(p.expiresOn)})?\n\nEla deixa de aparecer no portal dela.`,
+      confirmLabel: "Recolher", tone: "danger",
+    }))) return;
+    try { await run(api.presentes.recolher(p.id)); toast("Presente recolhido."); }
+    catch { /* run já avisou */ }
+  };
+
+  return (
+    <div className="prof-panel">
+      <div className="prof-panel-h">
+        <b>🎁 Aulas de presente · {disponiveis.length} disponível(is)</b>
+        <div style={{ display: "flex", gap: ".4rem", flexWrap: "wrap" }}>
+          {disponiveis.length > 0 && (
+            <button className="btn ghost sm" onClick={() => open(<PresenteBookForm client={client} />)}>📅 Marcar horário</button>
+          )}
+          {client.status !== "cancelado" && (
+            <button className="btn sec sm" onClick={() => open(<PresentearForm client={client} />)}>🎁 Presentear</button>
+          )}
+        </div>
+      </div>
+      <div className="help">
+        Presente é <b>fora de toda conta</b>: não ocupa aula do plano, não é aula extra e não mexe na reposição.
+        Ela vê no portal como <b>presente</b>, escolhe o horário e tem <b>{PRESENTE_DIAS} dias</b> para fazer a aula.
+        Se desistir ou não puder ir, <b>não é remarcado</b>.
+      </div>
+      {presentes.length ? (
+        <div style={{ marginTop: ".6rem" }}>
+          {presentes.map((p) => {
+            const [cls, txt] = PRESENTE_ROTULO[p.situacao] || ["b-muted", p.situacao];
+            const aula = aulaDe(p);
+            return (
+              <div className="roster-row" key={p.id}>
+                <div className="rr-info">
+                  <b>Dado em {fmtDate(diaDoPresente(p))}{p.dadoPor ? ` · por ${p.dadoPor}` : ""}</b>
+                  <div className="cli-sub">
+                    {p.situacao === "usado" && aula
+                      ? `Aula em ${fmtDate(aula.date)} às ${aula.time} · ${aula.unit}${aula.status === "cancelada" ? " (ela desistiu)" : ""}`
+                      : `Vale até ${fmtDate(p.expiresOn)}`}
+                    {p.motivo ? ` · ${p.motivo}` : ""}
+                  </div>
+                </div>
+                <span className={`badge ${cls}`}>{txt}</span>
+                {p.situacao === "disponivel" && (
+                  <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={() => recolher(p)}>Recolher</button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="prof-empty">{client.name.split(" ")[0]} ainda não ganhou aula de presente.</div>
+      )}
+    </div>
+  );
+}
+
+export function PresentearForm({ client }) {
+  const { run } = useStore();
+  const { open } = useModal();
+  const [qtd, setQtd] = useState(1);
+  const [motivo, setMotivo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const ate = addDays(todayISO(), PRESENTE_DIAS);
+  // Mesmo cerco do backend (motivoNaoPresentear): presente que ela não vê não é presente.
+  const bloqueio = client.status === "cancelado"
+    ? "A inscrição dela está cancelada — reative a ficha antes de dar o presente."
+    : client.status === "lead" || client.matriculaStatus === "pendente"
+      ? "O portal dela ainda está fechado (pagamento da entrada não identificado) — ela não veria o presente."
+      : "";
+  const voltar = () => open(<ClientProfile client={client} initialTab="presentes" />);
+
+  const salvar = async () => {
+    const n = Number(qtd);
+    if (!(await confirmModal({
+      title: "Confirmar presente",
+      message: `Presentear ${client.name} com ${n === 1 ? "1 aula" : `${n} aulas`} de presente?\n\n` +
+        `• Aparece no portal dela como PRESENTE, para ela escolher o horário.\n` +
+        `• Vale até ${fmtDate(ate)} (${PRESENTE_DIAS} dias) — a aula tem que acontecer até lá.\n` +
+        `• Se ela desistir ou não puder ir, não é remarcada.\n` +
+        `• Não conta como aula do plano, aula extra nem reposição.` +
+        (motivo.trim() ? `\n\nMotivo: ${motivo.trim()}` : ""),
+      confirmLabel: "Presentear",
+    }))) return;
+    setBusy(true);
+    try {
+      await run(api.presentes.dar(client.id, n, motivo.trim()));
+      toast(`🎁 ${n === 1 ? "Aula de presente dada" : `${n} aulas de presente dadas`} a ${client.name.split(" ")[0]} — vale até ${fmtDate(ate)}.`, "success");
+      voltar();
+    } catch { /* run já avisou */ }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal title={`🎁 Presentear ${client.name.split(" ")[0]}`} footer={<>
+      <button className="btn ghost" onClick={voltar}>← Voltar ao perfil</button>
+      <div style={{ flex: 1 }} />
+      <button className="btn" onClick={salvar} disabled={busy || !!bloqueio}>{busy ? "Presenteando…" : "Presentear"}</button>
+    </>}>
+      <div className="help">
+        A aula cai no portal de <b>{client.name}</b> como <b>presente</b> e ela escolhe o dia e o horário.
+        É fora de toda conta: não ocupa aula do plano, não é aula extra e não mexe na reposição.
+      </div>
+      {bloqueio && <div className="help" style={{ color: "var(--danger)", marginTop: ".5rem" }}>{bloqueio}</div>}
+      {!bloqueio && !client.cpf && (
+        <div className="help" style={{ color: "var(--warn)", marginTop: ".5rem" }}>
+          ⚠️ A ficha não tem CPF — sem ele ela não entra no portal. Cadastre o CPF ou marque o horário por ela na aba Presentes.
+        </div>
+      )}
+      <div className="field" style={{ marginTop: "1rem" }}>
+        <label>Quantas aulas</label>
+        <Select
+          value={qtd}
+          onChange={(v) => setQtd(Number(v))}
+          options={[1, 2, 3, 4, 5].map((n) => ({ value: n, label: n === 1 ? "1 aula" : `${n} aulas`, icon: "🎁" }))}
+        />
+      </div>
+      <div className="field">
+        <label>Motivo (opcional — só o painel vê)</label>
+        <input value={motivo} maxLength={200} onChange={(e) => setMotivo(e.target.value)} placeholder="Ex.: aniversário, indicou uma amiga, agradecimento…" />
+      </div>
+      <div className="info-line"><b>Validade</b><span>até <b>{fmtDate(ate)}</b> ({PRESENTE_DIAS} dias)</span></div>
+      <div className="info-line"><b>Se ela desistir</b><span>não há remarcação</span></div>
+    </Modal>
+  );
+}
+
+/* A Inêz marca a aula de presente pela aluna (ela pediu no WhatsApp, por
+   exemplo). Só aparecem turmas até o fim da validade. */
+export function PresenteBookForm({ client }) {
+  const { data } = useStore();
+  const disponiveis = (data.presentes || []).filter((p) => p.clientId === client.id && p.situacao === "disponivel");
+  const ate = disponiveis.map((p) => p.expiresOn).sort().pop() || null;
+  return (
+    <SlotPicker
+      client={client}
+      aba="presentes"
+      ate={ate}
+      titulo="Marcar aula de presente"
+      ajuda={`Aparecem só as turmas com vaga até ${ate ? fmtDate(ate) : "—"}, o fim da validade do presente. A aula entra confirmada, sem cobrança, fora do plano e sem recorrência. Se ela desistir depois, o presente não é remarcado.`}
+      confirmar={(s) => `Marcar ${client.name} na aula de presente?\n\n${s.unit}\n${fmtDateLong(s.date)} às ${s.time}\n\nIsso usa 1 aula de presente.`}
+      acao={(s, forcar) => api.presentes.marcar(client.id, s.id, forcar)}
+      sucesso="Aula de presente marcada. 🎁"
     />
   );
 }

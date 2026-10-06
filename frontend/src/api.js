@@ -95,6 +95,13 @@ export const api = {
   // decidiu marcar assim mesmo. O portal da aluna nunca manda esse campo.
   makeupBook: (clientId, slotId, forcar) => req("POST", `/api/clients/${clientId}/makeup-book`, { slotId, forcar: !!forcar }),
   extraBook: (clientId, slotId, forcar) => req("POST", `/api/clients/${clientId}/extra-book`, { slotId, forcar: !!forcar }),
+  // Aula de presente (fora de toda conta): dar na ficha, recolher a não usada
+  // e marcar o horário pela aluna. Ela também marca sozinha pelo portal.
+  presentes: {
+    dar: (clientId, quantidade, motivo) => req("POST", `/api/clients/${clientId}/presentes`, { quantidade, motivo: motivo || "" }),
+    recolher: (id) => req("POST", `/api/presentes/${id}/cancelar`, {}),
+    marcar: (clientId, slotId, forcar) => req("POST", `/api/clients/${clientId}/presente-book`, { slotId, forcar: !!forcar }),
+  },
   enroll: (clientId, data) => req("POST", `/api/clients/${clientId}/enroll`, data),
   refundMatricula: (clientId) => req("POST", `/api/clients/${clientId}/matricula/refund`, {}),
   releaseBooking: (id, reason) => req("POST", `/api/bookings/${id}/release`, { reason: reason || "" }),
@@ -208,7 +215,7 @@ export const api = {
   portal: {
     get: (phone) => req("GET", `/api/portal/${encodeURIComponent(phone)}`),
     book: (phone, slotId, name, modo) => req("POST", `/api/portal/${encodeURIComponent(phone)}/book`, {
-      slotId, name, reposicao: modo === "repor", extra: modo === "extra",
+      slotId, name, reposicao: modo === "repor", extra: modo === "extra", presente: modo === "presente",
     }),
     enroll: (phone, data) => req("POST", `/api/portal/${encodeURIComponent(phone)}/enroll`, data),
     // Aula extra: ela compra primeiro (Pix) e só escolhe o horário depois que cai

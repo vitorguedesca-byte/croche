@@ -18,6 +18,12 @@ import {
   PGTO_PLANO,
   PGTO_REPOSICAO,
   PGTO_EXTRA,
+  PGTO_PRESENTE,
+  PRESENTE_VALIDADE_DIAS,
+  PRESENTE_MAX_POR_VEZ,
+  validadePresente,
+  situacaoPresente,
+  presenteParaAula,
   primeiroPagamento,
   mensalidadeDoPagamento,
   JUROS_DIA_PERCENTUAL,
@@ -899,6 +905,127 @@ async function comprarAulaExtra(client) {
   return { pass: atualizado, jaPago: false };
 }
 
+/* ===================== AULA DE PRESENTE (AulaPresente) =====================
+   A ADMIN dá na ficha; a aluna escolhe o horário no portal (ou a Inêz marca
+   por ela). As regras e o porquê estão em regrasAula.js, junto de
+   PGTO_PRESENTE — aqui só o banco. */
+
+// O que a tela precisa de cada presente, com a situação do dia já resolvida.
+const resumoPresente = (p, hoje = todayISO()) => ({
+  id: p.id,
+  clientId: p.clientId,
+  situacao: situacaoPresente(p, hoje), // disponivel | usado | vencido | cancelado
+  expiresOn: p.expiresOn,
+  motivo: p.motivo || null,
+  dadoPor: p.dadoPor || null,
+  usedBookingId: p.usedBookingId,
+  usedAt: p.usedAt,
+  createdAt: p.createdAt,
+});
+
+const presentesDisponiveis = async (clientId, hoje = todayISO()) =>
+  (await prisma.aulaPresente.findMany({ where: { clientId, status: "disponivel", expiresOn: { gte: hoje } } }))
+    .sort((a, b) => a.expiresOn.localeCompare(b.expiresOn) || a.id - b.id);
+
+// Ela consegue abrir o portal para usar? Presente que ela não vê não é presente.
+function motivoNaoPresentear(client) {
+  if (!client) return "Aluna não encontrada.";
+  if (client.status === "cancelado") return `${client.name} está com a inscrição cancelada — reative a ficha antes de dar o presente.`;
+  const pode = clientPodeAcessarPortal(client);
+  if (!pode.ok) return `O portal de ${client.name} ainda está fechado (pagamento da entrada não identificado) — ela não veria o presente.`;
+  return "";
+}
+
+async function darAulasPresente(client, { quantidade = 1, motivo = "", quem = null } = {}) {
+  const recusa = motivoNaoPresentear(client);
+  if (recusa) throw Object.assign(new Error(recusa), { code: 409 });
+  const n = parseInt(quantidade, 10);
+  if (!(n >= 1 && n <= PRESENTE_MAX_POR_VEZ))
+    throw Object.assign(new Error(`Escolha de 1 a ${PRESENTE_MAX_POR_VEZ} aulas de presente.`), { code: 400 });
+  const hoje = todayISO();
+  const expiresOn = validadePresente(hoje);
+  const texto = String(motivo || "").trim().slice(0, 200) || null;
+  const criados = [];
+  for (let i = 0; i < n; i++) {
+    criados.push(await prisma.aulaPresente.create({
+      data: { clientId: client.id, expiresOn, motivo: texto, dadoPor: quem },
+    }));
+  }
+  await anotarNaFicha(client.id,
+    `🎁 ${fmtDiaBR(hoje)}: ${n === 1 ? "1 aula de presente" : `${n} aulas de presente`}` +
+    `${quem ? ` (dada por ${quem})` : ""}, válida até ${fmtDiaBR(expiresOn)}${texto ? ` — ${texto}` : ""}. Ela escolhe o horário no portal.`);
+  console.log(`[presente] ${client.name}: ${n} aula(s) de presente até ${expiresOn}${quem ? ` (por ${quem})` : ""}.`);
+  return criados;
+}
+
+/* Marca a aula com o presente. Portal e painel passam por aqui; a diferença é
+   o `forcar`, que só o painel manda (e que não pula a validade nem o feriado). */
+async function marcarAulaPresente(client, slotId, { forcar = false } = {}) {
+  if (client.status === "cancelado")
+    throw Object.assign(new Error("Inscrição cancelada. Chame a gente no WhatsApp."), { code: 403 });
+  const t = todayISO();
+  const slot = await prisma.slot.findUnique({ where: { id: Number(slotId) } });
+  if (!slot) throw Object.assign(new Error("Horário não encontrado."), { code: 404 });
+  if (slot.date < t) throw Object.assign(new Error("Escolha uma aula futura."), { code: 400 });
+
+  const disponiveis = await presentesDisponiveis(client.id, t);
+  if (!disponiveis.length)
+    throw Object.assign(new Error("Você não tem aula de presente para marcar."), { code: 409 });
+  const presente = presenteParaAula(disponiveis, slot.date, t);
+  if (!presente) {
+    const ultima = disponiveis.map((p) => p.expiresOn).sort().pop();
+    throw Object.assign(new Error(`A sua aula de presente vale até ${fmtDiaBR(ultima)}. Escolha um horário até essa data. 💚`), { code: 409, codigo: "presente_validade" });
+  }
+
+  // Como a aula extra: fora do plano, então a janela da escala e o teto não valem.
+  await exigirRegras(client, slot, { forcar, ignorarJanela: true, ignorarTeto: true });
+  const dup = await prisma.booking.findFirst({
+    where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } },
+  });
+  if (dup) throw Object.assign(new Error("Você já tem essa aula marcada."), { code: 400 });
+  if ((await occupancy(slot.id)) >= (slot.capacity || 1))
+    throw Object.assign(new Error("Turma lotada."), { code: 409 });
+
+  /* Reserva o presente ANTES de criar a aula: dois toques seguidos (ou portal e
+     painel ao mesmo tempo) não gastam o mesmo presente em duas aulas. */
+  const reservado = await prisma.aulaPresente.updateMany({
+    where: { id: presente.id, status: "disponivel" },
+    data: { status: "usado", usedAt: t },
+  });
+  if (!reservado.count) throw Object.assign(new Error("Este presente acabou de ser usado. Atualize a tela. 💚"), { code: 409 });
+
+  try {
+    const booking = await prisma.booking.create({
+      data: {
+        clientName: client.name, phone: client.phone || "", unit: slot.unit,
+        date: slot.date, time: slot.time, prof: slot.prof || profFor(slot.unit),
+        slotId: slot.id, status: "confirmada", value: 0, paid: true,
+        paymentMethod: PGTO_PRESENTE, paymentDate: t,
+        // Aula única, como a reposição e a extra: nenhum lote alcança.
+        seriesId: null,
+      },
+    });
+    await prisma.aulaPresente.update({ where: { id: presente.id }, data: { usedBookingId: booking.id } });
+    return booking;
+  } catch (e) {
+    await prisma.aulaPresente.update({ where: { id: presente.id }, data: { status: "disponivel", usedAt: null } }).catch(() => {});
+    throw e;
+  }
+}
+
+/* A ESCOLA desfez a aula de presente (excluiu, desmarcou a turma, cancelou no
+   painel): o presente volta. Se já passou da validade, volta como vencido — a
+   situação é pela data, então não há nada a fazer além de soltar a aula.
+   Quem desiste é a aluna não passa por aqui (regra 4: não há remarcação). */
+async function devolverPresente(bookingId) {
+  const p = await prisma.aulaPresente.findFirst({ where: { usedBookingId: bookingId } });
+  if (!p) return null;
+  return prisma.aulaPresente.update({
+    where: { id: p.id },
+    data: { status: "disponivel", usedBookingId: null, usedAt: null },
+  });
+}
+
 // Se a aula de reposição foi cancelada/excluída, o crédito volta para a aluna
 // (desde que ainda esteja na validade).
 async function devolverCredito(bookingId) {
@@ -1092,7 +1219,7 @@ app.get(
   "/api/state",
   wrap(async (req, res) => {
     await sincronizarLeadsPagos().catch((e) => console.warn("[api/state] sincronizarLeadsPagos:", e.message));
-    const [clients, slots, bookings, invoices, makeups, precos] = await Promise.all([
+    const [clients, slots, bookings, invoices, makeups, precos, presentes] = await Promise.all([
       prisma.client.findMany({ orderBy: { name: "asc" } }),
       prisma.slot.findMany({ include: { waitlist: true }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
       prisma.booking.findMany({ orderBy: [{ date: "asc" }, { time: "asc" }] }),
@@ -1101,7 +1228,9 @@ app.get(
       // valores combinados mês a mês (desconto/promoção) — a tela precisa deles
       // para mostrar o valor certo de meses que ainda não têm boleto gerado
       prisma.monthlyPrice.findMany({ orderBy: { competencia: "asc" } }),
+      prisma.aulaPresente.findMany({ orderBy: { createdAt: "desc" } }),
     ]);
+    const hoje = todayISO();
     res.json({
       /* `feriados` é o calendário já resolvido ({ 'YYYY-MM-DD': nome }): a tela
          não recalcula Páscoa nem junta lista manual, só consulta o dia. */
@@ -1121,6 +1250,8 @@ app.get(
       invoices: invoices.map(comEncargos),
       makeups,
       precos,
+      // aulas de presente, com a situação do dia (vencido não é gravado)
+      presentes: presentes.map((p) => resumoPresente(p, hoje)),
     });
   })
 );
@@ -1243,7 +1374,7 @@ app.post(
     const nomesAtivos = [...new Set(ativas.map((b) => b.clientName))];
     const fichas = nomesAtivos.length ? await prisma.client.findMany({ where: { name: { in: nomesAtivos } } }) : [];
     const fichaDe = (nome) => fichas.find((c) => c.name === nome) || null;
-    const naoReplicavel = (b) => ehReposicao(b) || b.paymentMethod === PGTO_EXTRA ||
+    const naoReplicavel = (b) => ehReposicao(b) || b.paymentMethod === PGTO_EXTRA || b.paymentMethod === PGTO_PRESENTE ||
       ehPagamentoDeMatricula(b.paymentMethod) || !podeReplicarMensalista(fichaDe(b.clientName));
     const origem = ativas.filter((b) => !naoReplicavel(b));
     const naoReplicadas = ativas.filter(naoReplicavel).map((b) => ({
@@ -1252,6 +1383,8 @@ app.post(
         ? "reposição não é replicada (aula única)"
         : b.paymentMethod === PGTO_EXTRA
           ? "aula extra não é replicada (aula única)"
+          : b.paymentMethod === PGTO_PRESENTE
+          ? "aula de presente não é replicada (aula única)"
           : ehPagamentoDeMatricula(b.paymentMethod)
             ? "aula de matrícula não é replicada (aula única)"
             : !podeReplicarMensalista(fichaDe(b.clientName))
@@ -1329,6 +1462,10 @@ app.post(
            reposição copiada é uma aula que nenhum crédito pagou. */
         if (ehReposicao(b)) {
           pulos.push({ date, clientName: b.clientName, motivo: "reposição é aula única — não se replica" });
+          continue;
+        }
+        if (b.paymentMethod === PGTO_PRESENTE) {
+          pulos.push({ date, clientName: b.clientName, motivo: "aula de presente é aula única — não se replica" });
           continue;
         }
 
@@ -1703,6 +1840,12 @@ app.delete(
       select: { id: true },
     });
     for (const r of repos) await devolverCredito(r.id);
+    // ...e o presente de quem tinha marcado a aula de presente neles
+    const presentes = await prisma.booking.findMany({
+      where: { slotId: { in: idsToDelete }, paymentMethod: PGTO_PRESENTE, status: { not: "cancelada" } },
+      select: { id: true },
+    });
+    for (const r of presentes) await devolverPresente(r.id);
 
     const r = await prisma.slot.deleteMany({ where: { id: { in: idsToDelete } } });
     res.json({ ok: true, deleted: r.count });
@@ -1748,6 +1891,11 @@ app.post(
       select: { id: true },
     });
     for (const r of repos) await devolverCredito(r.id);
+    const presentes = await prisma.booking.findMany({
+      where: { slotId: { in: slotIds }, paymentMethod: PGTO_PRESENTE, status: { not: "cancelada" } },
+      select: { id: true },
+    });
+    for (const r of presentes) await devolverPresente(r.id);
 
     const delRes = await prisma.slot.deleteMany({ where: { id: { in: slotIds } } });
     res.json({ ok: true, deleted: delRes.count });
@@ -2254,6 +2402,9 @@ app.patch(
     // cancelar uma reposição devolve o crédito para a aluna
     if (data.status === "cancelada" && cur.status !== "cancelada" && cur.paymentMethod === "Reposição")
       await devolverCredito(id);
+    // ...e cancelar pelo painel a aula de presente devolve o presente
+    if (data.status === "cancelada" && cur.status !== "cancelada" && cur.paymentMethod === PGTO_PRESENTE)
+      await devolverPresente(id);
     res.json(booking);
   })
 );
@@ -2292,11 +2443,16 @@ app.delete(
       });
       const ids = [...new Set([id, ...matching.map((b) => b.id)])];
       for (const bId of ids) await devolverCredito(bId);
+      /* Presente só volta se a aula estava DE PÉ. Apagar a linha de uma aula de
+         presente que a própria aluna liberou não pode ressuscitar o presente —
+         a regra é que desistiu, encerrou. */
+      for (const bId of ids) if (bId !== id || bk.status !== "cancelada") await devolverPresente(bId);
       const r = await prisma.booking.deleteMany({ where: { id: { in: ids } } });
       return res.json({ ok: true, deleted: r.count });
     }
     await prisma.booking.delete({ where: { id } });
     await devolverCredito(id);
+    if (bk.status !== "cancelada") await devolverPresente(id);
     res.json({ ok: true, deleted: 1 });
   })
 );
@@ -4643,6 +4799,7 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
     ? tetoMensalEscala(client, t, bookings)
     : null;
   const extra = (await passeExtraDisponivel(client.id)) || (await passeExtraPendente(client.id));
+  const presentes = await presentesDisponiveis(client.id, t);
   res.json({
     client: safeClient(client),
     bookings,
@@ -4659,6 +4816,12 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
     // Aula extra comprada: null, ou { status, valor, pixCode, ... }
     extra: extra ? resumoPasse(extra) : null,
     valorAulaExtra: SETTINGS.valorAvulsa,
+    /* Aulas de presente da escola ainda por marcar. `ate` é a validade mais
+       longa — o calendário não oferece data depois dela. (O motivo escrito
+       pela escola fica no painel; a aluna vê só o presente.) */
+    presentes: presentes.length
+      ? { quantidade: presentes.length, ate: presentes[presentes.length - 1].expiresOn, validades: presentes.map((p) => p.expiresOn) }
+      : null,
     // A tela de matrícula e a de mensalidade leem daqui. Faltavam os preços e a
     // duração da aula, então o portal exibia os valores chumbados do código em
     // vez dos que estão nas Configurações.
@@ -4890,6 +5053,13 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
       return res.status(e.code || 500).json({ error: e.message });
     }
   }
+  if (req.body.presente) {
+    try {
+      return res.json(await marcarAulaPresente(client, req.body.slotId));
+    } catch (e) {
+      return res.status(e.code || 500).json({ error: e.message, codigo: e.codigo });
+    }
+  }
   if (client.plan === "mensalista" && client.mensalistaTipo !== "escala")
     return res.status(403).json({
       error: "Sua grade regular já é reservada automaticamente por 12 meses. Para alterar uma data, cancele aquela aula e use a reposição individual. 💚",
@@ -4940,6 +5110,15 @@ async function liberarAula(client, b, extra = {}, { devolverRepo = false } = {})
   if (b.paymentMethod === "Avulsa") {
     // Aula extra é compra: liberar a vaga não devolve o valor nem gera crédito.
     return { credito: false, devolvido: false, motivo: "Esta era uma aula extra — o valor pago não é devolvido." };
+  }
+  if (b.paymentMethod === PGTO_PRESENTE) {
+    /* Regra 4 do presente: desistiu ou não pode ir, o presente se encerra — não
+       há remarcação nem crédito. Só a escola desfazendo (devolverRepo) devolve. */
+    if (devolverRepo) {
+      const devolvido = await devolverPresente(b.id);
+      return { credito: false, devolvido: !!devolvido, motivo: devolvido ? "A aula de presente voltou para a aluna." : "" };
+    }
+    return { credito: false, devolvido: false, motivo: "Esta era a sua aula de presente — ela se encerra aqui e não é remarcada." };
   }
   /* A vaga JÁ foi liberada na linha de cima. Se a concessão do crédito falhar,
      a liberação não pode falhar junto: quem avisou que não vem não fica presa na
@@ -5452,6 +5631,46 @@ app.post("/api/clients/:id/extra-book", wrap(async (req, res) => {
   catch (e) { res.status(e.code || 500).json({ error: e.message, codigo: e.codigo }); }
 }));
 
+/* ---------- AULA DE PRESENTE (painel) ----------
+   Dar: body { quantidade, motivo }. Recolher: só presente ainda não usado — o
+   que já virou aula sai pela agenda (excluir a aula devolve o presente, e aí
+   sim dá para recolher). Marcar: a Inêz escolhe o horário pela aluna. */
+app.post("/api/clients/:id/presentes", wrap(async (req, res) => {
+  const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
+  if (!client) return res.status(404).json({ error: "Aluna não encontrada." });
+  try {
+    const criados = await darAulasPresente(client, {
+      quantidade: req.body?.quantidade,
+      motivo: req.body?.motivo,
+      quem: req.admin?.nome || req.admin?.username || null,
+    });
+    res.json({ presentes: criados.map((p) => resumoPresente(p)), validade: criados[0]?.expiresOn, dias: PRESENTE_VALIDADE_DIAS });
+  } catch (e) {
+    res.status(e.code || 500).json({ error: e.message });
+  }
+}));
+
+app.post("/api/presentes/:id/cancelar", wrap(async (req, res) => {
+  const p = await prisma.aulaPresente.findUnique({ where: { id: Number(req.params.id) } });
+  if (!p) return res.status(404).json({ error: "Presente não encontrado." });
+  const sit = situacaoPresente(p, todayISO());
+  if (sit !== "disponivel" && sit !== "vencido")
+    return res.status(409).json({ error: sit === "usado"
+      ? "Este presente já virou aula. Para desfazer, exclua a aula na agenda — o presente volta e aí pode ser recolhido."
+      : "Este presente já foi recolhido." });
+  const atualizado = await prisma.aulaPresente.update({ where: { id: p.id }, data: { status: "cancelado" } });
+  const quem = req.admin?.nome || req.admin?.username || null;
+  await anotarNaFicha(p.clientId, `🎁 ${fmtDiaBR(todayISO())}: 1 aula de presente recolhida${quem ? ` por ${quem}` : ""}.`);
+  res.json(resumoPresente(atualizado));
+}));
+
+app.post("/api/clients/:id/presente-book", wrap(async (req, res) => {
+  const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
+  if (!client) return res.status(404).json({ error: "Aluna não encontrada." });
+  try { res.json(await marcarAulaPresente(client, req.body?.slotId, { forcar: !!req.body?.forcar })); }
+  catch (e) { res.status(e.code || 500).json({ error: e.message, codigo: e.codigo }); }
+}));
+
 // Marcar reposição pelo painel (admin) — body { slotId, forcar? }
 app.post("/api/clients/:id/makeup-book", wrap(async (req, res) => {
   const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
@@ -5552,6 +5771,7 @@ app.post("/api/clients/:id/batch-unbook", wrap(async (req, res) => {
     } else {
       await prisma.booking.delete({ where: { id: b.id } });
       await devolverCredito(b.id);
+      await devolverPresente(b.id);
     }
     removidas++;
   }
@@ -8446,6 +8666,24 @@ const TABELAS_ESPERADAS = [
       PRIMARY KEY (\`id\`),
       CONSTRAINT \`WaDisparoItem_disparoId_fkey\` FOREIGN KEY (\`disparoId\`)
         REFERENCES \`WaDisparo\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
+    ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
+  /* Aula de presente dada pela ADMIN (05/10/2026). Sem esta tabela o /api/state
+     quebra — e com ele o painel inteiro. */
+  ["AulaPresente", `CREATE TABLE IF NOT EXISTS \`AulaPresente\` (
+      \`id\` INTEGER NOT NULL AUTO_INCREMENT,
+      \`clientId\` INTEGER NOT NULL,
+      \`expiresOn\` VARCHAR(10) NOT NULL,
+      \`status\` VARCHAR(12) NOT NULL DEFAULT 'disponivel',
+      \`motivo\` VARCHAR(200) NULL,
+      \`dadoPor\` VARCHAR(60) NULL,
+      \`usedBookingId\` INTEGER NULL,
+      \`usedAt\` VARCHAR(10) NULL,
+      \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      INDEX \`AulaPresente_clientId_idx\`(\`clientId\`),
+      INDEX \`AulaPresente_usedBookingId_idx\`(\`usedBookingId\`),
+      PRIMARY KEY (\`id\`),
+      CONSTRAINT \`AulaPresente_clientId_fkey\` FOREIGN KEY (\`clientId\`)
+        REFERENCES \`Client\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
     ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
   ["HolidayOverride", `CREATE TABLE IF NOT EXISTS \`HolidayOverride\` (
       \`id\` INTEGER NOT NULL AUTO_INCREMENT,

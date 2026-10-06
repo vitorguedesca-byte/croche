@@ -689,6 +689,8 @@
   .pt-status{display:inline-block;margin-top:.55rem;font-weight:800;font-size:.98rem;padding:.3rem .8rem;border-radius:999px;background:var(--cream);color:var(--brown)}
   .pt-status.confirmada{background:rgba(63,163,77,.16);color:#1f6b3a}
   .pt-status.aguardando{background:rgba(217,164,65,.18);color:#9a7011}
+  /* aula de presente: segunda pílula, ao lado do status */
+  .pt-status.pt-presente{margin-left:.4rem;background:rgba(217,164,65,.18);color:#9a7011}
   .pt-aula-actions{display:flex;gap:.7rem;margin-top:1rem;flex-wrap:wrap}
   .pt-btn-out{flex:1;min-width:140px;background:#fff;border:2px solid var(--beige);color:var(--brown);border-radius:12px;padding:.9rem;font-weight:800;font-size:1.02rem;cursor:pointer}
   .pt-btn-out:hover{border-color:var(--brown)}

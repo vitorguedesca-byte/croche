@@ -299,6 +299,7 @@ const TIPOS_ALUNA = [
   { k: "primeira", l: "1ª aula", cor: "var(--danger)" },
   { k: "reposicao", l: "Reposição", cor: "var(--info)" },
   { k: "extra", l: "Aula extra", cor: "var(--green-mid)" },
+  { k: "presente", l: "Presente", cor: "var(--warn)" },
   { k: "avulsa", l: "Avulsa", cor: "var(--terracota)" },
 ];
 const TIPO_ALUNA = Object.fromEntries(TIPOS_ALUNA.map((t) => [t.k, t]));

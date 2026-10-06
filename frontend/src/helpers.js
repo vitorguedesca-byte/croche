@@ -307,14 +307,18 @@ export const ehFeriado = (data, date, unit) => !!feriadoDe(data, date, unit);
 
 /* ================= tipo da aula: reposição / aula extra =================
    O backend marca o tipo no paymentMethod ao criar a reserva:
-   "Reposição" = consumiu crédito do MakeupCredit · "Avulsa" = aula extra paga. */
+   "Reposição" = consumiu crédito do MakeupCredit · "Avulsa" = aula extra paga
+   · "Presente" = aula de presente dada pela escola (fora de toda conta). */
 // Esquema de cores da agenda por tipo de aula:
-//   AZUL = reposição · VERMELHO = 1ª aula (matrícula) · VERDE = aula extra
+//   AZUL = reposição · VERMELHO = 1ª aula (matrícula) · VERDE = aula extra · AMARELO = presente
 export const BOOKING_KINDS = {
   reposicao: { key: "reposicao", label: "Reposição", ic: "🔁", cls: "b-info",   color: "var(--info)" },
   primeira:  { key: "primeira",  label: "1ª aula",    ic: "🎟️", cls: "b-danger", color: "var(--danger)" },
   extra:     { key: "extra",     label: "Aula extra", ic: "✨", cls: "b-ok",     color: "var(--green-mid)" },
+  presente:  { key: "presente",  label: "Presente",   ic: "🎁", cls: "b-warn",   color: "var(--warn)" },
 };
+// Espelho de PGTO_PRESENTE em backend/src/regrasAula.js
+export const PGTO_PRESENTE = "Presente";
 /* Marcas que o backend põe no paymentMethod da reserva da aula de matrícula —
    o dinheiro dela é a 1ª MENSALIDADE da aluna, não o preço de uma aula.
    "Matrícula" é o rótulo antigo, de quando existia a taxa de R$20 separada;
@@ -327,6 +331,7 @@ export const bookingKind = (b) =>
   b.paymentMethod === "Reposição" ? BOOKING_KINDS.reposicao
   : ehPagamentoDeMatricula(b.paymentMethod) ? BOOKING_KINDS.primeira
   : b.paymentMethod === "Avulsa" ? BOOKING_KINDS.extra
+  : b.paymentMethod === PGTO_PRESENTE ? BOOKING_KINDS.presente
   : null;
 
 /* Tipo da aula com REFORÇO pela ficha da aluna.

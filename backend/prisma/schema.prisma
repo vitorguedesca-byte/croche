@@ -60,7 +60,30 @@ model Client {
   invoices  Invoice[]
   makeups   MakeupCredit[]
   extras    ExtraPass[]
+  presentes AulaPresente[]
   precos    MonthlyPrice[]
+}
+
+/* Aula de PRESENTE dada pela ADMIN na ficha da aluna (Vitor, 05/10/2026).
+   Uma linha por aula. Fica FORA de toda conta: não é aula do plano, não é aula
+   extra (por isso não mora em ExtraPass, que é a compra pelo portal) e não mexe
+   na reposição. As regras e o porquê estão em regrasAula.js (PGTO_PRESENTE).
+
+   "vencido" não é gravado: é `expiresOn` passado com o presente ainda sem uso. */
+model AulaPresente {
+  id            Int      @id @default(autoincrement())
+  clientId      Int
+  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  expiresOn     String   @db.VarChar(10) // último dia em que a aula pode acontecer, 'YYYY-MM-DD'
+  status        String   @default("disponivel") @db.VarChar(12) // disponivel | usado | cancelado
+  motivo        String?  @db.VarChar(200) // o porquê, escrito pela escola (só o painel vê)
+  dadoPor       String?  @db.VarChar(60) // admin que deu
+  usedBookingId Int? // aula marcada com este presente (sem FK: a aula pode ser excluída)
+  usedAt        String?  @db.VarChar(10)
+  createdAt     DateTime @default(now())
+
+  @@index([clientId])
+  @@index([usedBookingId])
 }
 
 // Valor da mensalidade combinado para UM mês específico — desconto pontual,

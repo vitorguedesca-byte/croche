@@ -6,7 +6,7 @@ import { toast as toastErro, confirmModal } from "./toast.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
-import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, compPorExtenso, PLANOS_MENSALISTA, valorPlanoMeta, aulasSeChocam, janelaEscala } from "./helpers.js";
+import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, compPorExtenso, PLANOS_MENSALISTA, valorPlanoMeta, aulasSeChocam, janelaEscala, PGTO_PRESENTE } from "./helpers.js";
 
 const CPF_KEY = "fqc_portal_cpf";
 // WhatsApp da escola: (31) 98496-6403 — sem o "55", que o waLink já acrescenta
@@ -78,8 +78,9 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   const [liberadasAgora, setLiberadasAgora] = useState({});
   /* O que ela está escolhendo no calendário:
      "normal" = aula do plano · "repor" = gasta 1 crédito · "extra" = usa a aula
-     extra já paga. Era um booleano ("repondo") e virou modo quando a aula extra
-     passou a ser comprada aqui dentro. */
+     extra já paga · "presente" = usa a aula de presente da escola. Era um
+     booleano ("repondo") e virou modo quando a aula extra passou a ser
+     comprada aqui dentro. */
   const [modo, setModo] = useState("normal");
   /* Recorte de "Minhas próximas aulas". A mensalista tem aula marcada semana a
      semana até onde a agenda foi montada — mostrar tudo virava uma parede de
@@ -271,8 +272,12 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
      gera para trás. Ela precisa saber ANTES de liberar, não descobrir depois. */
   const emAtrasoRepo = !!(data.makeup && data.makeup.codigo === "atraso");
   const avisoAtrasoRepo = "Sua mensalidade está em atraso: esta aula não vai gerar crédito de reposição, nem depois do pagamento.";
+  // Aula de presente não se remarca: ela precisa saber ANTES de liberar.
+  const ehPresente = (b) => b.paymentMethod === PGTO_PRESENTE;
+  const avisoPresente = "Esta é a sua aula de presente 🎁 — se você liberar, ela não é remarcada.";
   const doCancel = async (b) => {
-    if (!(await confirmModal({ title: "Cancelar aula", message: `Cancelar a sua aula de ${fmtDateLong(b.date)} às ${b.time}?\n\nA vaga ficará livre para outra pessoa.${emAtrasoRepo ? `\n\n⚠️ ${avisoAtrasoRepo}` : ""}`, confirmLabel: "Cancelar aula", cancelLabel: "Voltar", tone: "danger" }))) return;
+    const aviso = ehPresente(b) ? `\n\n⚠️ ${avisoPresente}` : emAtrasoRepo ? `\n\n⚠️ ${avisoAtrasoRepo}` : "";
+    if (!(await confirmModal({ title: "Cancelar aula", message: `Cancelar a sua aula de ${fmtDateLong(b.date)} às ${b.time}?\n\nA vaga ficará livre para outra pessoa.${aviso}`, confirmLabel: "Cancelar aula", cancelLabel: "Voltar", tone: "danger" }))) return;
     setBusy(true);
     try {
       const r = await api.portal.cancel(phone, b.id);
@@ -299,6 +304,12 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
       repor: { title: "Confirmar reposição", message: `Usar 1 crédito de reposição nesta aula?\n\n${quando}`, confirmLabel: "Usar crédito", okMsg: "Reposição marcada! Te espero lá. 💚" },
       // A aula extra já está paga a esta altura — aqui ela só escolhe o horário.
       extra: { title: "Confirmar aula extra", message: `Usar a sua aula extra já paga neste horário?\n\n${quando}`, confirmLabel: "Marcar aula extra", okMsg: "Aula extra marcada! Te espero lá. 💚" },
+      presente: {
+        title: "Confirmar aula de presente",
+        message: `Usar a sua aula de presente 🎁 neste horário?\n\n${quando}\n\nAtenção: se depois você desistir ou não puder ir, a aula de presente não é remarcada.`,
+        confirmLabel: "Marcar aula de presente",
+        okMsg: "Aula de presente marcada! Te espero lá. 🎁💚",
+      },
       normal: {
         title: "Confirmar marcação",
         message: `Marcar somente esta aula em ${quando}?`,
@@ -367,6 +378,11 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
           onPago={refreshSilencioso}
         />
 
+        {/* Presente da escola: vem antes de tudo que custa alguma coisa */}
+        {data.presentes && cliente.status !== "cancelado" && (
+          <PresenteCard presentes={data.presentes} onEscolherHorario={() => { setModo("presente"); irParaAgenda(); }} />
+        )}
+
         <RepoCard makeup={data.makeup} onRepor={() => { setModo("repor"); irParaAgenda(); }} />
 
         {/* Mensalista compra aula extra aqui. Quem ganhou aula de presente numa
@@ -392,6 +408,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
           podeMarcarNormal={podeMarcarAulaNormal}
           busy={busy}
           modo={modo}
+          presenteAte={data.presentes ? data.presentes.ate : null}
           saldo={(data.makeup && data.makeup.saldo) || 0}
           onBook={doBook}
           onSairModo={() => setModo("normal")}
@@ -413,6 +430,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
           <div className="pt-aula" key={b.id}>
             <div className="pt-when"><b>{fmtDateLong(b.date)}</b><span>{b.time} · {b.unit}</span></div>
             <div className={`pt-status ${b.status}`}>{statusText(b)}</div>
+            {ehPresente(b) && <div className="pt-status pt-presente">🎁 Presente</div>}
             {/* A aula não se paga sozinha: ela já está dentro da mensalidade.
                 Só a aula de matrícula (1ª mensalidade) e a aula extra têm valor
                 próprio — o resto era o R$ 20 fantasma, fora desde 30/08/2026. */}
@@ -427,7 +445,9 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
               <div className="pt-absence">
                 <label className="pt-absence-l">Conte rapidinho o motivo (opcional):</label>
                 <textarea className="pt-absence-t" value={absenceText} onChange={(e) => setAbsenceText(e.target.value)} placeholder="Ex.: tive um imprevisto, vou ao médico…" />
-                {emAtrasoRepo && <div className="pt-sub2" style={{ marginTop: ".4rem" }}>⚠️ {avisoAtrasoRepo}</div>}
+                {ehPresente(b)
+                  ? <div className="pt-sub2" style={{ marginTop: ".4rem" }}>⚠️ {avisoPresente}</div>
+                  : emAtrasoRepo && <div className="pt-sub2" style={{ marginTop: ".4rem" }}>⚠️ {avisoAtrasoRepo}</div>}
                 <div className="pt-absence-actions">
                   <button className="pt-link" onClick={() => { setAbsenceFor(null); setAbsenceText(""); }}>Voltar</button>
                   <button className="pt-btn-out" onClick={() => doAbsence(b)} disabled={busy}>Enviar aviso</button>
@@ -569,16 +589,19 @@ function PaymentScreen({ booking, phone, meta, onBack, onPago, flash }) {
 /* Calendário do portal: consulta e marcação no mesmo lugar.
    Cada dia mostra se ela tem aula e se sobrou vaga; ao tocar no dia, aparecem
    as aulas dela e os horários livres para marcar. */
-function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarcarNormal, busy, modo, saldo, onBook, onSairModo }) {
+function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarcarNormal, busy, modo, presenteAte, saldo, onBook, onSairModo }) {
   const t = todayISO();
   const [off, setOff] = useState(0);
   const [dia, setDia] = useState(null);
   const repondo = modo === "repor";
   const extrando = modo === "extra";
+  const presenteando = modo === "presente";
   // Mensalista escala: só marca a próxima aula NO DIA da aula dela. Sábado e os
   // horários a partir das 18h nem chegam aqui — o backend já não os manda.
-  // Reposição e aula extra são sempre escolhas unitárias, fora da grade de 12 meses.
-  const foraDoPlano = repondo || extrando;
+  // Reposição, aula extra e presente são sempre escolhas unitárias, fora da grade de 12 meses.
+  const foraDoPlano = repondo || extrando || presenteando;
+  // O presente vale até uma data: depois dela o dia não oferece vaga.
+  const passouDoPresente = (date) => presenteando && !!presenteAte && date > presenteAte;
   const janelaGeral = (regras && regras.janela) || { aberta: true, motivo: "" };
   const janelaFechadaGeral = !foraDoPlano && regras && regras.tipo === "escala" && !janelaGeral.aberta;
 
@@ -606,7 +629,7 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
     const out = dd.getMonth() !== m;
     // dias de outro mês ficam só de enfeite na grade: sem marca e sem clique
     const minhas = out ? null : aulasPorDia[date];
-    const vagas = !out && date >= t ? vagasPorDia[date] : null;
+    const vagas = !out && date >= t && !passouDoPresente(date) ? vagasPorDia[date] : null;
     const clicavel = !!(minhas || vagas);
     const titulo = [
       minhas ? `Sua aula: ${minhas.map((b) => b.time).join(", ")}` : "",
@@ -630,7 +653,7 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
   }
   const label = base.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
   const minhasDoDia = dia ? aulasPorDia[dia] || [] : [];
-  const vagasDoDia = dia && dia >= t ? vagasPorDia[dia] || [] : [];
+  const vagasDoDia = dia && dia >= t && !passouDoPresente(dia) ? vagasPorDia[dia] || [] : [];
 
   const tetoEscala = regras && regras.tetoEscala;
   const compDia = dia ? dia.slice(0, 7) : "";
@@ -678,6 +701,14 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
       {extrando && (
         <div className="mini-repo-aviso" style={{ borderLeftColor: "var(--green-mid)" }}>
           ➕ Escolhendo o horário da sua <b>aula extra já paga</b> — ela não ocupa vaga das aulas do seu plano.
+          <button className="pt-link" onClick={onSairModo}>Deixar para depois</button>
+        </div>
+      )}
+
+      {presenteando && (
+        <div className="mini-repo-aviso" style={{ borderLeftColor: "var(--warn)" }}>
+          🎁 Escolhendo o horário da sua <b>aula de presente</b>{presenteAte ? <> — escolha um dia até <b>{fmtDate(presenteAte)}</b></> : null}.
+          Ela não ocupa vaga das aulas do seu plano.
           <button className="pt-link" onClick={onSairModo}>Deixar para depois</button>
         </div>
       )}
@@ -733,6 +764,8 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
                 </div>
                 {bloqueioDoDia && <div className="pt-sub2" style={{ marginTop: ".5rem" }}>{bloqueioDoDia}</div>}
               </>
+            ) : passouDoPresente(dia) ? (
+              <div className="pt-sub2">A sua aula de presente vale até {fmtDate(presenteAte)}. Escolha um dia até lá. 🎁</div>
             ) : (
               <div className="pt-sub2">Toque em outro dia marcado com o ponto verde ou chame a gente no WhatsApp. 💚</div>
             )}
@@ -1291,6 +1324,46 @@ function AulaExtraCard({ extra, valor, phone, flash, onMudou, onEscolherHorario 
           Prefiro falar com a escola antes
         </a>
       </>)}
+    </div>
+  );
+}
+
+/* ===================== Aula de presente (dada pela escola) =====================
+   A escola dá na ficha; aqui ela só escolhe o horário. Fica fora do plano e da
+   reposição, vale até a data que vem do servidor e não é remarcada se ela
+   desistir — as três coisas estão escritas no cartão, antes do botão. */
+function PresenteCard({ presentes, onEscolherHorario }) {
+  const [abrir, setAbrir] = useState(false);
+  if (!presentes || !presentes.quantidade) return null;
+  const n = presentes.quantidade;
+  // a que vence primeiro é a que ela precisa enxergar
+  const primeira = (presentes.validades || []).slice().sort()[0] || presentes.ate;
+  return (
+    <div className="pt-repo" style={{ borderLeftColor: "var(--warn)" }}>
+      <div className="pt-repo-top">
+        <div>
+          <div className="pt-repo-t">🎁 Presente</div>
+          <div className="pt-sub2">
+            {n === 1 ? "Você ganhou uma aula de presente da escola! 💚" : `Você ganhou ${n} aulas de presente da escola! 💚`}
+          </div>
+          <div className="pt-sub2">Use até <b>{fmtDate(primeira)}</b>.</div>
+        </div>
+        <div className="pt-repo-n on" style={{ background: "var(--warn)" }}>{n}</div>
+      </div>
+      <button className="pt-btn" style={{ marginTop: ".8rem" }} onClick={onEscolherHorario}>
+        📅 Escolher o horário do meu presente
+      </button>
+      <button className="pt-link" style={{ marginTop: ".6rem" }} onClick={() => setAbrir(!abrir)}>
+        {abrir ? "Ocultar as regras" : "Como funciona o presente?"}
+      </button>
+      {abrir && (
+        <ul className="pt-repo-regras">
+          <li>É um presente da escola: <b>não ocupa</b> vaga das aulas do seu plano e não tem custo.</li>
+          <li>Você escolhe o dia e o horário entre as turmas com vaga.</li>
+          <li>A aula precisa acontecer até <b>{fmtDate(presentes.ate)}</b>{n > 1 && primeira !== presentes.ate ? <> (a primeira vence em {fmtDate(primeira)})</> : null}.</li>
+          <li><b>Não há remarcação:</b> se você desistir ou não puder ir, a aula de presente se encerra.</li>
+        </ul>
+      )}
     </div>
   );
 }
