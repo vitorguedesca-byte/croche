@@ -160,6 +160,42 @@
   .bar-label{font-size:.68rem;color:var(--muted);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
   .chart-empty{text-align:center;color:var(--muted);font-size:.85rem;padding:.8rem 0 .2rem}
 
+  /* Relatório de vagas: medidor, mapa da grade e barras de quem ocupa */
+  .vg-medidor{height:6px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:.6rem}
+  .vg-medidor > div{height:100%;border-radius:4px;transition:width .3s ease}
+  .vg-unit{margin-bottom:1.5rem}
+  .vg-unit:last-child{margin-bottom:0}
+  .vg-unit-h{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.6rem}
+  .vg-mapa-wrap{overflow-x:auto;scrollbar-width:thin}
+  .vg-mapa{display:grid;gap:4px;min-width:min-content}
+  .vg-mapa .hd{text-align:center;font-size:.78rem;font-weight:800;color:var(--ink);padding:.1rem 0 .3rem;line-height:1.2}
+  .vg-mapa .hd small{display:block;font-size:.68rem;font-weight:700;color:var(--muted)}
+  .vg-mapa .hr{display:flex;align-items:center;justify-content:flex-end;padding-right:.45rem;font-size:.78rem;font-weight:800;color:var(--muted)}
+  .vg-cel{border-radius:8px;min-height:56px;padding:.4rem .25rem;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;line-height:1.15}
+  .vg-cel b{font-size:1.15rem;font-weight:800}
+  .vg-cel span{font-size:.68rem;font-weight:700;opacity:.85;white-space:nowrap}
+  .vg-cel.vazia{background:var(--offwhite)}
+  .vg-cel.click{cursor:pointer;transition:transform .12s}
+  .vg-cel.click:hover{transform:scale(1.04)}
+  .vg-cel.st-pouca{background:rgba(78,121,168,.15);color:#34597f}
+  .vg-cel.st-vaga{background:rgba(63,163,77,.15);color:#1f6b3a}
+  .vg-cel.st-quase{background:rgba(217,164,65,.2);color:#8a6410}
+  .vg-cel.st-lotada{background:rgba(194,113,79,.18);color:#9c4f30}
+  .vg-cel.st-lotada b{font-size:.92rem}
+  .vg-barras{display:flex;flex-direction:column;gap:1rem}
+  .vg-barra-l{display:grid;grid-template-columns:120px minmax(0,1fr) 190px;gap:.9rem;align-items:center}
+  .vg-barra-nome{display:flex;align-items:center;gap:.45rem;font-weight:800;font-size:.9rem}
+  .vg-barra{display:flex;gap:2px;height:18px;border-radius:4px;overflow:hidden;background:var(--cream)}
+  .vg-barra > div{height:100%;flex:none}
+  .vg-barra-num{font-size:.82rem;color:var(--muted);line-height:1.3}
+  .vg-barra-num b{color:var(--ink)}
+  .vg-legenda{display:flex;flex-wrap:wrap;gap:.5rem 1.2rem;margin-top:1.1rem;padding-top:.9rem;border-top:1px dashed var(--line);font-size:.82rem;color:var(--muted)}
+  .vg-legenda .lg{display:inline-flex;align-items:center;gap:.4rem}
+  .vg-legenda .lg b{color:var(--ink)}
+  @media(max-width:640px){
+    .vg-barra-l{grid-template-columns:1fr;gap:.35rem}
+  }
+
   /* Configurações em seções — 2 colunas */
   .config-wrap{max-width:1100px}
   /* empacotamento tipo masonry: os cartões preenchem as colunas sem deixar buracos */

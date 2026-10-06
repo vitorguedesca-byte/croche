@@ -300,9 +300,22 @@ const TIPOS_ALUNA = [
   { k: "reposicao", l: "Reposição", cor: "var(--info)" },
   { k: "extra", l: "Aula extra", cor: "var(--green-mid)" },
   { k: "presente", l: "Presente", cor: "var(--warn)" },
-  { k: "avulsa", l: "Avulsa", cor: "var(--terracota)" },
+  { k: "avulsa", l: "Avulsa", cor: "#8A55A8" },
 ];
 const TIPO_ALUNA = Object.fromEntries(TIPOS_ALUNA.map((t) => [t.k, t]));
+
+/* Nos gráficos os 9 tipos viram 6 grupos — 9 cores numa barra só não se lê.
+   Reposição e 1ª aula ficam com as cores da Agenda; a ordem foi escolhida
+   para que vizinhos na barra se distingam também para quem é daltônico. */
+const GRUPOS_ALUNA = [
+  { k: "fixo", l: "Fixo", cor: "#1F6B3A", tipos: ["fixo1", "fixo2", "fixo34"] },
+  { k: "escala", l: "Escala", cor: "#C08A2E", tipos: ["escala"] },
+  { k: "reposicao", l: "Reposição", cor: "var(--info)", tipos: ["reposicao"] },
+  { k: "primeira", l: "1ª aula", cor: "var(--danger)", tipos: ["primeira"] },
+  { k: "avulsa", l: "Avulsa", cor: "#8A55A8", tipos: ["avulsa"] },
+  { k: "outras", l: "Extra e presente", cor: "#998A74", tipos: ["extra", "presente"] },
+];
+const somaGrupo = (tipos, g) => g.tipos.reduce((s, k) => s + (tipos[k] || 0), 0);
 
 /* Quem ocupa a vaga. O tipo da AULA vem primeiro (reposição, 1ª aula e aula
    extra têm marca própria na reserva, as mesmas cores da Agenda); aula do
@@ -362,12 +375,87 @@ function TiposChips({ tipos }) {
 }
 const Bolinha = ({ cor }) => <span style={{ background: cor, width: 10, height: 10, borderRadius: "50%", display: "inline-block", flex: "none" }} />;
 
-function situacaoTurma(r) {
+// Situação da turma — a mesma régua no mapa e no selo da tabela
+const SITUACOES = {
+  pouca: { badge: "b-info", l: "pouca gente", dica: "menos da metade" },
+  vaga: { badge: "b-ok", l: "com vaga" },
+  quase: { badge: "b-warn", l: "quase cheia", dica: "85% ou mais" },
+  lotada: { badge: "b-terra", l: "lotada" },
+};
+function estadoTurma(r) {
   const p = pct(r.ocup, r.cap);
-  if (p >= 100) return <span className="badge b-terra">lotada</span>;
-  if (p >= 85) return <span className="badge b-warn">quase cheia</span>;
-  if (p < 50) return <span className="badge b-info">pouca gente</span>;
-  return <span className="badge b-ok">com vaga</span>;
+  return p >= 100 ? "lotada" : p >= 85 ? "quase" : p < 50 ? "pouca" : "vaga";
+}
+function situacaoTurma(r) {
+  const s = SITUACOES[estadoTurma(r)];
+  return <span className={`badge ${s.badge}`}>{s.l}</span>;
+}
+
+// Vagas ocupadas contra a capacidade, numa barrinha
+function Medidor({ valor, total, cor }) {
+  return (
+    <div className="vg-medidor">
+      <div style={{ width: `${Math.min(100, pct(valor, total))}%`, background: cor }} />
+    </div>
+  );
+}
+
+/* Mapa da grade de uma unidade: dia da semana × horário. Cada quadrinho é
+   uma turma, com as vagas livres em destaque e a cor da situação. No mês e
+   na grade típica o quadrinho é a média das aulas daquela turma. */
+function MapaDeVagas({ grupos, colunas, onAbrir }) {
+  const horas = [...new Set(grupos.map((g) => g.hora))].sort();
+  const v = fmtN;
+  return (
+    <div className="vg-mapa-wrap">
+      <div className="vg-mapa" style={{ gridTemplateColumns: `48px repeat(${colunas.length}, minmax(68px, 150px))` }}>
+        <div />
+        {colunas.map((c) => (
+          <div key={c.dow} className="hd">{c.rotulo}<small>{v(c.livres)} livre(s)</small></div>
+        ))}
+        {horas.map((h) => (
+          <Fragment key={h}>
+            <div className="hr">{h}</div>
+            {colunas.map((c) => {
+              const g = grupos.find((x) => x.dow === c.dow && x.hora === h);
+              if (!g) return <div key={c.dow} className="vg-cel vazia" />;
+              const st = estadoTurma(g.r), n = g.itens.length;
+              const dica = [
+                `${WEEKDAYS_PT[g.dow]} ${g.hora}${g.prof ? ` · ${g.prof}` : ""}`,
+                `${v(g.r.ocup)} de ${v(g.r.cap)} vagas ocupadas · ${v(g.r.vagas)} livre(s)`,
+                n > 1 ? `média de ${n} aulas` : fmtDate(g.itens[0].s.date),
+                g.r.espera > 0.04 ? `${v(g.r.espera)} na lista de espera` : "",
+                n === 1 ? "Clique para ver as alunas" : "",
+              ].filter(Boolean).join("\n");
+              return (
+                <div key={c.dow} className={`vg-cel st-${st}${n === 1 ? " click" : ""}`} title={dica}
+                  onClick={n === 1 ? () => onAbrir(g.itens[0].s.id) : undefined}>
+                  {st === "lotada"
+                    ? <><b>lotada</b><span>{g.r.espera > 0.04 ? `${v(g.r.espera)} na espera` : `${v(g.r.cap)} vagas`}</span></>
+                    : <><b>{v(g.r.vagas)}</b><span>de {v(g.r.cap)} livres</span></>}
+                </div>
+              );
+            })}
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// A barra inteira é a capacidade: cada pedaço colorido é um tipo de aluna, o resto é vaga livre
+function BarraOcupacao({ r }) {
+  const base = Math.max(r.cap, Object.values(r.tipos).reduce((s, x) => s + x, 0)) || 1;
+  return (
+    <div className="vg-barra">
+      {GRUPOS_ALUNA.map((g) => {
+        const n = somaGrupo(r.tipos, g);
+        if (n < 0.05) return null;
+        return <div key={g.k} style={{ width: `${(n / base) * 100}%`, background: g.cor }}
+          title={`${g.l}: ${fmtN(n)} vaga(s) · ${pct(n, r.cap)}% da capacidade`} />;
+      })}
+    </div>
+  );
 }
 
 export function RelatorioVagas() {
@@ -377,8 +465,10 @@ export function RelatorioVagas() {
   const [refDia, setRefDia] = useState(todayISO());
   const [unit, setUnit] = useState("Todas");
   const [soComVaga, setSoComVaga] = useState(false);
+  const [aba, setAba] = useState("turmas");
   const [de, ate] = intervalo(tipo, refDia);
   const media = tipo === "tipica";
+  const abaAtual = media ? "turmas" : aba; // na grade típica não há aula de uma data
 
   // ficha da aluna da reserva: pelo nome, ou pelos 8 últimos dígitos do telefone
   const cliDe = useMemo(() => {
@@ -421,6 +511,16 @@ export function RelatorioVagas() {
   const total = resumir(turmas, media);
   const v = fmtN;
 
+  /* Os cartões do topo trocam a unidade; tudo abaixo deles segue a escolha.
+     Com "Todas", cada unidade aparece separada e o total vem por último. */
+  const comTurmas = unidades.filter((u) => daUnidade(turmas, u).length);
+  const visiveis = unit === "Todas" ? comTurmas : comTurmas.filter((u) => u === unit);
+  const comTotal = unit === "Todas" && comTurmas.length > 1;
+  const blocos = [
+    ...visiveis.map((u) => ({ u, cor: unitColor(u), lista: daUnidade(turmas, u), tip: daUnidade(tipicas, u) })),
+    ...(comTotal ? [{ u: "Total", cor: "var(--terracota)", lista: turmas, tip: tipicas }] : []),
+  ];
+
   // planos ativos hoje: quantas vagas por semana eles já comprometem
   const planos = (u) => {
     const r = { fixo1: 0, fixo2: 0, fixo34: 0, escala: 0, alunas: 0, vagas: 0 };
@@ -435,7 +535,7 @@ export function RelatorioVagas() {
   };
   const alunasDiferentes = (lista) => new Set(lista.flatMap((t) => t.alunas.map((a) => a.b.clientName))).size;
 
-  // ----- 1. capacidade: uma tabela por unidade, uma linha por dia da semana -----
+  // ----- a conta da Inêz, por unidade: dias × turmas × vagas -----
   const linhasDaUnidade = (u) => {
     const doUnit = daUnidade(turmas, u);
     return [...new Set(doUnit.map((t) => t.dow))].sort((a, b) => a - b).map((dow) => {
@@ -443,15 +543,8 @@ export function RelatorioVagas() {
       const grupos = agrupar(itens);
       const caps = grupos.map((g) => Math.round(somar(g.itens).cap / g.itens.length));
       const datas = [...new Set(itens.map((t) => t.s.date))].sort();
-      return { dow, itens, grupos, caps, datas, r: resumir(itens, media), uniforme: caps.every((c) => c === caps[0]) };
+      return { dow, grupos, caps, datas, uniforme: caps.every((c) => c === caps[0]) };
     });
-  };
-  const rotuloDia = (l) => (tipo === "dia" || tipo === "semana")
-    ? `${WEEKDAYS_SHORT[l.dow]} ${fmtDate(l.datas[0])}`
-    : WEEKDAYS_PT[l.dow];
-  const textoTurmas = (l) => {
-    const base = l.uniforme ? `${l.grupos.length} × ${l.caps[0]} vagas` : l.caps.join(" + ");
-    return tipo === "mes" && l.datas.length > 1 ? `${base} · ${l.datas.length} semanas` : base;
   };
   const formula = (linhas, r) => {
     if (!linhas.length) return "";
@@ -465,19 +558,29 @@ export function RelatorioVagas() {
       : `${linhas.length} dias · ${r.turmas} turmas · ${v(r.cap)} vagas${porSemana}`;
   };
 
-  // ----- 3. turmas da grade (lista filtrável) -----
+  // ----- mapa: as turmas da unidade (média de cada uma) e uma coluna por dia -----
+  const mapaDa = (u) => {
+    const grupos = agrupar(daUnidade(turmas, u)).map((g) => ({ ...g, r: resumir(g.itens, true) }));
+    const linhas = linhasDaUnidade(u);
+    const colunas = linhas.map((l) => ({
+      dow: l.dow,
+      rotulo: tipo === "dia" || tipo === "semana" ? `${WEEKDAYS_SHORT[l.dow]} ${fmtDate(l.datas[0])}` : WEEKDAYS_SHORT[l.dow],
+      livres: grupos.filter((g) => g.dow === l.dow).reduce((s, g) => s + g.r.vagas, 0),
+    }));
+    return { grupos, colunas, conta: formula(linhas, resumir(daUnidade(turmas, u), media)) };
+  };
+
+  // ----- detalhes: turmas da grade e aulas do período -----
   const grade = agrupar(turmas)
     .filter((g) => unit === "Todas" || g.unit === unit)
     .map((g) => ({ ...g, r: resumir(g.itens, true) }))
     .filter((g) => !soComVaga || g.r.vagas > 0.04);
-
-  // ----- aulas do período com as alunas (fora da grade típica) -----
   const lista = turmas
     .filter((t) => unit === "Todas" || t.s.unit === unit)
     .filter((t) => !soComVaga || t.vagas > 0);
   const diasLista = [...new Set(lista.map((t) => t.s.date))];
 
-  const exportar = () => media
+  const exportar = () => abaAtual === "turmas"
     ? exportCsv(`grade-${de}-a-${ate}`,
       ["Unidade", "Dia", "Hora", "Professora", "Vagas", "Ocupadas (média)", "Livres (média)", "% ocupação", ...TIPOS_ALUNA.map((t) => t.l)],
       grade.map((g) => [g.unit, WEEKDAYS_PT[g.dow], g.hora, g.prof || "", v(g.r.cap), v(g.r.ocup), v(g.r.vagas), pct(g.r.ocup, g.r.cap),
@@ -490,147 +593,158 @@ export function RelatorioVagas() {
           ...TIPOS_ALUNA.map((x) => tp[x.k] || 0), t.alunas.map((a) => `${a.b.clientName} (${TIPO_ALUNA[a.tipo].l})`).join(", ")];
       }));
 
+  // legenda das barras: os números do conjunto que está na tela
+  const rLegenda = resumir(unit === "Todas" ? turmas : daUnidade(turmas, unit), media);
+  const mensalistasNoTotal = (p) => [`${p.fixo1} fixo 1x`, `${p.fixo2} fixo 2x`, `${p.fixo34} fixo 3x/4x`, `${p.escala} escala`].join(" · ");
+
   return (
     <>
       <div className="panel">
         <Periodo tipos={PERIODOS_VAGAS} tipo={tipo} setTipo={setTipo} refDia={refDia} setRefDia={setRefDia} />
         {media && <div className="seg-hint">📐 Grade típica: a média de cada turma nas 4 semanas — uma semana “normal” da escola, sem o efeito de feriado.</div>}
 
-        <div className="grid stats" style={{ marginBottom: "1rem" }}>
+        <div className="grid stats">
           {unidades.map((u) => {
             const r = resumir(daUnidade(turmas, u), media);
             return (
               <div key={u} className="card stat click" onClick={() => setUnit(unit === u ? "Todas" : u)}
-                style={unit === u ? { outline: `2px solid ${unitColor(u)}` } : undefined} title="Clique para ver só as turmas desta unidade">
+                style={unit === u ? { outline: `2px solid ${unitColor(u)}` } : undefined} title="Clique para ver só esta unidade">
                 <div className="lbl"><Bolinha cor={unitColor(u)} /> {u}</div>
                 <div className="val">{v(r.vagas)}</div>
-                <div className="foot">vaga(s) livre(s) · {v(r.ocup)}/{v(r.cap)} ocupadas ({pct(r.ocup, r.cap)}%)</div>
+                <div className="foot">vaga(s) livre(s) de {v(r.cap)} · {pct(r.ocup, r.cap)}% ocupada</div>
+                <Medidor valor={r.ocup} total={r.cap} cor={unitColor(u)} />
               </div>
             );
           })}
-          <div className="card stat">
+          <div className="card stat click" onClick={() => setUnit("Todas")}
+            style={unit === "Todas" && unidades.length > 1 ? { outline: "2px solid var(--terracota)" } : undefined} title="Clique para ver todas as unidades">
             <div className="lbl">🪑 Total</div>
             <div className="val terra">{v(total.vagas)}</div>
-            <div className="foot">vaga(s) livre(s) · {v(total.ocup)}/{v(total.cap)} ocupadas ({pct(total.ocup, total.cap)}%)</div>
+            <div className="foot">vaga(s) livre(s) de {v(total.cap)} · {pct(total.ocup, total.cap)}% ocupada</div>
+            <Medidor valor={total.ocup} total={total.cap} cor="var(--terracota)" />
           </div>
         </div>
-        {!turmas.length && <div className="empty"><div className="ic">📅</div><p>Nenhuma turma cadastrada neste período.</p></div>}
+        {!turmas.length && <div className="empty" style={{ marginTop: "1rem" }}><div className="ic">📅</div><p>Nenhuma turma cadastrada neste período.</p></div>}
       </div>
 
-      {/* 1. Capacidade */}
-      {turmas.length > 0 && (
+      {/* 1. Mapa de vagas: onde tem lugar */}
+      {blocos.length > 0 && (
         <div className="panel">
-          <div className="panel-h"><h2>📐 Capacidade <span className="muted-note">· dias × turmas × vagas</span></h2></div>
-          {unidades.map((u) => {
-            const linhas = linhasDaUnidade(u);
-            if (!linhas.length) return null;
-            const r = resumir(daUnidade(turmas, u), media);
+          <div className="panel-h">
+            <h2>🗺️ Onde tem vaga <span className="muted-note">· {media || tipo === "mes" ? "média de cada turma" : "vagas livres em cada turma"}</span></h2>
+          </div>
+          <div className="ag-legend" style={{ marginBottom: "1.1rem" }}>
+            {Object.entries(SITUACOES).map(([k, s]) => (
+              <span key={k} className="lg"><span className={`badge ${s.badge}`}>{s.l}</span>{s.dica && <span>{s.dica}</span>}</span>
+            ))}
+            {!media && tipo !== "mes" && <><span className="lg-sep" /><span className="lg">👆 clique numa turma para ver as alunas</span></>}
+          </div>
+          {visiveis.map((u) => {
+            const m = mapaDa(u);
             return (
-              <div key={u} style={{ marginBottom: "1.4rem" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: ".5rem", flexWrap: "wrap", marginBottom: ".4rem" }}>
+              <div key={u} className="vg-unit">
+                <div className="vg-unit-h">
                   <Bolinha cor={unitColor(u)} /><b style={{ color: unitColor(u) }}>{u}</b>
-                  <span className="cli-sub">{formula(linhas, r)}</span>
+                  <span className="cli-sub">{m.conta}</span>
                 </div>
-                <table>
-                  <thead><tr><th>Dia</th><th>Turmas</th><th>Vagas</th><th>Ocupadas</th><th>Livres</th><th>Tipos de aluna</th></tr></thead>
-                  <tbody>
-                    {linhas.map((l) => (
-                      <tr key={l.dow}>
-                        <td className="c-main"><b>{rotuloDia(l)}</b></td>
-                        <td data-l="Turmas">{textoTurmas(l)}<div className="cli-sub">{l.grupos.map((g) => g.hora).join(" · ")}</div></td>
-                        <td data-l="Vagas"><b>{v(l.r.cap)}</b></td>
-                        <td data-l="Ocupadas">{v(l.r.ocup)} <span className="cli-sub">({pct(l.r.ocup, l.r.cap)}%)</span></td>
-                        <td data-l="Livres"><b style={{ color: l.r.vagas > 0.04 ? "var(--green-deep)" : "var(--muted)" }}>{v(l.r.vagas)}</b></td>
-                        <td data-l="Tipos de aluna"><TiposChips tipos={l.r.tipos} /></td>
-                      </tr>
-                    ))}
-                    <tr>
-                      <td className="c-main"><b>{tipo === "mes" ? "Mês" : tipo === "dia" ? "Dia" : "Semana"}</b></td>
-                      <td data-l="Turmas"><b>{r.turmas}</b> {tipo === "mes" ? "aulas" : "turma(s)"}</td>
-                      <td data-l="Vagas"><b>{v(r.cap)}</b></td>
-                      <td data-l="Ocupadas"><b>{v(r.ocup)}</b> <span className="cli-sub">({pct(r.ocup, r.cap)}%)</span></td>
-                      <td data-l="Livres"><b style={{ color: "var(--green-deep)" }}>{v(r.vagas)}</b></td>
-                      <td data-l="Tipos de aluna"><TiposChips tipos={r.tipos} /></td>
-                    </tr>
-                  </tbody>
-                </table>
+                <MapaDeVagas grupos={m.grupos} colunas={m.colunas} onAbrir={(id) => open(<SlotDetail slotId={id} />)} />
               </div>
             );
           })}
-          {unidades.length > 1 && (
-            <div className="seg-hint" style={{ margin: 0 }}>
-              <b>Total das unidades:</b> {total.turmas} turmas · {v(total.cap)} vagas · {v(total.ocup)} ocupadas ({pct(total.ocup, total.cap)}%) · {v(total.vagas)} livres
-            </div>
-          )}
         </div>
       )}
 
-      {/* 2. Alunas × vagas */}
-      {turmas.length > 0 && (() => {
-        const cols = [...unidades.map((u) => ({ u, lista: daUnidade(turmas, u), tip: daUnidade(tipicas, u), p: planos(u) })),
-          { u: "Total", lista: turmas, tip: tipicas, p: planos(null) }];
-        const linha = (rotulo, fn, dica) => (
-          <tr>
-            <td className="c-main"><b>{rotulo}</b>{dica && <div className="cli-sub">{dica}</div>}</td>
-            {cols.map((c) => <td key={c.u} data-l={c.u}>{fn(c)}</td>)}
-          </tr>
-        );
-        return (
-          <div className="panel">
-            <div className="panel-h"><h2>👩 Alunas × vagas</h2></div>
-            <table>
-              <thead><tr><th></th>{cols.map((c) => <th key={c.u}>{c.u}</th>)}</tr></thead>
-              <tbody>
-                {linha("Alunas diferentes", (c) => <b>{alunasDiferentes(c.lista)}</b>, "nas aulas do período")}
-                {linha("Vagas ocupadas", (c) => v(resumir(c.lista, media).ocup), media ? "média por semana" : "no período")}
-                {linha("Vagas por aluna", (c) => { const n = alunasDiferentes(c.lista); return n ? v(resumir(c.lista, media).ocup / n) : "—"; },
-                  media ? "por semana" : "no período · plano 2x ocupa 2")}
-                {linha("Mensalistas ativas hoje", (c) => (
-                  <><b>{c.p.alunas}</b><div className="cli-sub">{c.p.fixo1} fixo 1x · {c.p.fixo2} fixo 2x · {c.p.fixo34} fixo 3x/4x · {c.p.escala} escala</div></>
-                ), "pela ficha")}
-                {linha("Vagas/semana dos planos", (c) => <b>{c.p.vagas}</b>, "soma das frequências (2x = 2 vagas)")}
-                {linha("Capacidade/semana", (c) => v(resumir(c.tip, true).cap), "grade típica das próximas 4 semanas")}
-                {linha("Livres/semana", (c) => <b style={{ color: "var(--green-deep)" }}>{v(resumir(c.tip, true).vagas)}</b>, "grade típica · o que dá para vender")}
-                {linha("Cabem ainda", (c) => {
-                  const livres = Math.floor(resumir(c.tip, true).vagas + 0.05);
-                  return <><b>{livres}</b> aluna(s) 1x<div className="cli-sub">ou {Math.floor(livres / 2)} no 2x</div></>;
-                }, "aproximado — o 2x precisa de vaga em dois horários")}
-              </tbody>
-            </table>
-            {!tipicas.length && <div className="seg-hint">Sem turmas cadastradas nas próximas 4 semanas para calcular o que ainda cabe.</div>}
-          </div>
-        );
-      })()}
-
-      {/* 4. Tipos de aluna por unidade */}
-      {turmas.length > 0 && (
+      {/* 2. Quem ocupa as vagas */}
+      {blocos.length > 0 && (
         <div className="panel">
-          <div className="panel-h"><h2>🏷️ Tipos de aluna <span className="muted-note">· vagas ocupadas{media ? " por semana (média)" : " no período"}</span></h2></div>
-          <table>
-            <thead><tr><th>Tipo</th>{unidades.map((u) => <th key={u}>{u}</th>)}<th>Total</th></tr></thead>
-            <tbody>
-              {TIPOS_ALUNA.map((t) => {
-                const deU = (u) => resumir(daUnidade(turmas, u), media).tipos[t.k] || 0;
-                const tot = total.tipos[t.k] || 0;
+          <div className="panel-h">
+            <h2>🧩 Quem ocupa as vagas <span className="muted-note">· {media ? "por semana (média)" : "no período"}</span></h2>
+          </div>
+          <div className="vg-barras">
+            {blocos.map((b) => {
+              const r = resumir(b.lista, media);
+              return (
+                <div key={b.u} className="vg-barra-l">
+                  <div className="vg-barra-nome">
+                    {b.u === "Total" ? "🪑" : <Bolinha cor={b.cor} />}
+                    <span style={{ color: b.u === "Total" ? "var(--ink)" : b.cor }}>{b.u}</span>
+                  </div>
+                  <BarraOcupacao r={r} />
+                  <div className="vg-barra-num">
+                    <div><b>{v(r.ocup)}</b> de {v(r.cap)} ocupadas</div>
+                    <div title={`Aluna não é vaga: a do plano 2x ocupa duas por semana.\n${alunasDiferentes(b.lista)} aluna(s) diferente(s) ${media ? "nas 4 semanas" : "no período"}.`}>
+                      <b style={{ color: "var(--green-deep)" }}>{v(r.vagas)}</b> livres · {alunasDiferentes(b.lista)} aluna(s)
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="vg-legenda">
+            {GRUPOS_ALUNA.map((g) => {
+              const n = somaGrupo(rLegenda.tipos, g);
+              if (n < 0.05) return null;
+              const detalhe = g.tipos.length > 1
+                ? g.tipos.map((k) => `${TIPO_ALUNA[k].l}: ${v(rLegenda.tipos[k] || 0)}`).join(" · ") : undefined;
+              return (
+                <span key={g.k} className="lg" title={detalhe}>
+                  <Bolinha cor={g.cor} />{g.l} <b>{v(n)}</b> <span>({pct(n, rLegenda.ocup)}%)</span>
+                </span>
+              );
+            })}
+            <span className="lg"><span style={{ width: 10, height: 10, borderRadius: 3, background: "var(--cream)", border: "1px solid var(--line)", display: "inline-block" }} />Livre <b>{v(rLegenda.vagas)}</b></span>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Cabe mais gente? — sempre a grade típica das próximas 4 semanas */}
+      {blocos.length > 0 && (
+        <div className="panel">
+          <div className="panel-h">
+            <h2>🌱 Cabe mais gente? <span className="muted-note">· semana típica das próximas 4 semanas</span></h2>
+          </div>
+          {tipicas.length ? (
+            <div className="grid stats">
+              {blocos.map((b) => {
+                const r = resumir(b.tip, true);
+                const livres = Math.floor(r.vagas + 0.05);
+                const p = planos(b.u === "Total" ? null : b.u);
                 return (
-                  <tr key={t.k}>
-                    <td className="c-main"><span style={{ display: "inline-flex", alignItems: "center", gap: ".45rem" }}><Bolinha cor={t.cor} /><b>{t.l}</b></span></td>
-                    {unidades.map((u) => <td key={u} data-l={u}>{v(deU(u))}</td>)}
-                    <td data-l="Total"><b>{v(tot)}</b> <span className="cli-sub">({pct(tot, total.ocup)}%)</span></td>
-                  </tr>
+                  <div key={b.u} className="card stat">
+                    <div className="lbl">{b.u === "Total" ? "🪑" : <Bolinha cor={b.cor} />} {b.u}</div>
+                    <div className="val">{livres}</div>
+                    <div className="foot">aluna(s) nova(s) no 1x · ou {Math.floor(livres / 2)} no 2x</div>
+                    <div title={`${v(r.ocup)} de ${v(r.cap)} vagas da semana ocupadas`}><Medidor valor={r.ocup} total={r.cap} cor={b.cor} /></div>
+                    <div className="cli-sub" style={{ marginTop: ".45rem" }}>semana {pct(r.ocup, r.cap)}% ocupada</div>
+                    <div className="cli-sub" style={{ marginTop: ".2rem" }} title={`${mensalistasNoTotal(p)}\nOs planos usam ${p.vagas} vaga(s) por semana (2x = 2 vagas).`}>
+                      {p.alunas} mensalista(s) ativa(s)
+                    </div>
+                  </div>
                 );
               })}
-            </tbody>
-          </table>
+            </div>
+          ) : (
+            <div className="seg-hint" style={{ margin: 0 }}>Sem turmas cadastradas nas próximas 4 semanas para calcular o que ainda cabe.</div>
+          )}
+          {tipicas.length > 0 && <div className="cli-sub" style={{ marginTop: ".9rem" }}>Aproximado: a aluna do 2x precisa de vaga em dois horários da semana.</div>}
         </div>
       )}
 
-      {/* 3. Turmas da grade, com filtros e CSV */}
+      {/* 4. Detalhes: as tabelas, para quem quer o número de cada turma */}
       {turmas.length > 0 && (
         <div className="panel">
           <div className="panel-h">
-            <h2>🧶 Turmas da grade <span className="muted-note">· {media ? "média de cada turma" : rotuloPeriodo(tipo, refDia)}</span></h2>
-            <button className="btn sec sm" disabled={media ? !grade.length : !lista.length} onClick={exportar}>⬇ Exportar CSV</button>
+            <div className="seg seg-tabs">
+              <button className={abaAtual === "turmas" ? "on" : ""} onClick={() => setAba("turmas")}>
+                🧶 Turmas da grade <span className="seg-count">{grade.length}</span>
+              </button>
+              {!media && (
+                <button className={abaAtual === "aulas" ? "on" : ""} onClick={() => setAba("aulas")}>
+                  📋 Aulas e alunas <span className="seg-count">{lista.length}</span>
+                </button>
+              )}
+            </div>
+            <button className="btn sec sm" disabled={abaAtual === "turmas" ? !grade.length : !lista.length} onClick={exportar}>⬇ Exportar CSV</button>
           </div>
           <div className="ag-filters">
             <FiltroUnidade unidades={unidades} unit={unit} setUnit={setUnit} />
@@ -639,7 +753,8 @@ export function RelatorioVagas() {
               <button className={soComVaga ? "on" : ""} onClick={() => setSoComVaga(true)}>Só com vaga</button>
             </div>
           </div>
-          {grade.length ? (
+
+          {abaAtual === "turmas" && (grade.length ? (
             <table>
               <thead><tr><th>Turma</th><th>Unidade</th><th>Vagas</th><th>Ocupação</th><th>Livres</th><th>Tipos de aluna</th><th>Situação</th></tr></thead>
               <tbody>
@@ -653,9 +768,7 @@ export function RelatorioVagas() {
                       <td data-l="Vagas">{v(g.r.cap)}</td>
                       <td data-l="Ocupação">
                         {v(g.r.ocup)}/{v(g.r.cap)} <span className="cli-sub">({pct(g.r.ocup, g.r.cap)}%)</span>
-                        <div style={{ height: 6, borderRadius: 4, background: "var(--line)", marginTop: 4, maxWidth: 120, overflow: "hidden" }}>
-                          <div style={{ width: `${Math.min(100, pct(g.r.ocup, g.r.cap))}%`, height: "100%", background: g.r.ocup >= g.r.cap ? "var(--terracota)" : "var(--sage-deep)" }} />
-                        </div>
+                        <div style={{ maxWidth: 120 }}><Medidor valor={g.r.ocup} total={g.r.cap} cor={g.r.ocup >= g.r.cap ? "var(--terracota)" : "var(--sage-deep)"} /></div>
                       </td>
                       <td data-l="Livres"><b>{v(g.r.vagas)}</b>{g.r.espera > 0.04 ? <div className="cli-sub">{v(g.r.espera)} na espera</div> : null}</td>
                       <td data-l="Tipos de aluna"><TiposChips tipos={g.r.tipos} /></td>
@@ -667,65 +780,63 @@ export function RelatorioVagas() {
             </table>
           ) : (
             <div className="empty"><div className="ic">🪑</div><p>Nenhuma turma para este filtro.</p></div>
-          )}
-        </div>
-      )}
+          ))}
 
-      {/* Aulas do período com o nome de cada aluna e o tipo dela */}
-      {turmas.length > 0 && !media && (
-        <div className="panel">
-          <div className="panel-h"><h2>📋 Aulas e alunas <span className="muted-note">· {rotuloPeriodo(tipo, refDia)}</span></h2></div>
-          <div className="ag-legend" style={{ marginBottom: ".8rem" }}>
-            {TIPOS_ALUNA.map((t) => <span key={t.k} className="lg"><span className="lgdot" style={{ background: t.cor }} />{t.l}</span>)}
-          </div>
-          {lista.length ? (
-            <table>
-              <thead><tr><th>Turma</th><th>Unidade</th><th>Ocupação</th><th>Vagas</th><th>Alunas</th></tr></thead>
-              <tbody>
-                {diasLista.map((d) => {
-                  const doDia = lista.filter((t) => t.s.date === d);
-                  const r = somar(doDia);
-                  return (
-                    <Fragment key={d}>
-                      <tr className="grp">
-                        <td colSpan={5} style={{ background: "var(--cream)", fontWeight: 800, color: "var(--green-deep)" }}>
-                          📅 {capitalize(fmtDateLong(d))}
-                          <span className="cli-sub" style={{ fontWeight: 600, marginLeft: ".5rem" }}>
-                            {r.turmas} turma(s) · {r.ocup}/{r.cap} ocupadas · {r.vagas} vaga(s)
-                          </span>
-                        </td>
-                      </tr>
-                      {doDia.map((t) => (
-                        <tr key={t.s.id} className="row-click" onClick={() => open(<SlotDetail slotId={t.s.id} />)}>
-                          <td className="c-main"><b>{t.hora}</b>{t.s.prof ? <div className="cli-sub">{t.s.prof}</div> : null}</td>
-                          <td data-l="Unidade"><span className="chip" style={{ color: unitColor(t.s.unit) }}>{t.s.unit}</span></td>
-                          <td data-l="Ocupação">{t.ocup}/{t.cap}</td>
-                          <td data-l="Vagas">
-                            {t.vagas
-                              ? <span className="badge b-ok">{t.vagas} vaga(s)</span>
-                              : <span className="badge b-terra">lotada{t.ocup > t.cap ? ` (+${t.ocup - t.cap})` : ""}</span>}
-                            {t.espera ? <div className="cli-sub">{t.espera} na lista de espera</div> : null}
-                          </td>
-                          <td data-l="Alunas" style={{ fontSize: ".85rem" }}>
-                            {t.alunas.length ? (
-                              <div style={{ display: "flex", flexWrap: "wrap", gap: ".2rem .7rem" }}>
-                                {t.alunas.map((a) => (
-                                  <span key={a.b.id} title={TIPO_ALUNA[a.tipo].l} style={{ display: "inline-flex", alignItems: "center", gap: ".3rem" }}>
-                                    <Bolinha cor={TIPO_ALUNA[a.tipo].cor} />{a.b.clientName}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : <span className="cli-sub">nenhuma aluna</span>}
-                          </td>
-                        </tr>
-                      ))}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          ) : (
-            <div className="empty"><div className="ic">🪑</div><p>Nenhuma turma para este filtro.</p></div>
+          {abaAtual === "aulas" && (
+            <>
+              <div className="ag-legend" style={{ marginBottom: ".8rem" }}>
+                {TIPOS_ALUNA.map((t) => <span key={t.k} className="lg"><span className="lgdot" style={{ background: t.cor }} />{t.l}</span>)}
+              </div>
+              {lista.length ? (
+                <table>
+                  <thead><tr><th>Turma</th><th>Unidade</th><th>Ocupação</th><th>Vagas</th><th>Alunas</th></tr></thead>
+                  <tbody>
+                    {diasLista.map((d) => {
+                      const doDia = lista.filter((t) => t.s.date === d);
+                      const r = somar(doDia);
+                      return (
+                        <Fragment key={d}>
+                          <tr className="grp">
+                            <td colSpan={5} style={{ background: "var(--cream)", fontWeight: 800, color: "var(--green-deep)" }}>
+                              📅 {capitalize(fmtDateLong(d))}
+                              <span className="cli-sub" style={{ fontWeight: 600, marginLeft: ".5rem" }}>
+                                {r.turmas} turma(s) · {r.ocup}/{r.cap} ocupadas · {r.vagas} vaga(s)
+                              </span>
+                            </td>
+                          </tr>
+                          {doDia.map((t) => (
+                            <tr key={t.s.id} className="row-click" onClick={() => open(<SlotDetail slotId={t.s.id} />)}>
+                              <td className="c-main"><b>{t.hora}</b>{t.s.prof ? <div className="cli-sub">{t.s.prof}</div> : null}</td>
+                              <td data-l="Unidade"><span className="chip" style={{ color: unitColor(t.s.unit) }}>{t.s.unit}</span></td>
+                              <td data-l="Ocupação">{t.ocup}/{t.cap}</td>
+                              <td data-l="Vagas">
+                                {t.vagas
+                                  ? <span className="badge b-ok">{t.vagas} vaga(s)</span>
+                                  : <span className="badge b-terra">lotada{t.ocup > t.cap ? ` (+${t.ocup - t.cap})` : ""}</span>}
+                                {t.espera ? <div className="cli-sub">{t.espera} na lista de espera</div> : null}
+                              </td>
+                              <td data-l="Alunas" style={{ fontSize: ".85rem" }}>
+                                {t.alunas.length ? (
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: ".2rem .7rem" }}>
+                                    {t.alunas.map((a) => (
+                                      <span key={a.b.id} title={TIPO_ALUNA[a.tipo].l} style={{ display: "inline-flex", alignItems: "center", gap: ".3rem" }}>
+                                        <Bolinha cor={TIPO_ALUNA[a.tipo].cor} />{a.b.clientName}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : <span className="cli-sub">nenhuma aluna</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="empty"><div className="ic">🪑</div><p>Nenhuma turma para este filtro.</p></div>
+              )}
+            </>
           )}
         </div>
       )}
