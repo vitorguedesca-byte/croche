@@ -656,7 +656,7 @@
   .pt-btn:hover{background:var(--green-mid)}
   .pt-btn:disabled{opacity:.6;cursor:default}
   /* botão do WhatsApp dentro de um card (ex.: pedir aula extra) */
-  .pt-btn-wa{background:#25D366;display:flex;align-items:center;justify-content:center;gap:.6rem;text-decoration:none;box-sizing:border-box;font-size:1.1rem}
+  .pt-btn-wa{background:#25D366;display:flex;align-items:center;justify-content:center;gap:.6rem;text-decoration:none;box-sizing:border-box;font-size:1.1rem;text-align:center}
   .pt-btn-wa:hover{background:#1eb558}
   .pt-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1.6rem;gap:1rem}
   .pt-hello{font-family:'Fraunces',serif;font-size:1.8rem;color:var(--green-deep)}

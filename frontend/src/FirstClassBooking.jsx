@@ -518,7 +518,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
           <div className="pt-card">
             <button className="pt-link" onClick={() => { setStep("cal1"); setExtras([]); }}>← Trocar horário</button>
             <div className="pt-fc-resume">
-              <div>📍 <b>{slot.unit}</b> · 1ª aula: {capitalize(fmtDateLong(slot.date))} · <b>{slot.time}</b></div>
+              <div>📍 <b>{slot.unit}</b> · {isAvulso ? "Aula avulsa" : "1ª aula"}: {capitalize(fmtDateLong(slot.date))} · <b>{slot.time}</b></div>
               {!isAvulso && extras.map((x, i) => (
                 <div key={x.id} style={{ marginTop: ".35rem", color: "var(--green-deep, #1c5e33)", fontWeight: 600 }}>
                   ➕ {i + 2}ª aula: {capitalize(fmtDateLong(x.date))} · <b>{x.time}</b>
@@ -668,34 +668,34 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 </div>)}
                 <button className="pt-pix-copy" onClick={copyPix}>📋 Copiar {pix.code ? "código Pix" : "chave Pix"}</button>
               </div>
-              <div className="pt-fc-resume" style={{ textAlign: "left" }}>
-                {isAvulso ? (
-                  <>
-                    🧺 Sua opção: <b>Aula Avulsa</b> — {money(valorAvulsa)} (aula única).<br />
-                    <span style={{ color: "var(--danger)", fontWeight: 600 }}>⚠️ OBS: não devolveremos o valor da aula avulsa em caso de falta.</span>
-                  </>
-                ) : (
-                  <>
-                    🧵 Seu plano: <b>{tipo === "escala" ? "Escala" : "Fixo"} · {freq}x por semana</b> — {money(mensalidade)}/mês.<br />
-                    {taxa > 0
-                      ? <>Este Pix é a mensalidade deste mês ({money(mensalidadeHoje)}){taxaHoje > 0 ? <> mais a taxa de matrícula ({money(taxaHoje)})</> : <> — a taxa de matrícula ficou isenta pelo código</>}. A <b>próxima</b> vence no mês que vem, no mesmo dia de hoje.</>
-                      : <>Este Pix é a mensalidade deste mês. A <b>próxima</b> só vence no mês que vem, no mesmo dia de hoje.</>}
-                  </>
-                )}
-              </div>
-              <button className="pt-btn" onClick={() => verificarPagamento(false)} disabled={busy}>
-                {busy ? "Consultando banco… ⏳" : "🔍 Já fiz o Pix — verificar pagamento"}
-              </button>
+              {/* Na avulsa o quadro de cima já diz o valor e o aviso de falta — repetir aqui só alongava a tela */}
+              {!isAvulso && (
+                <div className="pt-fc-resume" style={{ textAlign: "left" }}>
+                  🧵 Seu plano: <b>{tipo === "escala" ? "Escala" : "Fixo"} · {freq}x por semana</b> — {money(mensalidade)}/mês.<br />
+                  {taxa > 0
+                    ? <>Este Pix é a mensalidade deste mês ({money(mensalidadeHoje)}){taxaHoje > 0 ? <> mais a taxa de matrícula ({money(taxaHoje)})</> : <> — a taxa de matrícula ficou isenta pelo código</>}. A <b>próxima</b> vence no mês que vem, no mesmo dia de hoje.</>
+                    : <>Este Pix é a mensalidade deste mês. A <b>próxima</b> só vence no mês que vem, no mesmo dia de hoje.</>}
+                </div>
+              )}
+              {/* Sem o Pix do banco (só a chave fixa) o sistema não tem como ver o
+                  pagamento: "verificar" não acharia nada. Aí o caminho é o comprovante. */}
+              {pix.code && (
+                <button className="pt-btn" onClick={() => verificarPagamento(false)} disabled={busy}>
+                  {busy ? "Consultando banco… ⏳" : "🔍 Já fiz o Pix — verificar pagamento"}
+                </button>
+              )}
               <a
                 className="pt-btn pt-btn-wa"
-                style={{ marginTop: ".6rem" }}
+                style={{ marginTop: pix.code ? ".6rem" : undefined }}
                 href={waLink("31984966403", `Olá! Fiz o Pix da ${isAvulso ? "minha aula avulsa" : "matrícula da minha primeira aula"} de ${fmtDate(slot?.date || "")} às ${slot?.time || ""} (${slot?.unit || ""}), no valor de ${money(total)}. Segue o comprovante 👇`)}
                 target="_blank"
                 rel="noreferrer"
               >
                 📲 Enviar comprovante no WhatsApp
               </a>
-              <p className="pt-hint">A baixa é automática: assim que o Pix for confirmado pelo banco, sua vaga fica garantida. Você também pode clicar no botão acima a qualquer momento para verificar. 💚</p>
+              <p className="pt-hint">{pix.code
+                ? "A baixa é automática: assim que o Pix for confirmado pelo banco, sua vaga fica garantida. Você também pode clicar no botão acima a qualquer momento para verificar. 💚"
+                : "Depois de pagar, envie o comprovante no WhatsApp: a escola confere e confirma a sua vaga. 💚"}</p>
             </>)}
           </div>
         )}

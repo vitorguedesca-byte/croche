@@ -185,15 +185,18 @@ const isPublicApi = (req) => PUBLIC_API.some(([m, re]) => (!m || m === req.metho
    `!hasAdmin` é o primeiro uso do sistema, quando ainda não há login nenhum. */
 const doPainel = (req) => !!req.admin || !hasAdmin;
 
-/* Pela porta pública só se mexe na reserva da MATRÍCULA, e só enquanto ela não
-   foi paga. É o alcance real da tela da aluna nova: gerar o Pix da matrícula e
-   declarar "já paguei". Sem este cerco, as rotas de pagar e de gerar cobrança —
-   públicas porque essa tela precisa delas — aceitavam qualquer id de reserva
-   vindo de fora: dava para marcar uma aula como paga sem Pix nenhum.
+/* Pela porta pública só se mexe na reserva de ENTRADA (matrícula ou aula
+   avulsa da 1ª aula), e só enquanto ela não foi paga. É o alcance real da tela
+   da aluna nova: gerar o Pix e declarar "já paguei". Sem este cerco, as rotas
+   de pagar e de gerar cobrança — públicas porque essa tela precisa delas —
+   aceitavam qualquer id de reserva vindo de fora: dava para marcar uma aula
+   como paga sem Pix nenhum.
+   A aula avulsa ficou de fora daqui de 04/09 a 07/10/2026: o site criava a
+   reserva e o Pix voltava 403 — ninguém conseguia pagar a avulsa pelo site.
    Devolve true quando já respondeu 403. */
 function soMatriculaPelaPortaPublica(req, res, booking) {
   if (doPainel(req)) return false;
-  if (booking && ehPagamentoDeMatricula(booking.paymentMethod) && !booking.paid) return false;
+  if (booking && ehReservaDeEntrada(booking) && !booking.paid) return false;
   res.status(403).json({ error: "Essa operação é da escola. Se você já pagou, chame a gente no WhatsApp. 💚" });
   return true;
 }
