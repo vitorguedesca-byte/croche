@@ -6,7 +6,7 @@ import { ClientProfile, SlotDetail } from "./modals.jsx";
 import { exportCsv } from "./exports.js";
 import {
   todayISO, addDays, weekStart, fmtDate, fmtDateLong, money, capitalize, hhmm, unitColor,
-  slotCapacity, slotWaitlist, contemBusca, bookingKindDe, dowMon, WEEKDAYS_PT, WEEKDAYS_SHORT,
+  slotCapacity, slotWaitlist, contemBusca, bookingKindDe, dowMon, WEEKDAYS_PT, WEEKDAYS_SHORT, classifyClient,
 } from "./helpers.js";
 
 /* ============================================================
@@ -534,6 +534,20 @@ export function RelatorioVagas() {
     return r;
   };
   const alunasDiferentes = (lista) => new Set(lista.flatMap((t) => t.alunas.map((a) => a.b.clientName))).size;
+  /* Ao lado de "quantas têm aula no período", o número da aba Alunos: sem ele
+     a Inêz compara 163 com 182 e acha que sumiu gente — quem avisou falta ou é
+     de escala e não marcou simplesmente não tem aula naquela semana. */
+  const matriculadas = useMemo(() => {
+    const porUnidade = new Map();
+    let total = 0;
+    for (const c of data.clients) {
+      if (classifyClient(data, c) !== "cliente") continue;
+      total++;
+      porUnidade.set(c.unit, (porUnidade.get(c.unit) || 0) + 1);
+    }
+    return (u) => (u === "Total" ? total : porUnidade.get(u) || 0);
+  }, [data]);
+  const noPeriodo = { dia: "no dia", semana: "na semana", mes: "no mês", tipica: "nas 4 semanas" }[tipo];
 
   // ----- a conta da Inêz, por unidade: dias × turmas × vagas -----
   const linhasDaUnidade = (u) => {
@@ -672,8 +686,9 @@ export function RelatorioVagas() {
                   <BarraOcupacao r={r} />
                   <div className="vg-barra-num">
                     <div><b>{v(r.ocup)}</b> de {v(r.cap)} ocupadas</div>
-                    <div title={`Aluna não é vaga: a do plano 2x ocupa duas por semana.\n${alunasDiferentes(b.lista)} aluna(s) diferente(s) ${media ? "nas 4 semanas" : "no período"}.`}>
-                      <b style={{ color: "var(--green-deep)" }}>{v(r.vagas)}</b> livres · {alunasDiferentes(b.lista)} aluna(s)
+                    <div><b style={{ color: "var(--green-deep)" }}>{v(r.vagas)}</b> livres</div>
+                    <div title={"Aluna não é vaga: a do plano 2x ocupa duas por semana.\nMatriculadas = aba Alunos. Quem avisou falta, é de escala e não marcou, ou ainda não tem horário fica sem aula no período — mas continua matriculada. 1ª aula e avulsa têm aula, mas não estão na aba Alunos."}>
+                      <b>{alunasDiferentes(b.lista)}</b> com aula {noPeriodo} · <b>{matriculadas(b.u)}</b> matriculada(s)
                     </div>
                   </div>
                 </div>
