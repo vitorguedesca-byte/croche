@@ -192,6 +192,76 @@ export function respostaCupom(rid, body) {
   return null;
 }
 
+/* ===================== "SÓ A AVULSA MESMO?" =====================
+   Inêz, 08/10/2026: quem escolhe a aula avulsa vê, antes do Pix, que o plano
+   de mensalista na escala sai mais barato por aula (R$ 120 / 4 = R$ 30;
+   R$ 200 / 8 = R$ 25, contra R$ 40 da avulsa) — e confirma se quer mesmo só a
+   avulsa. A conta usa os preços das Configurações, nunca números escritos.
+
+   Planos comparados: 1x e 2x, os únicos que existem na escala. */
+export const FREQS_COMPARA_AVULSA = [1, 2];
+export const AULAS_POR_SEMANA_NO_MES = 4;
+
+// [{ freq, valor, aulas, porAula }] — só os planos com preço cadastrado
+// `freqs`: quais planos entram (a tela de valores mostra os quatro)
+export function comparativoPorAula(valorDoPlano, freqs = FREQS_COMPARA_AVULSA) {
+  return freqs
+    .map((freq) => {
+      const valor = Number(valorDoPlano(freq)) || 0;
+      const aulas = freq * AULAS_POR_SEMANA_NO_MES;
+      return { freq, valor, aulas, porAula: Math.round((valor / aulas) * 100) / 100 };
+    })
+    .filter((p) => p.valor > 0);
+}
+
+/* Resposta à pergunta "quer só a avulsa?": "avulsa" | "planos" | null. */
+export function respostaAvulsaOk(rid, body) {
+  const id = String(rid || "");
+  if (id === "avulsaok:sim") return "avulsa";
+  if (id === "avulsaok:planos") return "planos";
+  const txt = String(body || "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  if (/^(sim|s|isso|quero|so a avulsa|avulsa|pode ser)\b/.test(txt)) return "avulsa";
+  if (/^(nao|n|planos?|ver( os)? planos?|mensal|mensalista|escala)\b/.test(txt)) return "planos";
+  return null;
+}
+
+/* ===================== O QUE O ROBÔ NÃO SABIA TRATAR =====================
+   Vitor, 08/10/2026, depois de ler os logs: leads perguntando "qual o valor?"
+   recebiam "toque em Ver horários"; alunas respondendo aviso da escola caíam no
+   menu de aluna nova; áudio e foto chegavam vazios e recebiam o menu. */
+
+/* Mesmo telefone escrito de jeitos diferentes: com ou sem 55, com ou sem o 9,
+   com máscara. Chave = DDD + 8 últimos dígitos. "" quando não dá para saber. */
+export function chaveTelefone(numero) {
+  let d = String(numero || "").replace(/\D/g, "");
+  if (d.startsWith("55") && d.length >= 12) d = d.slice(2);
+  return d.length >= 10 ? d.slice(0, 2) + d.slice(-8) : "";
+}
+
+/* Pergunta de preço, em qualquer passo da conversa. */
+export function ehPerguntaDeValor(texto) {
+  const t = String(texto || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  return /\b(valor|valores|preco|precos|quanto custa|quanto e|quanto fica|quanto sai|quanto pago|mensalidade|custa)\b/.test(t);
+}
+
+/* Mensagem sem texto que o robô não consegue ler. Devolve como dizer o que
+   chegou ("o seu áudio") ou null quando é texto/botão. Reação (emoji em cima de
+   uma mensagem) também é null: não é assunto e não merece resposta. */
+const MIDIAS = {
+  audio: "o seu áudio", voice: "o seu áudio", image: "a sua foto", video: "o seu vídeo",
+  sticker: "a figurinha", document: "o documento", location: "a localização", contacts: "o contato",
+};
+export const midiaNaoLida = (tipo) => MIDIAS[String(tipo || "")] || null;
+// Tipos que não pedem resposta nenhuma (reação a uma mensagem, aviso do sistema)
+export const ehEventoSemConteudo = (tipo) => ["reaction", "system", "unsupported", "ephemeral", "request_welcome"].includes(String(tipo || ""));
+
+/* Texto livre que parece uma dúvida de verdade (e não um "ok" ou "Ipatinga"):
+   esse vai para a equipe ler. */
+export const pareceDuvida = (texto) => {
+  const t = String(texto || "").trim();
+  return t.includes("?") || t.split(/\s+/).length >= 3;
+};
+
 /* "2º horário", "3ª aula": a posição do que ela está escolhendo agora. */
 export const ordinal = (n, genero = "o") => `${n}${genero === "a" ? "ª" : "º"}`;
 

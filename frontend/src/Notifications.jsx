@@ -52,6 +52,24 @@ function buildNotifications(data) {
       time: at(b), nav: (go) => go("marcacoes"),
     }));
 
+  /* 💬 Mensagens no WhatsApp do robô que pedem gente (08/10/2026): aluna
+     escrevendo, áudio/foto, dúvida que o robô não respondeu, pedido de
+     atendente. Antes ficavam só no log do servidor. "Responder" abre a
+     conversa no WhatsApp da escola. */
+  const MOTIVO_WA = { aluna: "Aluna", midia: "Mandou mídia", duvida: "Dúvida sem resposta", atendente: "Pediu atendente" };
+  const MIDIA_WA = { audio: "🎤 áudio", voice: "🎤 áudio", image: "📷 foto", video: "🎬 vídeo", sticker: "figurinha", document: "📄 documento", location: "📍 localização", contacts: "👤 contato" };
+  (data.waRecebidas || []).forEach((m) => {
+    const fone = String(m.phone || "").replace(/^55(?=\d{10,11}$)/, "");
+    const conteudo = m.texto ? `“${m.texto.length > 90 ? m.texto.slice(0, 90) + "…" : m.texto}”` : `[${MIDIA_WA[m.tipo] || m.tipo}]`;
+    out.push({
+      id: "wa" + m.id, event: true, icon: "💬", tone: "rgba(37,211,102,.14)",
+      title: `WhatsApp — ${m.clientName || m.perfil || fone}`,
+      sub: `${MOTIVO_WA[m.motivo] || m.motivo} · ${conteudo}`,
+      time: new Date(m.createdAt),
+      wa: { phone: fone, label: "Responder", msg: "" },
+    });
+  });
+
   // 💰 Pagamentos atrasados (aguardando há 3+ dias)
   data.bookings
     .filter((b) => b.status === "aguardando" && daysSince(b.createdAt, t) >= 3)

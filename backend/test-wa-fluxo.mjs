@@ -7,6 +7,13 @@
 
 import {
   respostaCupom,
+  respostaAvulsaOk,
+  comparativoPorAula,
+  chaveTelefone,
+  ehPerguntaDeValor,
+  midiaNaoLida,
+  ehEventoSemConteudo,
+  pareceDuvida,
   CONVERSA_EXPIRA_H,
   WA_ANTECEDENCIA_MIN,
   conversaExpirou,
@@ -27,6 +34,7 @@ import {
   horariosExtrasPossiveis,
   listaComE,
 } from "./src/waFluxo.js";
+import { textoConfirmarAvulsa, textoValores, textoAluna } from "./src/textosEscola.js";
 import { mesmaSemana } from "./src/regrasAula.js";
 
 let falhas = 0;
@@ -185,6 +193,38 @@ ok(respostaCupom("cupom:sim", "") === "sim" && respostaCupom("cupom:nao", "") ==
 ok(respostaCupom("", "Não tenho") === "nao" && respostaCupom("", "nao") === "nao", "digitado: não tenho / nao");
 ok(respostaCupom("", "Tenho sim") === "sim" && respostaCupom("", "sim") === "sim", "digitado: tenho sim / sim");
 ok(respostaCupom("", "SIMPLES10") === null && respostaCupom("", "NATAL") === null, "código digitado não vira sim/não");
+
+console.log("\n— só a avulsa mesmo? (Inêz, 08/10/2026) —");
+const precos = { 1: 120, 2: 200, 3: 320, 4: 400 };
+const comp = comparativoPorAula((f) => precos[f]);
+ok(comp.length === 2 && comp[0].porAula === 30 && comp[1].porAula === 25, "escala 1x = R$ 30/aula, 2x = R$ 25/aula");
+ok(comp.every((p) => p.freq <= 2), "só compara os planos da escala (1x e 2x)");
+ok(comparativoPorAula(() => 0).length === 0, "plano sem preço não entra na conta");
+ok(respostaAvulsaOk("avulsaok:sim", "") === "avulsa" && respostaAvulsaOk("avulsaok:planos", "") === "planos", "botões");
+ok(respostaAvulsaOk("", "Sim") === "avulsa" && respostaAvulsaOk("", "não") === "planos" && respostaAvulsaOk("", "2") === null, "digitado: sim / não / número fica para o plano");
+const moeda = (v) => "R$ " + v.toFixed(2).replace(".", ",");
+const txtAvulsa = textoConfirmarAvulsa({ nome: "Ana Souza", valorAvulsa: 40, duracaoMin: 120, planos: comp, moeda });
+ok(/somente a aula avulsa/.test(txtAvulsa) && /2 horas/.test(txtAvulsa) && /R\$ 30,00 por aula/.test(txtAvulsa) && /R\$ 25,00 por aula/.test(txtAvulsa), "texto traz a avulsa e o preço por aula de cada plano");
+ok(txtAvulsa.length < 1024, "cabe no corpo de mensagem com botões do WhatsApp (1024)");
+
+console.log("\n— o que o robô não sabia tratar (08/10/2026) —");
+eq(chaveTelefone("553194101751"), "3194101751", "wa_id sem o 9");
+eq(chaveTelefone("5531994101751"), "3194101751", "wa_id com o 9");
+eq(chaveTelefone("(31) 99410-1751"), "3194101751", "ficha com máscara");
+eq(chaveTelefone("31994101751"), "3194101751", "ficha só com dígitos");
+eq(chaveTelefone("12345"), "", "número curto não vira chave");
+ok(["Qual é o valor?", "Queria saber o valor do curso?", "Qual valor", "quanto custa", "Qual o preço?", "e a mensalidade?"].every(ehPerguntaDeValor), "perguntas de preço reais dos logs");
+ok(!["Timóteo", "Celia Martins", "Quero informações sobre as técnicas", "Valorizo muito"].some(ehPerguntaDeValor), "o que não é pergunta de preço");
+eq(midiaNaoLida("audio"), "o seu áudio", "áudio");
+eq(midiaNaoLida("image"), "a sua foto", "foto");
+eq(midiaNaoLida("text"), null, "texto não é mídia");
+ok(ehEventoSemConteudo("reaction") && !ehEventoSemConteudo("text"), "reação não pede resposta");
+ok(pareceDuvida("Quero informações sobre as técnicas") && pareceDuvida("e aí?") && !pareceDuvida("ok") && !pareceDuvida("Ipatinga"), "dúvida x resposta curta");
+const todos = comparativoPorAula((f) => precos[f], [1, 2, 3, 4]);
+const txtValores = textoValores({ valorAvulsa: 40, duracaoMin: 120, planos: todos, taxa: 20, moeda });
+ok(/R\$ 40,00/.test(txtValores) && /R\$ 26,67 por aula/.test(txtValores) && /taxa de matrícula de R\$ 20,00/.test(txtValores), "texto de valores: avulsa, 3x a R$ 26,67/aula e taxa");
+const txtAluna = textoAluna({ nome: "Juany Macedo", portalUrl: "https://x/portal", midia: "o seu áudio" });
+ok(/Oi, Juany/.test(txtAluna) && /não consigo abrir o seu áudio/.test(txtAluna) && /https:\/\/x\/portal/.test(txtAluna), "texto para aluna: nome, áudio e portal");
 
 console.log(falhas ? `\n${falhas} caso(s) falharam.` : "\nTodos os casos passaram.");
 process.exit(falhas ? 1 : 0);

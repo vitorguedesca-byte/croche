@@ -295,7 +295,7 @@ model Testimonial {
 
 model WaConversation {
   phone     String   @id @db.VarChar(20) // wa_id normalizado
-  // start|unit|slot|confirm|cpf|name|nameok|wpp|email|nasc|plano|slot2|cupom|cupomcod|cobranca|done
+  // start|unit|slot|confirm|cpf|name|nameok|wpp|email|nasc|plano|avulsaok|slot2|cupom|cupomcod|cobranca|done|aluna
   step      String   @default("start") @db.VarChar(20)
   unit      String?  @db.VarChar(60)
   slotId    Int? // horário escolhido (aguardando confirmação/nome)
@@ -542,6 +542,34 @@ model WaMessage {
   @@index([phone])
   @@index([invoiceId])
   @@index([status])
+}
+
+/* Mensagem que CHEGOU no número do robô e precisa de gente para ler
+   (Vitor, 08/10/2026). Antes, tudo o que o robô não sabia tratar só existia no
+   log do servidor — que se apaga a cada deploy. Em 07/10 quinze alunas
+   responderam a um aviso da escola e foram jogadas no menu de aluna nova;
+   "não vou mais fazer o curso" e "a mãe fará só 1x por semana" se perderam.
+
+   Entra aqui: mensagem de aluna (ficha que não é lead), áudio/foto/figurinha,
+   pergunta que o robô não entendeu e pedido de atendente. NÃO entra o que é
+   dado de cadastro (CPF, nome, nascimento). Aparece nas notificações do painel
+   com botão para responder pelo WhatsApp da escola. */
+model WaRecebida {
+  id         Int      @id @default(autoincrement())
+  phone      String   @db.VarChar(20) // wa_id normalizado (com o 9)
+  perfil     String?  @db.VarChar(80) // nome do perfil do WhatsApp
+  clientId   Int? // ficha encontrada pelo telefone (aluna)
+  clientName String?  @db.VarChar(200)
+  // texto | audio | image | video | sticker | document | location | contacts
+  tipo       String   @db.VarChar(20)
+  texto      String?  @db.Text
+  // aluna | midia | duvida | atendente — por que ela ficou registrada
+  motivo     String   @db.VarChar(20)
+  passo      String?  @db.VarChar(20) // passo da conversa naquela hora
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([phone])
 }
 
 /* Um disparo em massa (a Inêz escolhe as alunas e manda de uma vez).

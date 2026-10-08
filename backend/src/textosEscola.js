@@ -148,6 +148,71 @@ Copie o código Pix abaixo e pague pelo app do seu banco. Assim que o pagamento 
 ⏳ Consigo segurar essa vaga por ${minutos} minutos.`;
 };
 
+/* "Só a avulsa mesmo?" — texto da Inêz (08/10/2026). Sai quando a aluna
+   escolhe a aula avulsa, antes do Pix. `planos` vem de comparativoPorAula
+   (waFluxo.js); `moeda` formata em reais. */
+export const textoConfirmarAvulsa = ({ nome, valorAvulsa, duracaoMin = 120, planos = [], moeda }) => {
+  const primeiro = String(nome || "").split(" ")[0];
+  const h = Number(duracaoMin) / 60;
+  const duracao = Number.isInteger(h) ? `${h} hora${h === 1 ? "" : "s"}` : `${duracaoMin} minutos`;
+  const linhas = planos
+    .map((p) => `• *${p.freq}x por semana* — ${moeda(p.valor)}/mês ÷ ${p.aulas} aulas = *${moeda(p.porAula)} por aula*`)
+    .join("\n");
+  return `Só confirmando${primeiro ? ", " + primeiro : ""}: você quer pagar *somente a aula avulsa* (${moeda(valorAvulsa)} por uma aula de ${duracao})? 🧺
+${linhas ? `
+Temos também a opção de *mensalista na escala*: toda semana você agenda a sua próxima aula, nos dias e horários disponíveis — e cada aula fica mais em conta:
+
+${linhas}
+` : ""}
+Se quiser continuar como aluna depois da avulsa, é só pagar a matrícula e a mensalidade normalmente. 💚`;
+};
+
+/* Resposta a "qual o valor?" em qualquer passo da conversa (08/10/2026).
+   Antes, fora da tela de planos, a pergunta recebia "toque em Ver horários".
+   `planos` vem de comparativoPorAula com os quatro planos; a escala só existe
+   em 1x e 2x, e o texto diz isso. */
+export const textoValores = ({ valorAvulsa, duracaoMin = 120, planos = [], taxa = 0, moeda }) => {
+  const h = Number(duracaoMin) / 60;
+  const duracao = Number.isInteger(h) ? `${h} hora${h === 1 ? "" : "s"}` : `${duracaoMin} minutos`;
+  return `💰 *Nossos valores*
+
+🧺 *Aula avulsa* — ${moeda(valorAvulsa)} (uma aula de ${duracao})
+
+📅 *Mensalista* — a 1ª aula já está inclusa:
+${planos.map((p) => `• *${p.freq}x por semana* — ${moeda(p.valor)}/mês (${p.aulas} aulas · ${moeda(p.porAula)} por aula)`).join("\n")}
+
+1x e 2x podem ser na *escala* (você agenda a próxima aula toda semana) ou em horário *fixo*; 3x e 4x são só em horário fixo.${taxa ? `
+No primeiro pagamento do plano entra a taxa de matrícula de ${moeda(taxa)}, cobrada uma vez só.` : ""}`;
+};
+
+/* Quem JÁ É aluna e escreve no número do robô (08/10/2026). Quase sempre é
+   resposta a um aviso da escola ("vou faltar", "minha tia vai pagar") — antes
+   ela caía no menu de aluna nova e a mensagem se perdia. Agora a mensagem fica
+   registrada no painel e ela é mandada ao portal para o que dá para resolver
+   sozinha. `midia`: "o seu áudio" etc., quando ela mandou algo que o robô não
+   consegue abrir. */
+export const textoAluna = ({ nome, portalUrl, midia }) => {
+  const primeiro = String(nome || "").split(" ")[0];
+  return `Oi${primeiro ? ", " + primeiro : ""}! 💚 Recebi sua mensagem.
+${midia ? `\nPor aqui eu só consigo ler texto — não consigo abrir ${midia}. Se puder, escreva em uma mensagem.\n` : ""}
+Ela ficou registrada para a Inêz e a equipe, que te respondem pelo WhatsApp da escola (📞 ${WA_ATENDENTE}) em horário comercial.
+
+📱 No *Portal da Aluna* você resolve na hora: marcar e remarcar aulas, avisar falta, ver a mensalidade e pegar o Pix:
+${portalUrl || WA_PORTAL_URL}`;
+};
+
+/* Lead mandou áudio/foto/figurinha. */
+export const textoMidiaNaoLida = ({ midia }) =>
+`Por aqui eu só consigo ler texto — não consigo abrir ${midia}. 😅
+
+Se for uma dúvida, escreva em uma mensagem que eu te ajudo. Também deixei registrado para a equipe dar uma olhada. 💚`;
+
+/* Texto livre que o robô não soube responder (no menu de unidade/horário). */
+export const textoDuvidaRegistrada = () =>
+`Essa eu não consegui responder por aqui 🤔. Deixei a sua mensagem registrada para a equipe, que responde pelo WhatsApp da escola em horário comercial.
+
+Enquanto isso, posso te ajudar com 👇`;
+
 /* Último toque, a poucos minutos do fim do prazo. É a única mensagem entre o
    Pix e a vaga sair, então ela é curta: no prazo de 10 minutos não há espaço
    para conversa, só para destravar o que travou. */
@@ -211,6 +276,7 @@ export const PENDENCIA_POR_PASSO = {
   email: "no seu e-mail",
   nasc: "na sua data de nascimento",
   plano: "na escolha do plano",
+  avulsaok: "na confirmação da aula avulsa",
   cupom: "na pergunta sobre o código de promoção",
   cupomcod: "no código de promoção",
 };

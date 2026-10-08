@@ -93,7 +93,21 @@ function EscolhaDePlano({
   valorAvulsa,
   valorDoPlano,
   taxa = 0,
+  duracaoMin = 120,
 }) {
+  /* "Só a avulsa mesmo?" (Inêz, 08/10/2026): tocar em AVULSO abre a conta do
+     preço por aula na escala (1x e 2x) antes de trocar. Mesma mensagem do
+     robô do WhatsApp (textoConfirmarAvulsa no backend). */
+  const [perguntaAvulsa, setPerguntaAvulsa] = useState(false);
+  const comparativo = PLANOS_MENSALISTA
+    .filter((p) => p.freq <= FREQ_MAX_ESCALA)
+    .map((p) => ({ ...p, valor: Number(valorDoPlano(p.freq)) || 0 }))
+    .filter((p) => p.valor > 0)
+    .map((p) => ({ ...p, porAula: Math.round((p.valor / p.aulasMes) * 100) / 100 }));
+  const horas = Number(duracaoMin) / 60;
+  const duracao = Number.isInteger(horas) ? `${horas} hora${horas === 1 ? "" : "s"}` : `${duracaoMin} minutos`;
+  const escolherAvulsa = () => { setPerguntaAvulsa(false); setModalidade("avulso"); onModalidadeChange?.("avulso"); };
+
   const Opcao = ({ on, onClick, titulo, linhas, preco, alerta }) => (
     <button
       type="button"
@@ -126,7 +140,7 @@ function EscolhaDePlano({
       {/* 1. AVULSO */}
       <Opcao
         on={modalidade === "avulso"}
-        onClick={() => { setModalidade("avulso"); onModalidadeChange?.("avulso"); }}
+        onClick={() => { if (modalidade !== "avulso") setPerguntaAvulsa(true); }}
         titulo="🧺 AVULSO"
         linhas="Aula avulsa única, sem mensalidade nem taxa de matrícula."
         preco={money(valorAvulsa)}
@@ -178,6 +192,28 @@ function EscolhaDePlano({
             {taxa > 0
               ? <>Você paga a <b>primeira mensalidade agora</b>, junto da <b>taxa de matrícula de {money(taxa)}</b> (uma vez só). A próxima mensalidade vence <b>no mês que vem</b>, no mesmo dia — e daí em diante é só a mensalidade.</>
               : <>Você paga a <b>primeira mensalidade agora</b> e a próxima só vence <b>no mês que vem</b>, no mesmo dia — e todo mês nesse dia.</>}
+          </div>
+        </div>
+      )}
+
+      {perguntaAvulsa && (
+        <div className="overlay" onClick={() => setPerguntaAvulsa(false)}>
+          <div className="pt-card" role="dialog" aria-modal="true" style={{ maxWidth: 460, width: "100%", maxHeight: "92vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0 }}>🧺 Só a aula avulsa mesmo?</h3>
+            <p>Você quer pagar <b>somente a aula avulsa</b> ({money(valorAvulsa)} por uma aula de {duracao})?</p>
+            {comparativo.length > 0 && (<>
+              <p>Temos também a opção de <b>mensalista na escala</b>: toda semana você agenda a sua próxima aula, nos dias e horários disponíveis — e cada aula fica mais em conta:</p>
+              <ul style={{ margin: ".3rem 0 0 1.1rem", padding: 0 }}>
+                {comparativo.map((p) => (
+                  <li key={p.freq} style={{ marginBottom: ".3rem" }}>
+                    <b>{p.freq}x por semana</b> — {money(p.valor)}/mês ÷ {p.aulasMes} aulas = <b style={{ color: "var(--green-deep)" }}>{money(p.porAula)} por aula</b>
+                  </li>
+                ))}
+              </ul>
+            </>)}
+            <p className="pt-hint" style={{ marginTop: ".8rem" }}>Se quiser continuar como aluna depois da avulsa, é só pagar a matrícula e a mensalidade normalmente. 💚</p>
+            <button type="button" className="pt-btn" style={{ marginTop: "1rem" }} onClick={() => setPerguntaAvulsa(false)}>💚 Ver os planos</button>
+            <button type="button" className="pt-btn pt-btn-out" style={{ width: "100%", marginTop: ".6rem" }} onClick={escolherAvulsa}>🧺 Quero só a avulsa</button>
           </div>
         </div>
       )}
@@ -600,6 +636,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 valorDoPlano={valorPlano}
                 // com código que isenta a matrícula, os textos do plano já saem sem a taxa
                 taxa={taxaHoje}
+                duracaoMin={meta.duracaoAulaMin}
               />
 
               {!isAvulso && freq > 1 && (

@@ -77,6 +77,11 @@ import {
   textoAtendenteHumano,
   textoBoasVindas,
   textoCobrancaReserva,
+  textoConfirmarAvulsa,
+  textoValores,
+  textoAluna,
+  textoMidiaNaoLida,
+  textoDuvidaRegistrada,
   textoHoldExpirado,
   textoLembreteHold,
   textoMatriculaConfirmada,
@@ -111,6 +116,13 @@ import {
   horariosExtrasPossiveis,
   listaComE,
   respostaCupom,
+  respostaAvulsaOk,
+  comparativoPorAula,
+  chaveTelefone,
+  ehPerguntaDeValor,
+  midiaNaoLida,
+  ehEventoSemConteudo,
+  pareceDuvida,
 } from "./waFluxo.js";
 
 // pasta de fotos de depoimentos (servida estaticamente pelo Vite via frontend/public)
@@ -1222,7 +1234,7 @@ app.get(
   "/api/state",
   wrap(async (req, res) => {
     await sincronizarLeadsPagos().catch((e) => console.warn("[api/state] sincronizarLeadsPagos:", e.message));
-    const [clients, slots, bookings, invoices, makeups, precos, presentes] = await Promise.all([
+    const [clients, slots, bookings, invoices, makeups, precos, presentes, waRecebidas] = await Promise.all([
       prisma.client.findMany({ orderBy: { name: "asc" } }),
       prisma.slot.findMany({ include: { waitlist: true }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
       prisma.booking.findMany({ orderBy: [{ date: "asc" }, { time: "asc" }] }),
@@ -1232,6 +1244,11 @@ app.get(
       // para mostrar o valor certo de meses que ainda não têm boleto gerado
       prisma.monthlyPrice.findMany({ orderBy: { competencia: "asc" } }),
       prisma.aulaPresente.findMany({ orderBy: { createdAt: "desc" } }),
+      // mensagens do WhatsApp que pedem gente (aparecem nas notificações)
+      prisma.waRecebida.findMany({
+        where: { createdAt: { gt: new Date(Date.now() - 14 * 86400_000) } },
+        orderBy: { createdAt: "desc" }, take: 300,
+      }),
     ]);
     const hoje = todayISO();
     res.json({
@@ -1255,6 +1272,7 @@ app.get(
       precos,
       // aulas de presente, com a situação do dia (vencido não é gravado)
       presentes: presentes.map((p) => resumoPresente(p, hoje)),
+      waRecebidas,
     });
   })
 );
@@ -4517,12 +4535,8 @@ const podeMandarAgora = () => { const h = horaBR(); return h >= SILENCIO_DE && h
    O telefone da ficha e o wa_id quase nunca são iguais: a ficha guarda o que a
    Inêz digitou ("(31) 99966-2684") e a Meta entrega "5531999662684", às vezes
    sem o 9. A comparação é pela CHAVE — DDD + os 8 últimos dígitos, que é o que
-   os dois formatos sempre têm em comum. */
-const chaveTelefone = (t) => {
-  let d = String(t || "").replace(/\D/g, "");
-  if (d.startsWith("55") && d.length >= 12) d = d.slice(2);
-  return d.length >= 10 ? d.slice(0, 2) + d.slice(-8) : "";
-};
+   os dois formatos sempre têm em comum. (`chaveTelefone` mora em waFluxo.js,
+   com teste.) */
 async function janelaAbertaPara(phone) {
   const chave = chaveTelefone(phone);
   if (!chave) return false;
@@ -6815,6 +6829,9 @@ async function rodadaConversasParadas() {
     where: {
       step: { in: PASSOS_RETOMAVEIS },
       retomadaAt: null,
+      /* Quem pediu atendente quer gente, não lembrete do robô: em 08/10 uma
+         lead pediu atendente e recebeu "você ainda está por aí?" 3 vezes. */
+      humanoPedidos: 0,
       updatedAt: {
         lt: new Date(agora - INATIVIDADE_MIN * 60_000),
         gt: new Date(agora - 24 * 60 * 60_000),
@@ -6871,7 +6888,25 @@ const NUM_EMOJI = { 1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣" };
 /* parseNascimento, emailValido e telefoneBR vêm de waFluxo.js — são regras de
    leitura do que a aluna digita, e estão lá com teste. */
 
+/* Fichas de ALUNA (tudo que não é lead) com este telefone. O mesmo número pode
+   ser de mãe e filha, por isso volta lista. A comparação é pela chave
+   DDD + 8 dígitos: o WhatsApp manda sem o 9 e a ficha pode ter máscara. */
+async function alunasPeloTelefone(phone) {
+  const chave = chaveTelefone(phone);
+  if (!chave) return [];
+  const fichas = await prisma.client.findMany({
+    where: { status: { not: "lead" }, phone: { not: null } },
+    select: { id: true, name: true, phone: true, status: true },
+  });
+  return fichas
+    .filter((c) => chaveTelefone(c.phone) === chave)
+    .sort((a, b) => (a.status === "ativo" ? 0 : 1) - (b.status === "ativo" ? 0 : 1));
+}
+
 async function handleWaMessage(msg) {
+  /* Reação (emoji em cima de uma mensagem) e avisos do sistema não são
+     assunto: sem resposta, sem carimbar a conversa. */
+  if (ehEventoSemConteudo(msg.type)) return;
   const phone = normalizePhone(msg.from);
   const body = (msg.text || "").trim();
   const low = body.toLowerCase();
@@ -6897,6 +6932,19 @@ async function handleWaMessage(msg) {
   });
 
   const setConv = (data) => prisma.waConversation.update({ where: { phone }, data });
+  // áudio, foto, figurinha…: o que o robô não consegue abrir ("o seu áudio")
+  const midia = body ? null : midiaNaoLida(msg.type);
+  /* Guarda a mensagem para a equipe ler no painel (ver model WaRecebida).
+     Falhar aqui não pode derrubar a conversa. */
+  const registrarRecebida = (motivo, extra = {}) =>
+    prisma.waRecebida.create({
+      data: {
+        phone, motivo, perfil: (msg.name || "").slice(0, 80) || null,
+        tipo: midia ? String(msg.type).slice(0, 20) : "texto",
+        texto: body ? body.slice(0, 4000) : null,
+        passo: conv.step, ...extra,
+      },
+    }).catch((e) => console.warn("[wa recebida]", e.message));
   // quem já é aluna daqui, quando a conversa já sabe o CPF
   const fichaDaConversa = () => (conv.clientId ? prisma.client.findUnique({ where: { id: conv.clientId } }) : null);
 
@@ -6904,10 +6952,33 @@ async function handleWaMessage(msg) {
 
   /* Boas-vindas + menu de unidades. Sai no primeiro contato e depois que a
      conversa expira; nas voltas ao menu durante o papo, só o menu. */
-  const telaBoasVindas = async () => {
+  const telaBoasVindas = async ({ comValores = false } = {}) => {
     await setConv({ ...CONVERSA_ZERADA, step: "unit" });
     await waSend(msg.from, textoBoasVindas({ nome: msg.name || "" }));
+    // chegou perguntando o preço: responde antes do menu
+    if (comValores) await enviarValores();
     return sendUnitMenu(msg.from, "Vamos começar? Escolha a unidade mais perto de você 👇");
+  };
+
+  /* "Qual o valor?" — os preços das Configurações, em qualquer passo. */
+  const enviarValores = () => waSend(msg.from, textoValores({
+    valorAvulsa: Number(SETTINGS.valorAvulsa) || 40,
+    duracaoMin: SETTINGS.duracaoAulaMin,
+    planos: comparativoPorAula(valorDoPlano, FREQS_WA),
+    taxa: taxaMatriculaAtual(),
+    moeda: moedaBR,
+  }));
+
+  /* Quem já é aluna: não entra no menu de aluna nova. A mensagem fica
+     registrada para a equipe e ela recebe o caminho do portal. */
+  const telaAluna = async (alunas) => {
+    const nomes = alunas.map((c) => c.name).join(" / ").slice(0, 200);
+    await setConv({ ...CONVERSA_ZERADA, step: "aluna", clientId: alunas[0].id });
+    await registrarRecebida("aluna", { clientId: alunas[0].id, clientName: nomes });
+    await waSend(msg.from, textoAluna({ nome: alunas[0].name, portalUrl: WA_PORTAL_URL, midia }));
+    return waButtons(msg.from, "Se for para fazer uma *matrícula nova* (para você ou outra pessoa), toque abaixo 👇", [
+      { id: "new", title: "📅 Matrícula nova" },
+    ]);
   };
 
   const telaUnidade = async (prefix = "") => {
@@ -7078,6 +7149,25 @@ async function handleWaMessage(msg) {
         title: `${f}x por semana`,
         description: `${moedaBR(valorDoPlano(f))}/mês · ${f * 4} aulas no mês`,
       })),
+    ]);
+  };
+
+  /* "Só a avulsa mesmo?" (Inêz, 08/10/2026): antes do Pix da avulsa, mostra
+     quanto sai cada aula no plano de escala e pede confirmação. "Ver os
+     planos" volta para a lista de planos. */
+  const telaConfirmarAvulsa = async (prefix = "") => {
+    await setConv({ step: "avulsaok", weeklyFreq: null, extraSlots: "[]" });
+    conv = { ...conv, step: "avulsaok", weeklyFreq: null, extraSlots: "[]" };
+    const texto = textoConfirmarAvulsa({
+      nome: conv.pendingName || "",
+      valorAvulsa: Number(SETTINGS.valorAvulsa) || 40,
+      duracaoMin: SETTINGS.duracaoAulaMin,
+      planos: comparativoPorAula(valorDoPlano),
+      moeda: moedaBR,
+    });
+    return waButtons(msg.from, prefix + texto, [
+      { id: "avulsaok:sim", title: "🧺 Só a avulsa" },
+      { id: "avulsaok:planos", title: "💚 Ver os planos" },
     ]);
   };
 
@@ -7283,6 +7373,29 @@ Toque abaixo para escolher 👇`,
     return cadastrarECobrar(freqDaConversa(), extrasDaConversa());
   };
 
+  /* ----- quem já é aluna (Vitor, 08/10/2026) -----
+     Em 07/10 quinze alunas responderam a um aviso da escola e receberam
+     "escolha a unidade". Agora, no começo da conversa (ou depois de ela ter
+     terminado), o telefone é procurado nas fichas. Os botões do lembrete
+     (faltarei/presença), o Pix e "Matrícula nova" seguem o caminho de sempre. */
+  const ridDoFluxo = rid === "new" || rid === "duvida:pix" || rid === "retomar" ||
+    rid.startsWith("faltarei:") || rid.startsWith("presenca:");
+  if (!ridDoFluxo && (primeiroContato || expirou || ["start", "done", "aluna"].includes(conv.step))) {
+    const alunas = await alunasPeloTelefone(phone);
+    if (alunas.length) {
+      if (conv.step !== "aluna" || expirou) return telaAluna(alunas);
+      /* Continua escrevendo: registra tudo, mas não repete o texto a cada
+         mensagem — só confirma de novo depois de 2h de silêncio, ou quando ela
+         pede gente ou manda o que o robô não abre. */
+      await registrarRecebida("aluna", { clientId: alunas[0].id, clientName: alunas.map((c) => c.name).join(" / ").slice(0, 200) });
+      const pediuGente = /\b(atendente|humano|pessoa|alguem|alguém)\b/.test(low);
+      if (midia) return waSend(msg.from, `Por aqui eu só consigo ler texto — não consigo abrir ${midia}. Se puder, escreva em uma mensagem. 💚`);
+      if (pediuGente || silenciosaDesde > 2 * 3600_000)
+        return waSend(msg.from, `Recebido ✅ Passei para a equipe, que te responde pelo WhatsApp da escola (📞 ${WA_ATENDENTE}) em horário comercial. 💚`);
+      return;
+    }
+  }
+
   /* ----- atendimento humano: vale em QUALQUER passo, e vem antes de tudo -----
      O contador sobe a cada pedido e o número só sai na 3ª vez (ver
      textoAtendenteHumano). Não trava a conversa: o bot segue respondendo se ela
@@ -7290,6 +7403,8 @@ Toque abaixo para escolher 👇`,
   if (rid === "humano" || /\b(atendente|humano|pessoa real|falar com alguém|falar com alguem|falar com uma pessoa)\b/.test(low)) {
     const vez = (conv.humanoPedidos || 0) + 1;
     await setConv({ humanoPedidos: vez });
+    // a equipe vê no painel quem pediu gente (antes ficava só no log)
+    await registrarRecebida("atendente");
     return waSend(msg.from, textoAtendenteHumano(vez));
   }
 
@@ -7320,28 +7435,33 @@ Toque abaixo para escolher 👇`,
 
   /* "Continuar de onde parei": repete a tela do passo em que ela estava. Não
      avança nada — só mostra de novo a pergunta que ficou sem resposta. */
-  if (rid === "retomar") {
-    if (conv.step === "unit") return sendUnitMenu(msg.from, "Vamos lá! Escolha a unidade 👇");
-    if (conv.step === "slot") return telaHorarios(conv.unit || SETTINGS.units[0], "Retomando! ");
+  const repetirPasso = async (prefix = "Retomando! ") => {
+    if (conv.step === "unit") return sendUnitMenu(msg.from, prefix ? "Vamos lá! Escolha a unidade 👇" : "Quer agendar? Escolha a unidade 👇");
+    if (conv.step === "slot") return telaHorarios(conv.unit || SETTINGS.units[0], prefix);
+    // aguardando o Pix: não recomeça nada, só oferece o Pix de novo
+    if (conv.step === "cobranca")
+      return waButtons(msg.from, "A sua reserva está aguardando o Pix. 💚", [{ id: "duvida:pix", title: "💠 Reenviar o Pix" }]);
     if (conv.step === "confirm" && conv.slotId) {
       const s = await prisma.slot.findUnique({ where: { id: conv.slotId } });
       if (s) return telaConfirmarHorario(s);
     }
-    if (conv.step === "cpf") return telaCpf("Retomando! ");
-    if (conv.step === "name") return telaNome("Retomando! ");
+    if (conv.step === "cpf") return telaCpf(prefix);
+    if (conv.step === "name") return telaNome(prefix);
     if (conv.step === "nameok" && conv.pendingName) return telaConfirmarNome(conv.pendingName);
-    if (conv.step === "wpp") return telaWpp("Retomando! ");
-    if (conv.step === "email") return telaEmail("Retomando! ");
-    if (conv.step === "nasc") return telaNasc("Retomando! ");
-    if (conv.step === "plano") return telaPlano(conv.pendingName || "", "Retomando! ");
-    if (conv.step === "cupom") return telaCupom("Retomando! ");
-    if (conv.step === "cupomcod") return telaDigitarCodigo("Retomando! ");
+    if (conv.step === "wpp") return telaWpp(prefix);
+    if (conv.step === "email") return telaEmail(prefix);
+    if (conv.step === "nasc") return telaNasc(prefix);
+    if (conv.step === "plano") return telaPlano(conv.pendingName || "", prefix);
+    if (conv.step === "avulsaok") return telaConfirmarAvulsa(prefix);
+    if (conv.step === "cupom") return telaCupom(prefix);
+    if (conv.step === "cupomcod") return telaDigitarCodigo(prefix);
     if (conv.step === "slot2" && conv.slotId) {
       const s = await prisma.slot.findUnique({ where: { id: conv.slotId } });
-      if (s) return telaHorarioExtra(s, "Retomando! ");
+      if (s) return telaHorarioExtra(s, prefix);
     }
     return telaUnidade();
-  }
+  };
+  if (rid === "retomar") return repetirPasso();
 
   // Reenviar o Pix da reserva que está segurada agora.
   if (rid === "duvida:pix") {
@@ -7357,7 +7477,25 @@ Toque abaixo para escolher 👇`,
      ANTES da navegação por botão de propósito: quem chega do zero ouve quem
      está falando com ela antes de ver um menu, e quem some por 12h não é jogada
      de volta num horário de ontem por ter tocado num botão antigo. */
-  if (primeiroContato || expirou || conv.step === "start") return telaBoasVindas();
+  const comecoDeConversa = primeiroContato || expirou || conv.step === "start";
+
+  /* Áudio, foto, figurinha: o robô não abre. Diz isso, registra para a equipe
+     e segue de onde ela estava (antes ela recebia o menu, sem explicação). */
+  if (midia) {
+    await registrarRecebida("midia");
+    await waSend(msg.from, textoMidiaNaoLida({ midia }));
+    return comecoDeConversa ? telaBoasVindas() : repetirPasso("");
+  }
+
+  /* "Qual o valor?" em qualquer passo (menos no código de promoção, que é
+     digitado livre). Responde e volta para a pergunta em que ela estava. */
+  if (rid === "faq:valores" || (!rid && conv.step !== "cupomcod" && ehPerguntaDeValor(body))) {
+    if (comecoDeConversa) return telaBoasVindas({ comValores: true });
+    await enviarValores();
+    return repetirPasso("");
+  }
+
+  if (comecoDeConversa) return telaBoasVindas();
   // Terminou uma conversa e voltou depois: cumprimenta de novo, sem repetir tudo.
   if (conv.step === "done" && ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite"].includes(low))
     return telaBoasVindas();
@@ -7380,9 +7518,26 @@ Toque abaixo para escolher 👇`,
 
   if (conv.step === "done") return telaUnidade();
 
+  /* Texto livre no menu de unidade/horário que parece pergunta: o robô não
+     sabe responder, então registra para a equipe e oferece o que ele sabe. */
+  const duvidaNaoRespondida = async () => {
+    await registrarRecebida("duvida");
+    const voltar = conv.step === "unit"
+      ? { id: "back:unit", title: "📍 Escolher unidade" }
+      : { id: "back:slot", title: "📅 Ver horários" };
+    return waButtons(msg.from, textoDuvidaRegistrada(), [
+      { id: "faq:valores", title: "💰 Ver valores" },
+      voltar,
+      { id: "humano", title: "Falar com atendente" },
+    ]);
+  };
+
   if (conv.step === "unit") {
     const unit = parseUnitChoice(body);
-    if (!unit || !SETTINGS.units.includes(unit)) return sendUnitMenu(msg.from, `Não entendi 🤔. Toque em uma das unidades:`);
+    if (!unit || !SETTINGS.units.includes(unit)) {
+      if (!rid && pareceDuvida(body)) return duvidaNaoRespondida();
+      return sendUnitMenu(msg.from, `Não entendi 🤔. Toque em uma das unidades:`);
+    }
     return telaHorarios(unit);
   }
 
@@ -7393,6 +7548,7 @@ Toque abaixo para escolher 👇`,
       const s = await prisma.slot.findUnique({ where: { id: offered[n - 1] } });
       if (s) return telaConfirmarHorario(s);
     }
+    if (!rid && pareceDuvida(body)) return duvidaNaoRespondida();
     return waSend(msg.from, `Toque em *Ver horários* e escolha um da lista. 💚`);
   }
 
@@ -7402,6 +7558,7 @@ Toque abaixo para escolher 👇`,
       if (!slot) return telaUnidade("Esse horário expirou. ");
       return telaCpf();
     }
+    if (!rid && pareceDuvida(body)) return duvidaNaoRespondida();
     return waButtons(msg.from, `Toque em *Confirmar* para reservar, ou escolha outro horário 👇`, [
       { id: "ok:slot", title: "✅ Confirmar" },
       { id: "back:slot", title: "🔄 Outro horário" },
@@ -7509,16 +7666,8 @@ Toque abaixo para escolher 👇`,
     return telaPlano(conv.pendingName || "");
   }
 
-  if (conv.step === "plano") {
-    // aceita a linha da lista ("plano:3") ou o número digitado — ver waFluxo.js
-    const escolha = planoEscolhido(rid, body);
-    if (escolha === "avulso") {
-      await setConv({ weeklyFreq: null, extraSlots: "[]" });
-      conv = { ...conv, weeklyFreq: null, extraSlots: "[]" };
-      return cadastrarECobrar("avulso");
-    }
-    if (!escolha) return telaPlano(conv.pendingName || "", "Não entendi 🤔. ");
-    const freq = escolha;
+  // Plano de mensalista escolhido (1x a 4x): pede os outros horários da semana, ou cobra
+  const seguirComPlano = async (freq) => {
     await setConv({ weeklyFreq: freq, extraSlots: "[]" });
     conv = { ...conv, weeklyFreq: freq, extraSlots: "[]" };
     if (freq >= 2) {
@@ -7526,6 +7675,24 @@ Toque abaixo para escolher 👇`,
       if (slot1) return telaHorarioExtra(slot1);
     }
     return cadastrarECobrar(freq);
+  };
+
+  if (conv.step === "plano") {
+    // aceita a linha da lista ("plano:3") ou o número digitado — ver waFluxo.js
+    const escolha = planoEscolhido(rid, body);
+    if (escolha === "avulso") return telaConfirmarAvulsa();
+    if (!escolha) return telaPlano(conv.pendingName || "", "Não entendi 🤔. ");
+    return seguirComPlano(escolha);
+  }
+
+  if (conv.step === "avulsaok") {
+    const r = respostaAvulsaOk(rid, body);
+    if (r === "avulsa") return cadastrarECobrar("avulso");
+    if (r === "planos") return telaPlano(conv.pendingName || "");
+    // tocou num plano da lista anterior ou digitou o número ("1", "2x"): segue com ele
+    const escolha = planoEscolhido(rid, body);
+    if (escolha && escolha !== "avulso") return seguirComPlano(escolha);
+    return telaConfirmarAvulsa("Não entendi 🤔. Toque em uma das opções abaixo.\n\n");
   }
 
   /* Escolhendo os horários da semana além do 1º (o nome do passo ficou "slot2"
