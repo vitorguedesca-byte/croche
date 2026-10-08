@@ -14,7 +14,7 @@ import {
   bookingsActive, slotBookings, slotBookingsAll, slotCapacity, slotOccupancy, slotWaitlist, clientAttendance,
   bookingKindDe, BOOKING_KINDS, feriadoDe, feriadoBaseDe, compAtual, addComp, compLabel, competenciasDoAluno, mensalidadeDe, matriculaISO,
   mensalidadeDaComp, precoDaComp, situacaoMensalidade, clientOfBooking, ehPagamentoDeMatricula,
-  clientMonthClasses, classifyClient, isNewLead,
+  clientMonthClasses, classifyClient, isNewLead, aulaAvulsaDe,
   aniversariantes, diaMesNasc, diaMesLabel, faltamLabel,
   proximaCobranca, fraseProximaCobranca, contemBusca, faturaDaComp,
 } from "./helpers.js";
@@ -151,7 +151,7 @@ export function Dashboard({ go }) {
 
     <div className="people-strip">
       <button className="people-card" onClick={() => go("clientes", { tab: "cliente" })}><span className="pc-ic">👩</span><span className="pc-n">{groups.cliente}</span><span className="pc-l">Alunos</span></button>
-      <button className="people-card" onClick={() => go("clientes", { tab: "novato" })}><span className="pc-ic">✨</span><span className="pc-n">{groups.novato}</span><span className="pc-l">Novatos(as)</span></button>
+      <button className="people-card" onClick={() => go("clientes", { tab: "novato" })}><span className="pc-ic">🧺</span><span className="pc-n">{groups.novato}</span><span className="pc-l">Leads 1ª aula</span></button>
     </div>
 
     <Alerts open={open} />
@@ -653,9 +653,9 @@ export function Clientes({ params }) {
   });
 
   const TABS = [
-    ["cliente", "👩 Alunos", groups.cliente.length, "Alunos com cadastro e aulas ativas."],
-    ["novato", "✨ 1ª Aula (Pagas)", groups.novato.length, "Alunos com primeira aula/matrícula confirmada e paga."],
-    ["lead", "🎯 Leads (Remarketing)", groups.lead.length, "Contatos que iniciaram cadastro mas não concluíram o pagamento — ideal para remarketing."],
+    ["cliente", "👩 Alunos", groups.cliente.length, "Alunas matriculadas no plano (mensalistas)."],
+    ["novato", "🧺 Leads 1ª aula", groups.novato.length, "Quem fez ou reservou a aula avulsa (1ª aula) e ainda não fechou o plano — paga ou não. Ainda não é aluna: vira aluna quando a matrícula (taxa + 1ª mensalidade) é paga."],
+    ["lead", "🎯 Leads (Remarketing)", groups.lead.length, "Contatos que iniciaram cadastro ou matrícula, sem aula avulsa, e não concluíram o pagamento — ideal para remarketing."],
     ["ex-aluno", "👋 Ex-Alunos", groups["ex-aluno"].length, "Alunas inativadas ou com inscrições encerradas. As aulas foram removidas da grade e você pode restaurar tudo a qualquer momento."],
   ];
   const hint = (TABS.find((t) => t[0] === tab) || [])[3];
@@ -740,7 +740,7 @@ export function Clientes({ params }) {
 
   const emptyLabel = {
     cliente: "Nenhum aluno encontrado.",
-    novato: "Nenhum aluno na primeira aula.",
+    novato: "Nenhuma lead de 1ª aula (aula avulsa).",
     lead: "Nenhum lead pendente de remarketing.",
     "ex-aluno": "Nenhuma ex-aluna registrada.",
   }[tab];
@@ -809,10 +809,16 @@ export function Clientes({ params }) {
                         <span className="cli-name">{c.name}</span>
                         {tab === "ex-aluno" || c.status === "cancelado" ? <span className="badge b-danger ml">Inativa</span> : null}
                         {c.plan === "mensalista" && c.status !== "cancelado" ? <span className="badge b-ok ml">📅 {c.weeklyFreq ? `${c.weeklyFreq}x/semana` : "mensalista"}</span> : null}
-                        {c.plan === "avulso" && c.status !== "cancelado" ? <span className="badge ml" style={{ background: "rgba(180, 83, 9, 0.12)", color: "#b45309", border: "1px solid rgba(180, 83, 9, 0.3)" }}>🧺 AULA AVULSA</span> : null}
+                        {c.plan === "avulso" && c.status !== "cancelado" && tab !== "novato" ? <span className="badge ml" style={{ background: "rgba(180, 83, 9, 0.12)", color: "#b45309", border: "1px solid rgba(180, 83, 9, 0.3)" }}>🧺 AULA AVULSA</span> : null}
                         {c.matriculaStatus === "paga" && c.plan !== "mensalista" && c.status !== "cancelado" ? <span className="badge b-warn ml">🎟️ matrícula a concluir</span> : null}
-                        {tab === "novato" ? <span className="badge b-terra ml">✨ 1ª aula</span> : null}
+                        {tab === "novato" ? <span className="badge b-terra ml">🧺 Lead · 1ª aula</span> : null}
                         {(() => {
+                          // Lead 1ª aula: o pagamento da AULA AVULSA, à vista na lista
+                          if (tab === "novato") {
+                            return aulaAvulsaDe(data, c).paga
+                              ? <span className="badge b-ok ml" style={{ background: "rgba(34,197,94,0.12)", color: "#15803d", border: "1px solid rgba(34,197,94,0.3)" }}>✓ Avulsa paga</span>
+                              : <span className="badge b-warn ml" style={{ background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba" }}>⚠️ Avulsa não paga</span>;
+                          }
                           const clientDigits = (c.phone || "").replace(/\D/g, "");
                           const bks = (data.bookings || []).filter((b) => b.clientName === c.name || (clientDigits && b.phone && b.phone.replace(/\D/g, "").endsWith(clientDigits.slice(-8))));
                           const hasPaid = bks.some((b) => b.paid || b.status === "concluida" || (b.status === "confirmada" && b.paymentMethod)) || c.matriculaStatus === "paga" || c.matriculaStatus === "convertida";
@@ -866,7 +872,7 @@ export function Clientes({ params }) {
                       </>
                     ) : (
                       <>
-                        {tab === "lead" && (
+                        {(tab === "lead" || (tab === "novato" && !aulaAvulsaDe(data, c).paga)) && (
                           <button
                             className="btn sm"
                             title="Dar baixa no pagamento da 1ª aula / matrícula"
@@ -1453,7 +1459,7 @@ function FinanceiroMetricas() {
     <>
       <div className="grid stats" style={{ marginBottom: "1.2rem" }}>
         <div className="card stat">
-          <div className="lbl">💰 Recebido no mês</div>
+          <div className="lbl" title="Só mensalidades. O que entrou de tudo (matrícula, taxa, avulsa, extra) está na aba Total financeiro.">💳 Mensalidades recebidas no mês</div>
           <div className="val">{money(recMes)}</div>
           <div className="foot">{compLabel(month)}</div>
         </div>
@@ -1464,7 +1470,7 @@ function FinanceiroMetricas() {
           {atrasadas ? <div className="cli-sub" style={{ fontSize: ".68rem" }}>{atrasadas} em atraso · com encargos</div> : null}
         </div>
         <div className="card stat">
-          <div className="lbl">📈 Recebido total</div>
+          <div className="lbl">📈 Mensalidades recebidas (total)</div>
           <div className="val terra">{money(recTotal)}</div>
           <div className="foot">{pagos.length} mensalidade(s) paga(s)</div>
         </div>
@@ -1563,6 +1569,140 @@ function FinanceiroMetricas() {
   );
 }
 
+/* ----------------- ABA 3: TOTAL FINANCEIRO (tudo o que entrou) -----------------
+   As outras abas do Financeiro são de MENSALIDADE. Aqui entra TUDO o que a
+   escola recebeu no mês: mensalidades, matrículas (1ª mensalidade), taxas de
+   matrícula, aulas avulsas e aulas extras (Vitor, 08/10/2026). As linhas vêm
+   do mesmo endpoint do Relatório de vendas — é lá que mora a regra de não
+   contar o mesmo Pix duas vezes. Presente não é dinheiro e não entra. */
+const TIPOS_TOTAL = [
+  { k: "mensalidade", l: "💳 Mensalidades", cor: "var(--green-deep)" },
+  { k: "matricula", l: "🎟️ Matrículas (1ª mensalidade)", cor: "var(--terracota)" },
+  { k: "taxa", l: "🧾 Taxas de matrícula", cor: "var(--brown)" },
+  { k: "avulsa", l: "🧺 Aulas avulsas", cor: "var(--warn)" },
+  { k: "extra", l: "✨ Aulas extras", cor: "var(--info)" },
+];
+const fimDoMes = (comp) => { const [y, m] = comp.split("-").map(Number); return `${comp}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`; };
+
+function FinanceiroTotal({ go }) {
+  const { data } = useStore();
+  const [comp, setComp] = useState(compAtual());
+  const [itens, setItens] = useState(null); // 6 meses até `comp`
+  const [erro, setErro] = useState("");
+  const atual = compAtual();
+  const meses = Array.from({ length: 6 }, (_, i) => addComp(comp, i - 5));
+
+  useEffect(() => {
+    let vivo = true;
+    setItens(null); setErro("");
+    api.relatorioVendas(`${meses[0]}-01`, fimDoMes(comp))
+      .then((r) => { if (vivo) setItens(r.itens || []); })
+      .catch((e) => { if (vivo) setErro(e.message || "Não consegui carregar os recebimentos."); });
+    return () => { vivo = false; };
+  }, [comp]);
+
+  const soma = (l) => l.reduce((s, i) => s + (Number(i.valor) || 0), 0);
+  const doMes = (m) => (itens || []).filter((i) => String(i.data).slice(0, 7) === m);
+  const noMes = doMes(comp);
+  const total = soma(noMes);
+  const porTipo = (l, k) => l.filter((i) => i.tipo === k);
+  const maiorMes = Math.max(1, ...meses.map((m) => soma(doMes(m))));
+
+  /* A receber: o que já foi cobrado e ainda não entrou. Fica FORA do total
+     recebido — é o que falta, não o que veio. */
+  const pendMens = (data.invoices || []).filter((i) => i.status === "pendente" && i.competencia === comp);
+  const aReceberMens = pendMens.reduce((s, i) => s + (i.encargos ? i.encargos.total : i.amountCents / 100), 0);
+  const matAbertas = (data.bookings || []).filter((b) => ehPagamentoDeMatricula(b.paymentMethod) && b.status === "aguardando" && !b.paid && Number(b.value) > 0);
+  const aReceberMat = matAbertas.reduce((s, b) => s + Number(b.value || 0), 0);
+
+  return (
+    <>
+      <div className="panel">
+        <div className="ag-toolbar">
+          <div className="ag-nav">
+            <button className="navbtn" onClick={() => setComp(addComp(comp, -1))}>←</button>
+            <span className="ag-period">{compLabel(comp)}</span>
+            <button className="navbtn" onClick={() => setComp(addComp(comp, 1))} disabled={comp >= atual}>→</button>
+            {comp !== atual && <button className="btn ghost sm" onClick={() => setComp(atual)}>Mês atual</button>}
+          </div>
+          <button className="btn sec sm" onClick={() => go("rel-vendas")}>📈 Ver lançamento a lançamento</button>
+        </div>
+        <div className="seg-hint">
+          💰 Tudo o que entrou no mês: mensalidades, matrículas, taxas, aulas avulsas e aulas extras. Aula de presente não é dinheiro e não entra.
+        </div>
+        {erro ? (
+          <div className="empty"><div className="ic">⚠️</div><p>{erro}</p></div>
+        ) : !itens ? (
+          <div className="empty"><div className="ic">🧶</div><p>Carregando recebimentos…</p></div>
+        ) : (
+          <div className="grid stats">
+            <div className="card stat">
+              <div className="lbl">💰 Total recebido</div>
+              <div className="val terra">{money(total)}</div>
+              <div className="foot">{noMes.length} recebimento(s) · {compLabel(comp)}</div>
+            </div>
+            {TIPOS_TOTAL.map((t) => {
+              const l = porTipo(noMes, t.k);
+              return (
+                <div key={t.k} className="card stat">
+                  <div className="lbl">{t.l}</div>
+                  <div className="val">{money(soma(l))}</div>
+                  <div className="foot">{l.length} lançamento(s) · {total ? Math.round((soma(l) / total) * 100) : 0}% do total</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {itens && (
+        <div className="panel">
+          <div className="panel-h"><h2>🗓 Recebido por mês <span className="muted-note">· 6 meses, por tipo</span></h2></div>
+          <div className="vg-barras">
+            {meses.map((m) => {
+              const l = doMes(m);
+              const s = soma(l);
+              return (
+                <div key={m} className="vg-barra-l">
+                  <div className="vg-barra-nome"><span style={{ color: m === comp ? "var(--terracota)" : "var(--ink)" }}>{compLabel(m)}</span></div>
+                  <div className="vg-barra" style={{ width: `${Math.max(2, (s / maiorMes) * 100)}%` }}>
+                    {TIPOS_TOTAL.map((t) => {
+                      const v = soma(porTipo(l, t.k));
+                      return v > 0 ? <div key={t.k} style={{ width: `${(v / (s || 1)) * 100}%`, background: t.cor }} title={`${t.l}: ${money(v)}`} /> : null;
+                    })}
+                  </div>
+                  <div className="vg-barra-num"><div><b>{money(s)}</b></div><div>{l.length} recebimento(s)</div></div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="vg-legenda">
+            {TIPOS_TOTAL.map((t) => (
+              <span key={t.k} className="lg"><span style={{ width: 10, height: 10, borderRadius: "50%", background: t.cor, display: "inline-block" }} />{t.l}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="panel">
+        <div className="panel-h"><h2>⏳ A receber <span className="muted-note">· fora do total recebido</span></h2></div>
+        <div className="grid stats">
+          <div className="card stat click" onClick={() => go("financeiro", { tab: "operacao" })} title="Abrir a Operação do Mês">
+            <div className="lbl">💳 Mensalidades em aberto</div>
+            <div className="val warn">{money(aReceberMens)}</div>
+            <div className="foot">{pendMens.length} mensalidade(s) de {compLabel(comp)} · vencidas com encargos</div>
+          </div>
+          <div className="card stat">
+            <div className="lbl">🎟️ Matrículas aguardando pagamento</div>
+            <div className="val warn">{money(aReceberMat)}</div>
+            <div className="foot">{matAbertas.length} matrícula(s) com Pix ou baixa pendente</div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 /* ----------------- COMPONENTE PRINCIPAL FINANCEIRO ----------------- */
 export function Financeiro({ go, params }) {
   const [tab, setTab] = useState(params?.tab || "operacao");
@@ -1580,9 +1720,12 @@ export function Financeiro({ go, params }) {
         <button className={tab === "metricas" ? "on" : ""} onClick={() => setTab("metricas")}>
           📊 Métricas & Fluxo
         </button>
+        <button className={tab === "total" ? "on" : ""} onClick={() => setTab("total")}>
+          💰 Total financeiro
+        </button>
       </div>
 
-      {tab === "operacao" ? <FinanceiroOperacao /> : <FinanceiroMetricas />}
+      {tab === "operacao" ? <FinanceiroOperacao /> : tab === "total" ? <FinanceiroTotal go={go} /> : <FinanceiroMetricas />}
     </>
   );
 }

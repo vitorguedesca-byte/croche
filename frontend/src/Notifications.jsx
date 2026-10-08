@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { useStore } from "./store.jsx";
 import { WaIcon } from "./icons.jsx";
 import {
-  todayISO, fmtDate, money, waLink, classifyClient,
+  todayISO, fmtDate, money, waLink, classifyClient, aulaAvulsaDe,
   slotCapacity, slotOccupancy, diasAteAniversario, faltamLabel, idadeQueFaz,
 } from "./helpers.js";
 
@@ -75,14 +75,15 @@ function buildNotifications(data) {
       nav: (go) => go("agenda"),
     }));
 
-  // 🌱 Leads a converter
+  // 🌱 Leads a converter — inclusive a lead de 1ª aula que não pagou a avulsa
   data.clients
-    .filter((c) => classifyClient(data, c) === "lead")
-    .forEach((c) => out.push({
+    .map((c) => ({ c, k: classifyClient(data, c) }))
+    .filter(({ c, k }) => k === "lead" || (k === "novato" && !aulaAvulsaDe(data, c).paga))
+    .forEach(({ c, k }) => out.push({
       id: "ld" + c.id, event: false, icon: "🌱", tone: "rgba(140,154,120,.18)",
-      title: `Lead a converter — ${c.name}`,
+      title: `${k === "novato" ? "Avulsa não paga" : "Lead a converter"} — ${c.name}`,
       sub: c.phone || "sem telefone",
-      nav: (go) => go("clientes", { tab: "lead" }),
+      nav: (go) => go("clientes", { tab: k }),
       wa: c.phone ? { phone: c.phone, label: "Convidar", msg: `Olá ${c.name}! Vi que você se interessou pelas aulas de crochê 💚 Posso te ajudar a escolher um horário?` } : null,
     }));
 

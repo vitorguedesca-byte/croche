@@ -9,7 +9,7 @@ import {
   UNITS, PROFS, TAG_OPTIONS, VALOR_PADRAO, CAPACITY_PADRAO, STATUS, BOOKING_KINDS,
   unitColor, unitSoft, todayISO, fmtDate, fmtDateLong, money, waLink, capitalize, faixaHorario, hhmm,
   slotById, slotBookings, slotBookingsAll, slotCapacity, slotWaitlist, clientAttendance, nomeCurto, irmasNaAgenda,
-  marcadoresDoAluno, contemBusca,
+  marcadoresDoAluno, contemBusca, ehLeadPrimeiraAula, aulaAvulsaDe,
   bookingKind, bookingKindDe, feriadoDe, feriadoBaseDe, MARCAS_MATRICULA, ehPagamentoDeMatricula, situacaoMensalidade, clientOfBooking,
   competenciasDoAluno, compLabel, mensalidadeDe, matriculaISO,
   compAtual, addComp, precoDaComp, mensalidadeDaComp,
@@ -2362,6 +2362,13 @@ export function ClientProfile({ client, initialTab }) {
             <span className="chip">{c.unit || "—"}</span>
             {c.status === "cancelado"
               ? <span className="badge b-danger">Inscrição cancelada</span>
+              : ehLeadPrimeiraAula(data, c)
+              ? <>
+                  <span className="badge b-terra">🧺 Lead · 1ª aula</span>
+                  {aulaAvulsaDe(data, c).paga
+                    ? <span className="badge b-ok" style={{ background: "rgba(34,197,94,0.12)", color: "#15803d", border: "1px solid rgba(34,197,94,0.3)" }}>✓ Avulsa paga</span>
+                    : <span className="badge b-warn" style={{ background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba" }}>⚠️ Avulsa não paga</span>}
+                </>
               : c.status === "lead" && !hasPaid
               ? <span className="badge b-warn" style={{ background: "#fff3cd", color: "#856404", border: "1px solid #ffeeba" }}>⚠️ Pagamento não realizado</span>
               : c.status === "lead" && hasPaid

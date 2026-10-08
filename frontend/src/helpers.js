@@ -238,11 +238,10 @@ export function clientAttendance(data, name) {
 export const clientActiveCount = (data, c) =>
   bookingsActive(data).filter((b) => b.clientName === c.name).length;
 
-export function classifyClient(data, c) {
-  if (c.status === "cancelado" || c.status === "inativo") return "ex-aluno";
-
+// Reservas de uma pessoa: pelo nome (como o resto do sistema) ou pelo final do telefone
+function reservasDaPessoa(data, c) {
   const clientDigits = (c.phone || "").replace(/\D/g, "");
-  const bks = (data.bookings || []).filter((b) => {
+  return (data.bookings || []).filter((b) => {
     if (b.clientName === c.name) return true;
     if (clientDigits && b.phone) {
       const bDigits = b.phone.replace(/\D/g, "");
@@ -250,6 +249,38 @@ export function classifyClient(data, c) {
     }
     return false;
   });
+}
+
+/* Aula AVULSA (a 1ª aula, R$ 40) da pessoa — feita, marcada ou só reservada.
+   A marca "Aula Avulsa" do site/robô vira a forma de pagamento ("Pix",
+   "Dinheiro"…) quando a Inêz dá a baixa no painel, então vale também a reserva
+   com valor próprio que não é matrícula nem aula do plano. `paga` = alguma foi
+   paga. A reserva cancelada conta: é a avulsa que ela reservou e não pagou. */
+const MARCAS_DO_PLANO = ["Mensalista", "Reposição", "Avulsa", "Presente"]; // "Avulsa" = aula EXTRA
+export function aulaAvulsaDe(data, c) {
+  const avulsas = reservasDaPessoa(data, c).filter((b) => b.paymentMethod === "Aula Avulsa" ||
+    (Number(b.value) > 0 && !MARCAS_DO_PLANO.includes(b.paymentMethod) && !ehPagamentoDeMatricula(b.paymentMethod)));
+  return { tem: avulsas.length > 0, paga: avulsas.some((b) => b.paid), avulsas };
+}
+
+/* LEAD 1ª AULA (Vitor, 08/10/2026): quem fez — ou reservou — a aula avulsa e
+   ainda NÃO fechou o plano não é aluna. Fica na aba "Leads 1ª aula", paga ou
+   não, com o selo de pagamento à vista. Vira aluna quando a matrícula é paga.
+   Exige o sinal de pessoa nova (1ª aula marcada, ficha de aluna nova ou lead)
+   para não puxar quem pagava por aula antes do sistema. */
+export function ehLeadPrimeiraAula(data, c) {
+  if (c.status === "cancelado" || c.status === "inativo") return false;
+  if (c.plan === "mensalista" || c.matriculaStatus === "paga" || c.matriculaStatus === "convertida") return false;
+  if (!(c.trialDate || c.firstClass || c.status === "lead")) return false;
+  return aulaAvulsaDe(data, c).tem;
+}
+
+export function classifyClient(data, c) {
+  if (c.status === "cancelado" || c.status === "inativo") return "ex-aluno";
+  // "novato" = aba "Leads 1ª aula" (a chave ficou a mesma para não quebrar os atalhos)
+  if (ehLeadPrimeiraAula(data, c)) return "novato";
+
+  const bks = reservasDaPessoa(data, c);
   const activeBks = bks.filter((b) => b.status !== "cancelada");
   const hasMultipleBookings = activeBks.length > 1;
   const hasAttendance = bks.some((b) => b.attendance === "presente");
