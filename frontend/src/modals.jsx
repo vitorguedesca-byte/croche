@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Modal, useModal, StatusBadge, Select } from "./ui.jsx";
 import { WaIcon } from "./icons.jsx";
+import PixQR from "./PixQR.jsx";
 import { useStore } from "./store.jsx";
 import { api } from "./api.js";
 import { toast, confirmModal, promptModal } from "./toast.jsx";
@@ -2274,6 +2275,7 @@ function atividadesDoAluno(data, c) {
   });
   add(c.trialDate, "✨", "Primeira aula", "");
   add(c.matriculaAt, "🎟️", "Matriculada — 1ª mensalidade paga", "");
+  add(c.matriculaPainelAt, "🎟️", "Matriculada pelo painel", "aluna nova");
   add(c.matriculaRefundAt, "↩️", "Matrícula devolvida", "");
   return out.sort((a, b) => b.d.localeCompare(a.d)).slice(0, 14);
 }
@@ -2433,6 +2435,9 @@ export function ClientProfile({ client, initialTab }) {
                 </div>
               </div>
             )}
+            {/* Ainda não matriculada (atendimento ou aula avulsa): o caminho
+                para o plano é a matrícula com cobrança — taxa + 1ª mensalidade. */}
+            {!ehMensalista && !temMatricula && c.status !== "cancelado" && <MatriculaBlock client={c} />}
             <div className="prof-kpis">
               <div className="prof-kpi"><div className="l">Aulas</div><div className="v">{total}</div></div>
               <div className="prof-kpi"><div className="l">Presenças</div><div className="v">{at.pres}</div><div className="f">{at.falt} falta(s)</div></div>
@@ -2531,7 +2536,32 @@ const MATRICULA_ROTULO = {
 function MatriculaBlock({ client }) {
   const { data, run } = useStore();
   const { open } = useModal();
-  if (client.matriculaStatus === "nao_aplica") return null;
+  /* Ainda sem matrícula (aluna nova do atendimento, ou da aula avulsa): o
+     caminho para o plano é a matrícula com cobrança — taxa + 1ª mensalidade. */
+  if (client.matriculaStatus === "nao_aplica") {
+    if (client.plan === "mensalista" || client.status === "cancelado") return null;
+    const aberta = (data.bookings || []).find((b) => b.clientName === client.name && MARCAS_MATRICULA.includes(b.paymentMethod) &&
+      b.status === "aguardando" && !b.paid && Number(b.value) > 0);
+    return (
+      <div style={{ margin: "1rem 0" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: ".5rem", gap: ".5rem", flexWrap: "wrap" }}>
+          <b style={{ color: "var(--brown)" }}>🎟️ Matrícula</b>
+          <span className={`badge ${aberta ? "b-warn" : "b-muted"}`}>{aberta ? "⏳ aguardando pagamento" : "não matriculada"}</span>
+        </div>
+        <div className="cli-sub">
+          {aberta
+            ? <>Matrícula de <b>{money(aberta.value)}</b> aberta — 1ª aula do plano em {fmtDate(aberta.date)}. Ela vira mensalista quando o pagamento entrar.</>
+            : <>Para entrar no plano: 1ª mensalidade + taxa de matrícula (a aula avulsa não abate).</>}
+        </div>
+        <div style={{ display: "flex", gap: ".5rem", marginTop: ".6rem", flexWrap: "wrap" }}>
+          {aberta && <button className="btn sm" onClick={() => open(<ConfirmPayment booking={aberta} />)}>✓ Registrar pagamento</button>}
+          <button className={`btn sm ${aberta ? "ghost" : ""}`} onClick={() => open(<MatricularNovaForm client={client} />)}>
+            🧵 {aberta ? "Refazer a matrícula" : "Matricular no plano"}
+          </button>
+        </div>
+      </div>
+    );
+  }
   const [cls, txt] = MATRICULA_ROTULO[client.matriculaStatus] || ["b-muted", client.matriculaStatus];
   /* O que ela pagou para entrar: 1ª mensalidade + taxa de matrícula. A reserva
      da matrícula guarda as duas coisas (`value` é o total, `taxaMatricula` é
@@ -2698,6 +2728,159 @@ export function EnrollForm({ client }) {
         </div>
       ))}
       <div className="info-line"><b>Mensalidade</b><span><b style={{ color: "var(--terracota)" }}>{money(valor)}</b>/mês</span></div>
+    </Modal>
+  );
+}
+
+/* ====== Matrícula COM COBRANÇA: aluna nova do atendimento ou da avulsa ======
+   Valor cheio — taxa de matrícula + 1ª mensalidade; a avulsa não abate nada
+   (Vitor, 08/10/2026). O servidor abre a reserva de matrícula, igual à do
+   site: ela só vira mensalista quando o pagamento entra — pelo Pix (o banco
+   avisa sozinho) ou pela baixa que você dá aqui quando recebe por fora. */
+export function MatricularNovaForm({ client, plano: planoInicial, tipo: tipoInicial }) {
+  const { data, run } = useStore();
+  const { open } = useModal();
+  const meta = data.meta || {};
+  const [freq, setFreq] = useState(Number(planoInicial) || 1);
+  const [tipo, setTipo] = useState(tipoInicial === "escala" ? "escala" : "fixo");
+  const [slotIds, setSlotIds] = useState(Array(tipoInicial === "escala" ? 1 : Number(planoInicial) || 1).fill(""));
+  const [forma, setForma] = useState("Pix");
+  const [pagoEm, setPagoEm] = useState(todayISO());
+  const [busy, setBusy] = useState(false);
+  const [aberta, setAberta] = useState(null); // resposta do servidor com o Pix
+  const t = todayISO();
+  const livres = data.slots
+    .filter((s) => s.date >= t && slotBookings(data, s.id).length < slotCapacity(s))
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  const ehEscala = tipo === "escala";
+  const nHorarios = ehEscala ? 1 : freq;
+  const mensal = valorPlanoMeta(meta, freq);
+  const taxa = Math.max(0, Number(meta.taxaMatricula) || 0);
+  const total = mensal + taxa;
+  const voltar = () => open(<ClientProfile client={client} />);
+
+  const escolhidos = () => {
+    const ids = slotIds.slice(0, nHorarios).filter(Boolean).map(Number);
+    if (ids.length !== nHorarios || new Set(ids).size !== nHorarios) {
+      toast(ehEscala ? "Escolha a turma da 1ª aula do plano." : `Escolha ${freq} horário${freq > 1 ? "s" : ""} diferente${freq > 1 ? "s" : ""} para a grade.`, "error");
+      return null;
+    }
+    return ids;
+  };
+  const resumoPlano = `${client.name} — plano de ${freq}x por semana (${money(mensal)}/mês), mensalista ${tipo}.\n\n` +
+    `Matrícula: 1ª mensalidade ${money(mensal)}${taxa ? ` + taxa de matrícula ${money(taxa)}` : ""} = ${money(total)}.\n`;
+
+  const gerarPix = async () => {
+    const ids = escolhidos(); if (!ids) return;
+    if (!(client.cpf || "").replace(/\D/g, "")) return toast("Cadastre o CPF da aluna antes de gerar o Pix.", "error");
+    if (!(await confirmModal({
+      title: "Gerar o Pix da matrícula",
+      message: resumoPlano + "\nOs horários ficam reservados para ela. Quando o Pix cair, ela vira mensalista sozinha: " +
+        "o mês de hoje fica pago e a próxima mensalidade vence no mês que vem, no mesmo dia.",
+      confirmLabel: `Gerar Pix de ${money(total)}`,
+    }))) return;
+    setBusy(true);
+    try {
+      const r = await run(api.abrirMatricula(client.id, { weeklyFreq: freq, mensalistaTipo: tipo, slotIds: ids, gerarPix: true }));
+      setAberta(r);
+    } catch { /* run já avisou */ }
+    finally { setBusy(false); }
+  };
+
+  const recebiPorFora = async () => {
+    const ids = escolhidos(); if (!ids) return;
+    if (!(await confirmModal({
+      title: "Registrar a matrícula paga",
+      message: resumoPlano + `\nRecebido em ${fmtDate(pagoEm)}, por ${forma}.\n\n` +
+        "Ela vira mensalista agora: o mês de hoje fica pago e a próxima mensalidade vence no mês que vem, no mesmo dia.",
+      confirmLabel: `Registrar ${money(total)} recebido`,
+    }))) return;
+    setBusy(true);
+    try {
+      const r = await run(api.abrirMatricula(client.id, { weeklyFreq: freq, mensalistaTipo: tipo, slotIds: ids, gerarPix: false }));
+      await run(api.payBooking(r.booking.id, { paymentMethod: forma, paymentDate: pagoEm }));
+      toast(`🎟️ Matrícula registrada — ${client.name} agora é mensalista ${freq}x.`, "success");
+      voltar();
+    } catch { /* run já avisou */ }
+    finally { setBusy(false); }
+  };
+
+  if (aberta) {
+    const msg = `Olá ${(client.name || "").split(" ")[0]}! 💚 Segue o Pix da sua matrícula na Fios que Curam — ` +
+      `plano de ${freq}x por semana: ${money(aberta.valor)} (1ª mensalidade${aberta.taxa ? " + taxa de matrícula" : ""}).\n\n${aberta.pixCode || ""}`;
+    return (
+      <Modal title="Pix da matrícula" footer={<>
+        <button className="btn ghost" onClick={voltar}>← Voltar ao perfil</button>
+      </>}>
+        <div className="info-line"><b>Total</b><span><b style={{ color: "var(--terracota)" }}>{money(aberta.valor)}</b></span></div>
+        <div className="cli-sub" style={{ marginBottom: ".8rem" }}>
+          1ª mensalidade {money(aberta.mensalidade)}{aberta.taxa ? ` + taxa de matrícula ${money(aberta.taxa)}` : ""}
+        </div>
+        {aberta.pixCode ? (<>
+          <PixQR code={aberta.pixCode} size={220} legenda="A aluna aponta a câmera do celular para pagar" />
+          <div style={{ display: "flex", gap: ".5rem", flexWrap: "wrap", marginTop: ".8rem" }}>
+            <button className="btn sec sm" onClick={() => { navigator.clipboard?.writeText(aberta.pixCode); toast("Código Pix copiado! 📋", "success"); }}>📋 Copiar código</button>
+            {client.phone && <button className="btn wa sm" onClick={() => openWa(client.phone, msg)}><WaIcon /> Enviar no WhatsApp</button>}
+          </div>
+          <div className="help" style={{ marginTop: ".8rem" }}>Quando o Pix cair, ela vira mensalista sozinha. Se ela pagar de outro jeito, use "Registrar pagamento" na ficha.</div>
+        </>) : (
+          <div className="help">
+            Não consegui gerar o Pix{aberta.pixErro ? `: ${aberta.pixErro}` : ""}. Os horários ficaram reservados — quando ela pagar, use "Registrar pagamento" na ficha.
+          </div>
+        )}
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal title="Matricular — taxa + 1ª mensalidade" footer={<>
+      <button className="btn ghost" onClick={voltar}>← Voltar ao perfil</button>
+      <div style={{ flex: 1 }} />
+      <button className="btn sec" onClick={recebiPorFora} disabled={busy}>✓ Recebi por fora</button>
+      <button className="btn" onClick={gerarPix} disabled={busy}>{busy ? "Aguarde…" : "💠 Gerar Pix"}</button>
+    </>}>
+      <div className="help">
+        Entrar no plano é o valor cheio: <b>1ª mensalidade + taxa de matrícula</b> — a aula avulsa não abate nada.
+        Ela só vira mensalista quando o pagamento entra.
+      </div>
+      <div className="row2" style={{ marginTop: "1rem" }}>
+        <div className="field">
+          <label>Plano</label>
+          <Select
+            value={freq}
+            onChange={(v) => { const n = Number(v); setFreq(n); setSlotIds(Array(ehEscala ? 1 : n).fill("")); }}
+            options={planoOpcoes(meta, tipo)}
+          />
+        </div>
+        <div className="field">
+          <label>Tipo de mensalista</label>
+          <Select value={tipo} onChange={(v) => { setTipo(v); setSlotIds(Array(v === "escala" ? 1 : freq).fill("")); }} options={tipoMensalistaOpcoes(freq)} />
+        </div>
+      </div>
+      {Array.from({ length: nHorarios }, (_, i) => (
+        <div className="field" key={`${tipo}-${i}`}>
+          <label>{ehEscala ? "Turma da 1ª aula do plano" : freq === 1 ? "Horário semanal" : `${i + 1}º horário semanal`}</label>
+          <Select
+            value={slotIds[i] || ""}
+            onChange={(v) => setSlotIds((atuais) => atuais.map((x, j) => j === i ? v : x))}
+            defaultOption={{ label: "Escolha uma turma", icon: "🗓️" }}
+            options={livres.slice(0, 80).map((s) => ({
+              value: s.id,
+              label: `${fmtDate(s.date)} · ${faixaHorario(s.time, meta.duracaoAulaMin)}`,
+              hint: `${s.unit} — ${slotCapacity(s) - slotBookings(data, s.id).length} vaga(s)${ehEscala ? "" : " · repete por 12 meses"}`,
+              icon: "🧶",
+            }))}
+          />
+        </div>
+      ))}
+      {ehEscala && <div className="help" style={{ marginBottom: ".8rem" }}>Escala: só a 1ª aula fica marcada; as próximas ela marca pelo portal.</div>}
+      <div className="info-line"><b>1ª mensalidade</b><span>{money(mensal)}</span></div>
+      {taxa > 0 && <div className="info-line"><b>Taxa de matrícula</b><span>{money(taxa)}</span></div>}
+      <div className="info-line"><b>Total da matrícula</b><span><b style={{ color: "var(--terracota)" }}>{money(total)}</b></span></div>
+      <div className="row2" style={{ marginTop: ".8rem" }}>
+        <div className="field"><label>Se recebeu por fora: forma</label><Select value={forma} onChange={setForma} options={FORMAS_PAGAMENTO} /></div>
+        <div className="field"><label>Data do pagamento</label><input type="date" value={pagoEm} onChange={(e) => setPagoEm(e.target.value)} /></div>
+      </div>
     </Modal>
   );
 }
@@ -3371,6 +3554,7 @@ export function BatchUnbookForm({ client }) {
    para que editar o cadastro não precise abrir outro modal. */
 function useClientForm(client, onDone) {
   const { data, run } = useStore();
+  const { open } = useModal();
   const meta = data.meta;
   const [name, setName] = useState(client?.name || "");
   const [phone, setPhone] = useState(client?.phone || "");
@@ -3402,6 +3586,16 @@ function useClientForm(client, onDone) {
     const querMensal = plano !== "avulso";
     const mudouFreq = eraMensal && querMensal && Number(plano) !== (client.weeklyFreq || 1);
     const precisaMatricular = querMensal && (!client || !eraMensal || mudouFreq);
+    /* Matrícula NOVA (conta no relatório de Vendas do mês) ou cadastro de quem
+       já era aluna antes do sistema? Quem decide é o "Primeira aula?" da ficha.
+       Lead é sempre gente nova, mesmo com o botão em "Não": a reserva que
+       expira no WhatsApp desliga o firstClass dela. */
+    const novata = !!firstClass || client?.status === "lead";
+    /* Aluna NOVA entrando no plano paga o valor cheio — taxa + 1ª mensalidade
+       (Vitor, 08/10/2026). Ela não vira mensalista ao salvar: a ficha é salva e
+       a matrícula segue no MatricularNovaForm (horários + Pix ou baixa). Só quem
+       "já é aluno(a)" (cadastro de aluna antiga) entra direto, sem cobrança. */
+    const matriculaComCobranca = precisaMatricular && !eraMensal && novata && client?.matriculaStatus !== "paga" && client?.matriculaStatus !== "convertida";
 
     if (querMensal && tipoMens === "escala" && Number(plano) > FREQ_MAX_ESCALA)
       return toast(`O plano de ${plano}x por semana é só para mensalista fixo. Na escala, escolha 1x ou 2x.`, "error");
@@ -3515,6 +3709,20 @@ function useClientForm(client, onDone) {
         cancelLabel: "Voltar",
       });
       if (!ok) return;
+    } else if (matriculaComCobranca) {
+      const mensal = valorDoPlano(plano);
+      const taxa = Math.max(0, Number(meta.taxaMatricula) || 0);
+      const ok = await confirmModal({
+        title: "Matricular aluna nova",
+        message: `${name.trim()} entra no plano de ${plano}x por semana (${money(mensal)}/mês), como mensalista ${tipoMens}.\n\n` +
+          `Aluna nova paga o valor cheio para entrar: 1ª mensalidade ${money(mensal)}` +
+          (taxa ? ` + taxa de matrícula ${money(taxa)} = ${money(mensal + taxa)}` : "") + ".\n\n" +
+          "O cadastro é salvo agora; em seguida você escolhe os horários e gera o Pix (ou registra que recebeu por fora). " +
+          "Ela vira mensalista quando o pagamento entrar.\n\n" +
+          "Se ela já era aluna antes do sistema, volte e marque \"Primeira aula? Não — já é aluno(a)\".",
+        confirmLabel: "Salvar e seguir para a matrícula",
+      });
+      if (!ok) return;
     } else if (precisaMatricular) {
       const valor = valorIndivNum != null ? valorIndivNum : valorDoPlano(plano);
       // O dia da matrícula vira o dia de vencimento dela, e a 1ª mensalidade
@@ -3523,7 +3731,10 @@ function useClientForm(client, onDone) {
       const ok = await confirmModal({
         title: "Matricular como mensalista",
         message: `${name.trim()} entrará no plano de ${plano}x por semana (${money(valor)}/mês), como mensalista ${tipoMens}.\n\n` +
-          `A 1ª mensalidade vence no dia ${Math.min(28, dia)} do mês que vem, e todo mês nesse dia.`,
+          `A 1ª mensalidade vence no dia ${Math.min(28, dia)} do mês que vem, e todo mês nesse dia.\n\n` +
+          (novata
+            ? "✨ Aluna nova: a 1ª mensalidade que ela pagar conta como matrícula no relatório de Vendas."
+            : "👩 \"Já é aluno(a)\": cadastro de aluna antiga — sem taxa de matrícula, e não conta como matrícula nova no relatório de Vendas."),
         confirmLabel: "Salvar e matricular",
       });
       if (!ok) return;
@@ -3531,6 +3742,11 @@ function useClientForm(client, onDone) {
     if (eraMensal && !querMensal) payload.plan = "avulso"; // voltou a ser avulso
 
     const saved = await run(client ? api.updateClient(client.id, payload) : api.createClient(payload));
+    if (matriculaComCobranca && saved) {
+      // A ficha está salva; a matrícula (horários + cobrança) segue no próximo passo.
+      open(<MatricularNovaForm client={{ ...(client || {}), ...saved }} plano={Number(plano)} tipo={tipoMens} />);
+      return;
+    }
     if (precisaMatricular) {
       const id = client ? client.id : saved?.id;
       const r = id ? await run(api.enroll(id, {
@@ -3538,6 +3754,7 @@ function useClientForm(client, onDone) {
         mensalistaTipo: tipoMens,
         billingDay: billingDay === "" ? undefined : Number(billingDay),
         monthlyValue: valorIndivNum,
+        novata,
       })) : null;
       /* O backend devolve `troca` quando foi mudança de plano (e não matrícula
          nova). Repetimos o resultado no aviso: a Inêz acabou de confirmar uma

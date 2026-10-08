@@ -858,3 +858,243 @@ export function RelatorioVagas() {
     </>
   );
 }
+
+/* ============================= PRESENTES =============================
+   Apuração das aulas de presente que a ADMIN dá na ficha (AulaPresente).
+
+   PRESENTE NÃO É DINHEIRO (Vitor, 08/10/2026): não entra em Vendas, nem no
+   Financeiro, nem em valor a receber. Este relatório só conta o que foi dado
+   e o que aconteceu com cada presente. O "equivale a" é referência, para a
+   Inêz ter noção do tamanho do que deu — não é receita.
+
+   O período é o dia em que o presente foi DADO. Sai do estado do painel
+   (presentes + marcações), sem chamada extra. */
+const PERIODOS_PRESENTE = [["semana", "📆 Semana"], ["mes", "🗓 Mês"], ["ano", "📅 Ano"]];
+
+// O que aconteceu com o presente, já olhando a aula que ele virou
+const DESTINOS_PRESENTE = [
+  { k: "feita", l: "Virou aula", cor: "var(--ok)", badge: "b-ok", ic: "✅" },
+  { k: "marcada", l: "Aula marcada", cor: "var(--info)", badge: "b-info", ic: "📅" },
+  { k: "aguardando", l: "Aguardando a aluna", cor: "var(--warn)", badge: "b-warn", ic: "⏳" },
+  { k: "faltou", l: "Faltou / desistiu", cor: "var(--danger)", badge: "b-danger", ic: "🙅" },
+  { k: "vencido", l: "Venceu sem uso", cor: "var(--muted)", badge: "b-muted", ic: "⌛" },
+  { k: "recolhido", l: "Recolhido", cor: "var(--beige)", badge: "b-muted", ic: "↩️" },
+];
+const DESTINO_PRESENTE = Object.fromEntries(DESTINOS_PRESENTE.map((d) => [d.k, d]));
+
+function destinoDoPresente(p, aula, hoje) {
+  if (p.situacao === "cancelado") return "recolhido";
+  if (p.situacao === "vencido") return "vencido";
+  if (p.situacao === "disponivel") return "aguardando";
+  // usado: depende da aula que ele virou
+  if (!aula || aula.status === "cancelada" || aula.attendance === "falta") return "faltou";
+  return aula.date > hoje ? "marcada" : "feita";
+}
+
+// Barra empilhada: cada pedaço é um destino dos presentes
+function BarraPresentes({ c, total }) {
+  return (
+    <div className="vg-barra">
+      {DESTINOS_PRESENTE.map((d) => (c[d.k] ? (
+        <div key={d.k} style={{ width: `${(c[d.k] / (total || 1)) * 100}%`, background: d.cor }} title={`${d.l}: ${c[d.k]}`} />
+      ) : null))}
+    </div>
+  );
+}
+
+export function RelatorioPresentes() {
+  const { data } = useStore();
+  const { open } = useModal();
+  const [tipo, setTipo] = useState("mes");
+  const [refDia, setRefDia] = useState(todayISO());
+  const [unit, setUnit] = useState("Todas");
+  const [busca, setBusca] = useState("");
+  const [de, ate] = intervalo(tipo, refDia);
+  const hoje = todayISO();
+  const valorAvulsa = Number(data.meta?.valorAvulsa) || 40;
+
+  const itens = useMemo(() => {
+    const cli = new Map(data.clients.map((c) => [c.id, c]));
+    const aulas = new Map(data.bookings.map((b) => [b.id, b]));
+    return (data.presentes || [])
+      .map((p) => {
+        const dadoEm = String(p.createdAt || "").slice(0, 10);
+        const c = cli.get(p.clientId) || null;
+        const aula = p.usedBookingId ? aulas.get(p.usedBookingId) || null : null;
+        return {
+          p, c, aula, dadoEm,
+          aluna: c?.name || `aluna #${p.clientId}`,
+          unidade: aula?.unit || c?.unit || "Sem unidade",
+          destino: destinoDoPresente(p, aula, hoje),
+        };
+      })
+      .filter((x) => x.dadoEm >= de && x.dadoEm <= ate)
+      .sort((a, b) => b.dadoEm.localeCompare(a.dadoEm) || a.aluna.localeCompare(b.aluna));
+  }, [data, de, ate, hoje]);
+
+  const unidades = unidadesDe(data.meta, itens.map((x) => x.unidade));
+  const doFiltro = itens.filter((x) => unit === "Todas" || x.unidade === unit);
+  const conta = (l) => Object.fromEntries(DESTINOS_PRESENTE.map((d) => [d.k, l.filter((x) => x.destino === d.k).length]));
+  const alunas = (l) => new Set(l.map((x) => x.p.clientId)).size;
+  const tot = conta(doFiltro);
+  const viraramAula = tot.feita + tot.marcada;
+
+  // quem deu
+  const porQuem = [...new Set(doFiltro.map((x) => x.p.dadoPor || "—"))]
+    .map((q) => {
+      const l = doFiltro.filter((x) => (x.p.dadoPor || "—") === q);
+      return { q, n: l.length, alunas: alunas(l), feitas: conta(l).feita };
+    })
+    .sort((a, b) => b.n - a.n);
+
+  // barras: cada unidade com presente, e o total por último
+  const comPresente = unidades.filter((u) => itens.some((x) => x.unidade === u));
+  const barras = [...comPresente, ...(comPresente.length > 1 ? ["Total"] : [])];
+
+  const lista = doFiltro.filter((x) => contemBusca([x.aluna, x.unidade, x.p.motivo, x.p.dadoPor, DESTINO_PRESENTE[x.destino].l], busca));
+
+  const exportar = () => exportCsv(`presentes-${de}-a-${ate}`,
+    ["Dado em", "Aluna", "Unidade", "Dado por", "Motivo", "Vale até", "Situação", "Aula", "Presença"],
+    lista.map((x) => [x.dadoEm, x.aluna, x.unidade, x.p.dadoPor || "", x.p.motivo || "", x.p.expiresOn,
+      DESTINO_PRESENTE[x.destino].l, x.aula ? `${x.aula.date} ${hhmm(x.aula.time)}` : "",
+      x.aula ? (x.aula.status === "cancelada" ? "cancelada" : x.aula.attendance || "") : ""]));
+
+  return (
+    <>
+      <div className="panel">
+        <Periodo tipos={PERIODOS_PRESENTE} tipo={tipo} setTipo={setTipo} refDia={refDia} setRefDia={setRefDia} />
+        <div className="seg-hint">
+          🎁 Presente não é dinheiro: não entra em Vendas, no Financeiro nem em valor a receber. Aqui é só a apuração do que foi dado no período.
+        </div>
+        <div className="grid stats">
+          <div className="card stat">
+            <div className="lbl">🎁 Aulas dadas</div>
+            <div className="val terra">{doFiltro.length}</div>
+            <div className="foot">para {alunas(doFiltro)} aluna(s)</div>
+            {doFiltro.length > 0 && (
+              <div className="cli-sub" title="Só referência: quanto essas aulas custariam como aula avulsa. Não é receita nem valor a receber.">
+                equivale a {money(doFiltro.length * valorAvulsa)} em avulsas · só referência
+              </div>
+            )}
+          </div>
+          <div className="card stat">
+            <div className="lbl">✅ Viraram aula</div>
+            <div className="val">{viraramAula}</div>
+            <div className="foot">{tot.feita} feita(s) · {tot.marcada} marcada(s) · {pct(viraramAula, doFiltro.length)}% do dado</div>
+          </div>
+          <div className="card stat">
+            <div className="lbl">⏳ Aguardando a aluna</div>
+            <div className="val warn">{tot.aguardando}</div>
+            <div className="foot">ainda no prazo para marcar</div>
+          </div>
+          <div className="card stat">
+            <div className="lbl">⌛ Não aproveitadas</div>
+            <div className="val">{tot.vencido + tot.faltou + tot.recolhido}</div>
+            <div className="foot">{tot.vencido} venceu · {tot.faltou} faltou/desistiu · {tot.recolhido} recolhida(s)</div>
+          </div>
+        </div>
+        {!itens.length && <div className="empty" style={{ marginTop: "1rem" }}><div className="ic">🎁</div><p>Nenhuma aula de presente dada neste período.</p></div>}
+      </div>
+
+      {/* 1. O que aconteceu com os presentes, por unidade */}
+      {itens.length > 0 && (
+        <div className="panel">
+          <div className="panel-h"><h2>🧩 O que aconteceu com os presentes <span className="muted-note">· por unidade</span></h2></div>
+          <div className="vg-barras">
+            {barras.map((u) => {
+              const l = u === "Total" ? itens : itens.filter((x) => x.unidade === u);
+              const c = conta(l);
+              return (
+                <div key={u} className="vg-barra-l row-click" onClick={() => setUnit(u === "Total" || unit === u ? "Todas" : u)}
+                  title={u === "Total" ? "Clique para ver todas as unidades" : "Clique para ver só esta unidade"}>
+                  <div className="vg-barra-nome">
+                    {u === "Total" ? "🎁" : <Bolinha cor={unitColor(u)} />}
+                    <span style={{ color: u === "Total" ? "var(--ink)" : unitColor(u) }}>{u}</span>
+                  </div>
+                  <BarraPresentes c={c} total={l.length} />
+                  <div className="vg-barra-num">
+                    <div><b>{l.length}</b> dada(s) · <b>{alunas(l)}</b> aluna(s)</div>
+                    <div><b style={{ color: "var(--ok)" }}>{c.feita + c.marcada}</b> viraram aula · <b>{c.aguardando}</b> aguardando</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="vg-legenda">
+            {DESTINOS_PRESENTE.map((d) => (
+              <span key={d.k} className="lg"><Bolinha cor={d.cor} />{d.l} <b>{tot[d.k]}</b></span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 2. Quem deu */}
+      {porQuem.length > 0 && (
+        <div className="panel">
+          <div className="panel-h"><h2>👩‍💼 Quem deu <span className="muted-note">· {rotuloPeriodo(tipo, refDia)}</span></h2></div>
+          <div className="grid stats">
+            {porQuem.map((r) => (
+              <div key={r.q} className="card stat">
+                <div className="lbl">{r.q === "—" ? "Sem registro de quem deu" : r.q}</div>
+                <div className="val">{r.n}</div>
+                <div className="foot">aula(s) para {r.alunas} aluna(s) · {r.feitas} já feita(s)</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 3. Detalhes: um presente por linha */}
+      {itens.length > 0 && (
+        <div className="panel">
+          <div className="panel-h">
+            <h2>📋 Presentes <span className="muted-note">· {rotuloPeriodo(tipo, refDia)}</span></h2>
+            <button className="btn sec sm" disabled={!lista.length} onClick={exportar}>⬇ Exportar CSV</button>
+          </div>
+          <div className="ag-filters">
+            <FiltroUnidade unidades={unidades} unit={unit} setUnit={setUnit} />
+          </div>
+          <div className="filters" style={{ display: "flex", flexWrap: "wrap", gap: ".5rem", alignItems: "center", marginBottom: "1rem" }}>
+            <input className="grow" placeholder="🔍 Buscar por aluna, motivo, quem deu ou situação..." value={busca} onChange={(e) => setBusca(e.target.value)} />
+            {busca && <button className="btn ghost sm" onClick={() => setBusca("")}>Limpar busca</button>}
+            <span className="count">{lista.length} presente(s)</span>
+          </div>
+          {lista.length ? (
+            <table>
+              <thead><tr><th>Aluna</th><th>Dado em</th><th>Por</th><th>Motivo</th><th>Situação</th><th>Aula</th></tr></thead>
+              <tbody>
+                {lista.map((x) => {
+                  const d = DESTINO_PRESENTE[x.destino];
+                  return (
+                    <tr key={x.p.id}>
+                      <td className="cli-name c-main">
+                        {x.c ? <span className="row-click" onClick={() => open(<ClientProfile client={x.c} />)}>{x.aluna}</span> : x.aluna}
+                        <div className="cli-sub">{x.unidade}</div>
+                      </td>
+                      <td data-l="Dado em">{fmtDate(x.dadoEm)}<div className="cli-sub">vale até {fmtDate(x.p.expiresOn)}</div></td>
+                      <td data-l="Por">{x.p.dadoPor || "—"}</td>
+                      <td data-l="Motivo" className="cli-sub">{x.p.motivo || "—"}</td>
+                      <td data-l="Situação"><span className={`badge ${d.badge}`}>{d.ic} {d.l}</span></td>
+                      <td data-l="Aula">
+                        {x.aula ? (
+                          <>
+                            {fmtDate(x.aula.date)} · {hhmm(x.aula.time)}
+                            <div className="cli-sub">
+                              {x.aula.status === "cancelada" ? "cancelada" : x.aula.attendance === "presente" ? "presente" : x.aula.attendance === "falta" ? "falta" : x.aula.unit}
+                            </div>
+                          </>
+                        ) : <span className="cli-sub">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty"><div className="ic">🎁</div><p>Nenhum presente para este filtro.</p></div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}

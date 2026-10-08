@@ -790,7 +790,7 @@ function ContinuarCard({ cliente, meta, montarGrade = false, onContinuar }) {
           <div className="pt-sub2">
             {montarGrade
               ? `Escolha ${cliente.weeklyFreq} horário${cliente.weeklyFreq > 1 ? "s" : ""} semanal${cliente.weeklyFreq > 1 ? "is" : ""}. As aulas serão reservadas automaticamente por 12 meses.`
-              : "Pronta para continuar? Escolha o seu plano, pague a primeira mensalidade e monte a sua grade de 12 meses."}
+              : "Pronta para continuar? Escolha o seu plano e a sua grade de 12 meses, e pague a matrícula (1ª mensalidade + taxa de matrícula)."}
           </div>
           {jaPagou && <div className="pt-sub2" style={{ marginTop: ".4rem" }}>✅ A sua primeira mensalidade já está paga — não cobramos de novo.</div>}
         </div>
@@ -807,7 +807,34 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
   const [freq, setFreq] = useState(gradeDoPlanoPago ? Number(data.client.weeklyFreq) : null);
   const [slotsEscolhidos, setSlotsEscolhidos] = useState([]); // 1 a 4 padrões semanais
   const [resultado, setResultado] = useState(null);
+  /* Aluna que ainda não pagou matrícula (veio da avulsa): o servidor abre a
+     reserva de matrícula e devolve o Pix do VALOR CHEIO — taxa + 1ª
+     mensalidade (Vitor, 08/10/2026). Ela só vira mensalista quando cai. */
+  const [cobranca, setCobranca] = useState(null);
+  const [cobrancaPaga, setCobrancaPaga] = useState(false);
   const t = todayISO();
+
+  // Enquanto o Pix está na tela, confere sozinho a cada 5s se já caiu
+  useEffect(() => {
+    if (!cobranca?.booking?.id || cobrancaPaga) return;
+    let vivo = true;
+    const timer = setInterval(async () => {
+      try {
+        const r = await api.portal.checkBookingPay(phone, cobranca.booking.id);
+        if (vivo && r?.pago) setCobrancaPaga(true);
+      } catch { /* ainda não caiu */ }
+    }, 5000);
+    return () => { vivo = false; clearInterval(timer); };
+  }, [cobranca?.booking?.id, cobrancaPaga, phone]);
+
+  const jaPaguei = async () => {
+    setBusy(true);
+    try {
+      const r = await api.portal.checkBookingPay(phone, cobranca.booking.id);
+      if (r?.pago) setCobrancaPaga(true);
+    } catch (e) { flash(e.message || "Pagamento ainda não identificado. Aguarde alguns instantes. 💚"); }
+    finally { setBusy(false); }
+  };
 
   /* 1x a 4x (3x e 4x desde 23/09/2026). A matrícula por aqui é sempre de
      horário FIXO — a grade de 12 meses — então os quatro planos valem. */
@@ -836,21 +863,83 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
     const resumo = slotsEscolhidos
       .map((s) => `• ${fmtDateLong(s.date)} às ${s.time}, em ${s.unit}`)
       .join("\n");
+    const mensal = planos.find((p) => p.freq === freq).valor;
+    const taxa = Math.max(0, Number(meta.taxaMatricula) || 0);
     if (!(await confirmModal({
       title: "Confirmar matrícula",
-      message: `Plano de ${freq}x por semana — ${money(planos.find((p) => p.freq === freq).valor)} por mês.\n\n` +
+      message: `Plano de ${freq}x por semana — ${money(mensal)} por mês.\n\n` +
         `Sua grade semanal:\n${resumo}\n\n` +
+        (gradeDoPlanoPago ? "" :
+          `Para entrar no plano você paga agora, por Pix:\n` +
+          `• 1ª mensalidade: ${money(mensal)}\n` +
+          (taxa ? `• Taxa de matrícula (uma vez só): ${money(taxa)}\n` : "") +
+          `Total: ${money(mensal + taxa)}\n\n` +
+          `A grade é confirmada assim que o Pix cair. `) +
         `Esses horários serão reservados automaticamente por 12 meses. Em feriado a escola não abre, ` +
         `então esses dias ficam de fora da grade — eles não geram crédito de reposição.`,
-      confirmLabel: "Confirmar",
+      confirmLabel: gradeDoPlanoPago ? "Confirmar" : "Confirmar e pagar",
     }))) return;
     setBusy(true);
     try {
       const r = await api.portal.enroll(phone, { weeklyFreq: freq, slotIds: slotsEscolhidos.map((s) => s.id) });
-      setResultado(r);
+      if (r?.cobranca) setCobranca(r.cobranca);
+      else setResultado(r);
     } catch (e) { flash(e.message || "Não consegui concluir."); }
     finally { setBusy(false); }
   };
+
+  if (cobranca && cobrancaPaga) {
+    return (<>
+      <h2 className="pt-h2">🎉 Bem-vinda oficialmente!</h2>
+      <div className="pt-pay">
+        <div className="pt-pay-top">
+          <div>
+            <b className="pt-no-caps">Plano de {freq}x por semana</b>
+            <div className="pt-sub2">Pagamento confirmado pelo banco ✅</div>
+          </div>
+          <div className="pt-pay-val">{money(cobranca.mensalidade)}/mês</div>
+        </div>
+      </div>
+      <div className="pt-fc-resume">
+        📅 A sua grade foi reservada para os próximos 12 meses. A próxima mensalidade vence no mês que vem, no mesmo dia de hoje. 💚
+      </div>
+      <button className="pt-btn" onClick={onDone}>Ir para as minhas aulas</button>
+    </>);
+  }
+
+  if (cobranca) {
+    return (<>
+      <h2 className="pt-h2">💠 Pague para confirmar a matrícula</h2>
+      <div className="pt-pay">
+        <div className="pt-pay-top">
+          <div>
+            <b className="pt-no-caps">Plano de {freq}x por semana</b>
+            <div className="pt-sub2">
+              1ª mensalidade {money(cobranca.mensalidade)}
+              {cobranca.taxa > 0 ? <> + taxa de matrícula {money(cobranca.taxa)}</> : null}
+            </div>
+          </div>
+          <div className="pt-pay-val">{money(cobranca.valor)}</div>
+        </div>
+        {cobranca.pixCode ? (<>
+          <PixQR code={cobranca.pixCode} size={kiosk ? 300 : 220} legenda="Aponte a câmera do seu celular para pagar" />
+          <details className="pt-pix-det">
+            <summary>Prefiro copiar o código</summary>
+            <div className="pt-pix-code">{cobranca.pixCode}</div>
+            <button className="pt-pix-copy" onClick={() => navigator.clipboard?.writeText(cobranca.pixCode)}>📋 Copiar código Pix</button>
+          </details>
+          <p className="pt-hint">Assim que o Pix cair, a tela confirma sozinha. A taxa de matrícula é cobrada uma vez só. 💚</p>
+        </>) : (
+          <p className="pt-hint">
+            Não consegui gerar o Pix agora{cobranca.pixErro ? ` (${cobranca.pixErro})` : ""}. Os seus horários estão guardados —
+            chame a professora para registrar o pagamento de {money(cobranca.valor)}. 💚
+          </p>
+        )}
+      </div>
+      {cobranca.pixCode && <button className="pt-btn" onClick={jaPaguei} disabled={busy}>{busy ? "Conferindo…" : "Já paguei"}</button>}
+      <button className="pt-link" onClick={onBack}>← Voltar</button>
+    </>);
+  }
 
   if (resultado) {
     const inv = resultado.invoice;
@@ -936,7 +1025,7 @@ function EnrollScreen({ data, phone, busy, setBusy, flash, kiosk, onBack, onDone
 
     {freq && slotsEscolhidos.length === freq && (
       <button className="pt-btn" onClick={confirmar} disabled={busy}>
-        {busy ? "Confirmando…" : `Confirmar plano ${freq}x e grade de 12 meses →`}
+        {busy ? "Confirmando…" : gradeDoPlanoPago ? `Confirmar plano ${freq}x e grade de 12 meses →` : `Continuar para o pagamento →`}
       </button>
     )}
   </>);

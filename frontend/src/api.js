@@ -104,6 +104,8 @@ export const api = {
     marcar: (clientId, slotId, forcar) => req("POST", `/api/clients/${clientId}/presente-book`, { slotId, forcar: !!forcar }),
   },
   enroll: (clientId, data) => req("POST", `/api/clients/${clientId}/enroll`, data),
+  // aluna nova / da avulsa: reserva de matrícula com cobrança (taxa + 1ª mensalidade)
+  abrirMatricula: (clientId, data) => req("POST", `/api/clients/${clientId}/matricula`, data),
   refundMatricula: (clientId) => req("POST", `/api/clients/${clientId}/matricula/refund`, {}),
   releaseBooking: (id, reason) => req("POST", `/api/bookings/${id}/release`, { reason: reason || "" }),
   gerarMensalidade: (clientId, competencia) => req("POST", `/api/clients/${clientId}/invoice`, competencia ? { competencia } : {}),

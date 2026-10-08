@@ -2481,7 +2481,11 @@ async function registrarMatriculaPaga(booking) {
     }
   }
   if (!c) return null;
-  if (c.matriculaStatus !== "pendente" && c.status !== "lead") return null;
+  /* Lead do site/WhatsApp (pendente) — ou a aluna da avulsa / nova do
+     atendimento, que abriu a reserva pelo tablet ou pelo painel sem deixar de
+     ser "ativa" (abrirReservaDeMatricula): ainda não é mensalista nem pagou. */
+  const semMatricula = c.matriculaStatus === "nao_aplica" && c.plan !== "mensalista";
+  if (c.matriculaStatus !== "pendente" && c.status !== "lead" && !semMatricula) return null;
   const pagoEm = booking.paymentDate || todayISO();
 
   // Se houver uma 2ª reserva de matrícula (ex.: plano 2x por semana) aguardando hold, confirma-a também:
@@ -2587,7 +2591,6 @@ async function registrarAulaAvulsaPaga(booking) {
   }
   if (!c) return null;
 
-  const pagoEm = booking.paymentDate || todayISO();
   // Aula avulsa/experimental com código de promoção: confirma o uso na campanha
   await confirmarVoucherDaReserva(booking, c).catch((e) =>
     console.warn(`[voucher] ${c.name}: aula avulsa paga, mas o código não foi confirmado — ${e.message}`));
@@ -2606,37 +2609,14 @@ async function registrarAulaAvulsaPaga(booking) {
     console.log(`[avulso pago] ${c.name} (id ${c.id}) ativada como aluna avulsa após confirmação de pagamento.`);
   }
 
-  /* Aula experimental GRÁTIS pelo código: não entrou dinheiro, não há o que
-     lançar. Sem esta saída, o `|| valorAvulsa` abaixo registraria R$ 40 que
-     ninguém pagou. Só vale para reserva que tem uso de código — R$ 0 sem
-     código continua no caminho de sempre. */
-  if (Number(booking.value) === 0 && (await usoDeVoucherDaReserva(booking.id))) return c;
-
-  // Garante fatura quitada no financeiro (Recebimentos do mês)
-  const compAtualStr = competenciaAtual();
-  const valorFinal = Number(booking.value) || Number(SETTINGS.valorAvulsa) || 40;
-  const jaExisteInv = await prisma.invoice.findFirst({
-    where: { clientId: c.id, competencia: compAtualStr },
-  });
-  if (!jaExisteInv) {
-    await prisma.invoice.create({
-      data: {
-        clientId: c.id,
-        competencia: compAtualStr,
-        amountCents: Math.round(valorFinal * 100),
-        dueDate: pagoEm,
-        status: "pago",
-        paidAt: pagoEm,
-        txid: booking.txid || null,
-        baixaManual: !booking.txid,
-      },
-    });
-  } else if (jaExisteInv.status !== "pago") {
-    await prisma.invoice.update({
-      where: { id: jaExisteInv.id },
-      data: { status: "pago", paidAt: pagoEm, txid: booking.txid || jaExisteInv.txid },
-    });
-  }
+  /* A AULA AVULSA NÃO VIRA FATURA (Vitor, 08/10/2026). Até aqui nascia uma
+     fatura "paga" da competência com os R$ 40: ela aparecia no Financeiro como
+     mensalidade e ocupava o lugar da mensalidade daquele mês — quem virava
+     mensalista no mesmo mês ficava sem pagar o mês. A regra agora é outra:
+     avulsa é avulsa, e entrar no plano depois dela é valor cheio (taxa de
+     matrícula + 1ª mensalidade), sem abater os R$ 40. O dinheiro da avulsa
+     mora na própria reserva (value, paid, paymentDate) e sai no relatório de
+     Vendas como aula avulsa. */
   return c;
 }
 
@@ -4299,10 +4279,16 @@ app.post("/api/invoices/gerar-mes", wrap(async (_req, res) => {
      senão a 1ª mensalidade contaria duas vezes. Ir pela reserva, e não pela
      fatura, também pega a matrícula cuja conversão falhou (sem fatura).
      Matrícula devolvida: a mensalidade voltou, a taxa fica (Vitor, 01/09/2026).
-   • Aula avulsa → a reserva paga (registrarAulaAvulsaPaga também cria fatura;
-     pulada pelo mesmo motivo).
+   • Aula avulsa → a reserva paga. Desde 08/10/2026 a avulsa não cria mais
+     fatura; as faturas de avulsa antigas que ainda existirem são puladas pelo
+     mesmo motivo (scripts/separar-avulsas-das-mensalidades.mjs as remove).
    • Aula extra → o ExtraPass pago/usado (presente de campanha é R$ 0, fica fora).
    • Mensalidade → a fatura paga que não nasceu de nenhuma das reservas acima.
+   • Matrícula feita no PAINEL (atendimento) ou no portal da sala → não tem
+     reserva de matrícula; o dinheiro entra como fatura. A 1ª fatura paga dela
+     (de matriculaPainelAt em diante) sai como matrícula, não como mensalidade.
+     Antes, quem entrava pelo atendimento não era contada como matrícula no
+     mês (Vitor, 08/10/2026).
 
    A fatura "nasceu da reserva" quando tem o mesmo txid, ou — baixa manual, sem
    txid — quando é da mesma aluna e foi paga no mesmo dia da reserva.
@@ -4315,7 +4301,7 @@ app.get("/api/relatorios/vendas", wrap(async (req, res) => {
   const dia = (v) => String(v || "").slice(0, 10);
 
   const [clients, reservas, faturas, passes] = await Promise.all([
-    prisma.client.findMany({ select: { id: true, name: true, phone: true, unit: true, plan: true, matriculaStatus: true, weeklyFreq: true } }),
+    prisma.client.findMany({ select: { id: true, name: true, phone: true, unit: true, plan: true, matriculaStatus: true, matriculaAt: true, matriculaPainelAt: true, trialDate: true, weeklyFreq: true } }),
     prisma.booking.findMany({
       where: { paid: true, value: { gt: 0 }, paymentMethod: { notIn: [PGTO_PLANO, PGTO_REPOSICAO, PGTO_EXTRA] } },
       select: { id: true, clientName: true, phone: true, unit: true, value: true, taxaMatricula: true, paymentMethod: true, paymentDate: true, txid: true, date: true },
@@ -4335,10 +4321,22 @@ app.get("/api/relatorios/vendas", wrap(async (req, res) => {
   const plano = (c) => (c?.weeklyFreq ? `${c.weeklyFreq}x por semana` : "");
 
   /* Aula de mensalista marcada como paga no painel não é venda: o dinheiro
-     dela é a mensalidade (era o R$ 20 por aula que saiu em 30/08/2026). */
+     dela é a mensalidade (era o R$ 20 por aula que saiu em 30/08/2026).
+
+     MAS a avulsa paga ANTES de ela entrar no plano continua sendo avulsa. A
+     baixa pelo painel troca a marca "Aula Avulsa" pela forma de pagamento
+     (Pix, Dinheiro…), e antes a avulsa sumia do mês dela, para trás, assim que
+     a aluna virava mensalista (Vitor, 08/10/2026). "Antes do plano" = até a
+     1ª aula (trialDate) ou paga até o dia da matrícula (fez a avulsa e fechou
+     o plano no mesmo dia, depois da aula). */
+  const entradaNoPlano = (c) => c?.matriculaPainelAt || c?.matriculaAt || null;
+  const antesDoPlano = (b, c) => !!c && (
+    (!!c.trialDate && b.date <= c.trialDate) ||
+    (!!entradaNoPlano(c) && (b.paymentDate || b.date) <= entradaNoPlano(c)));
   const vendas = reservas
     .map((b) => ({ b, c: clienteDaReserva(b) }))
-    .filter(({ b, c }) => ehPagamentoDeMatricula(b.paymentMethod) || b.paymentMethod === "Aula Avulsa" || c?.plan !== "mensalista");
+    .filter(({ b, c }) => ehPagamentoDeMatricula(b.paymentMethod) || b.paymentMethod === "Aula Avulsa" ||
+      c?.plan !== "mensalista" || antesDoPlano(b, c));
 
   const itens = [];
   let devolvidas = 0;
@@ -4358,18 +4356,47 @@ app.get("/api/relatorios/vendas", wrap(async (req, res) => {
 
   // Faturas que nasceram das reservas acima (mesmo txid, ou mesma aluna no mesmo dia)
   const txidsDeReserva = new Set(vendas.map(({ b }) => b.txid).filter(Boolean));
-  const reservaNoDia = new Set(vendas.map(({ b }) => `${b.clientName}|${b.paymentDate || b.date}`));
+  /* Sem txid, "nasceu da reserva" exige o MESMO VALOR além do mesmo dia: a
+     avulsa paga em dinheiro e a 1ª mensalidade com baixa manual no mesmo dia
+     (fez a aula e fechou o plano) são dois pagamentos, e a mensalidade sumia. */
+  const centavos = (v) => Math.round((Number(v) || 0) * 100);
+  const reservaNoDia = new Set(vendas.flatMap(({ b }) => {
+    const k = `${b.clientName}|${b.paymentDate || b.date}`;
+    return [`${k}|${centavos(b.value)}`, `${k}|${centavos(mensalidadeDaReserva(b))}`];
+  }));
+  const nasceuDeReserva = (i) => {
+    if (i.txid) return txidsDeReserva.has(i.txid);
+    const c = porId.get(i.clientId);
+    return !!c && reservaNoDia.has(`${c.name}|${dia(i.paidAt)}|${i.amountCents}`);
+  };
+
+  /* Matrícula sem reserva de matrícula — pelo painel/portal (matriculaPainelAt)
+     ou pela baixa de lead mensalista que não tinha reserva (matriculaAt): a 1ª
+     fatura paga dela, em todo o histórico (não só no período) — senão a
+     mensalidade do mês seguinte também viraria "matrícula" ao olhar só aquele
+     mês. Quem tem reserva de matrícula (contada ou devolvida) fica de fora:
+     essa já entrou, ou já saiu, acima. */
+  const comReservaDeMatricula = new Set(vendas
+    .filter(({ b, c }) => c && ehPagamentoDeMatricula(b.paymentMethod))
+    .map(({ c }) => c.id));
+  const matriculaDoPainel = new Map(); // clientId → id da fatura que é a matrícula
+  for (const i of [...faturas].sort((a, b) => dia(a.paidAt).localeCompare(dia(b.paidAt)) || a.competencia.localeCompare(b.competencia))) {
+    const c = porId.get(i.clientId);
+    const entrada = entradaNoPlano(c);
+    if (!entrada || c.matriculaStatus === "devolvida" || comReservaDeMatricula.has(c.id) || matriculaDoPainel.has(c.id)) continue;
+    if (i.competencia < entrada.slice(0, 7) || nasceuDeReserva(i)) continue;
+    matriculaDoPainel.set(c.id, i.id);
+  }
+
   for (const i of faturas) {
     const pagoEm = dia(i.paidAt);
     if (!noPeriodo(pagoEm)) continue;
     const c = porId.get(i.clientId);
-    if (i.txid && txidsDeReserva.has(i.txid)) continue;
-    if (!i.txid && c && reservaNoDia.has(`${c.name}|${pagoEm}`)) continue;
-    itens.push({
-      tipo: "mensalidade", data: pagoEm, unidade: unidade(c?.unit), aluna: c?.name || `aluno #${i.clientId}`,
-      clientId: i.clientId, valor: i.amountCents / 100,
-      detalhe: `${i.competencia}${i.baixaManual ? " · baixa manual" : ""}`,
-    });
+    if (nasceuDeReserva(i)) continue;
+    const base = { data: pagoEm, unidade: unidade(c?.unit), aluna: c?.name || `aluno #${i.clientId}`, clientId: i.clientId, valor: i.amountCents / 100 };
+    itens.push(matriculaDoPainel.get(i.clientId) === i.id
+      ? { ...base, tipo: "matricula", detalhe: plano(c) }
+      : { ...base, tipo: "mensalidade", detalhe: `${i.competencia}${i.baixaManual ? " · baixa manual" : ""}` });
   }
 
   for (const p of passes) {
@@ -5056,7 +5083,18 @@ app.post("/api/portal/:key/enroll", wrap(async (req, res) => {
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const pode = clientPodeAcessarPortal(client);
   if (!pode.ok) return res.status(403).json({ error: pode.motivo });
-  try { res.json(await converterEmMensalista(client, { ...(req.body || {}), exigirGrade: true })); }
+  /* Quem ainda não pagou matrícula (a aluna da avulsa entrando no plano) paga
+     o VALOR CHEIO antes: abre a reserva de matrícula com o Pix de taxa + 1ª
+     mensalidade (ver abrirReservaDeMatricula). Só quem já pagou a 1ª
+     mensalidade (conversão que falhou, ou "definir a grade depois") monta a
+     grade direto. */
+  const jaPagou = client.matriculaStatus === "paga" || client.matriculaStatus === "convertida" ||
+    (client.plan === "mensalista" && !!client.weeklyFreq);
+  try {
+    res.json(jaPagou
+      ? await converterEmMensalista(client, { ...(req.body || {}), exigirGrade: true, novata: true })
+      : { cobranca: await abrirReservaDeMatricula(client, { weeklyFreq: req.body?.weeklyFreq, mensalistaTipo: "fixo", slotIds: req.body?.slotIds }) });
+  }
   catch (e) { res.status(e.code || 500).json({ error: e.message }); }
 }));
 
@@ -5288,7 +5326,10 @@ async function criarGradeInicial12Meses(client, slotsBase) {
 // e, quando ela escolhe a grade, replica os padrões por 12 meses. Lança { code }.
 // `mensalidadePaga` chega quando o pagamento da matrícula JÁ é a mensalidade
 // do mês corrente — é o caminho da tela pública da aluna nova.
-async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, billingDay, mensalistaTipo, mensalidadePaga, exigirGrade = false, monthlyValue }) {
+// `novata` = aluna nova entrando pelo painel (atendimento) ou pelo portal da
+// sala, sem reserva de matrícula: grava matriculaPainelAt, que é o que a faz
+// contar como matrícula no relatório de Vendas.
+async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, billingDay, mensalistaTipo, mensalidadePaga, exigirGrade = false, monthlyValue, novata = false }) {
   const jaMensalista = client.plan === "mensalista" && !!client.weeklyFreq;
   const freq = freqDoPlano(jaMensalista ? client.weeklyFreq : weeklyFreq);
   const tipo = mensalistaTipo === "escala" ? "escala" : "fixo";
@@ -5366,6 +5407,9 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
 
   // A 1ª mensalidade paga vira matrícula; quem não pagou entra como isenta.
   const virouMatricula = client.matriculaStatus === "paga" || client.matriculaStatus === "convertida";
+  /* Quem já pagou a reserva de matrícula (site/WhatsApp) já é contada por ela
+     no relatório de Vendas — marcar aqui de novo contaria duas vezes. */
+  const matriculaPeloPainel = novata && !jaMensalista && !virouMatricula && !client.matriculaPainelAt;
   const atualizado = await prisma.client.update({
     where: { id: client.id },
     data: {
@@ -5379,6 +5423,7 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
         : client.monthlyValue,
       billingDay: dia,
       ...(virouMatricula ? { matriculaStatus: "convertida" } : {}),
+      ...(matriculaPeloPainel ? { matriculaPainelAt: todayISO() } : {}),
     },
   });
 
@@ -5428,6 +5473,128 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
     primeiroVencimento: invoice?.dueDate || null,
   };
 }
+
+/* ---------- MATRÍCULA COM COBRANÇA: tablet da sala e painel ----------
+
+   AVULSA → PLANO é VALOR CHEIO: taxa de matrícula + 1ª mensalidade, e os
+   R$ 40 da avulsa não abatem nada (Vitor, 08/10/2026: "fez a aula avulsa hoje
+   e gostou, depois da aula já vai fechar a mensalidade… paga o valor cheio").
+   Vale também para a aluna nova que a Inêz matricula no atendimento.
+
+   Antes, o tablet e o painel viravam a aluna mensalista NA HORA: sem taxa, sem
+   o mês corrente (a 1ª cobrança caía no mês seguinte). Agora as duas portas
+   fazem o mesmo que o site: abrem a RESERVA DE MATRÍCULA (marca "1ª
+   mensalidade", valor = mensalidade + taxa) nos horários escolhidos — o 1º
+   horário leva o valor, os demais da semana vão com R$ 0, como no site. Quando
+   ela é paga — Pix (webhook ou consulta) ou baixa da Inêz em
+   /api/bookings/:id/pay — registrarMatriculaPaga faz o resto: mensalista, mês
+   corrente quitado, grade de 12 meses e a próxima mensalidade no mês seguinte.
+   O relatório de Vendas conta matrícula + taxa pela própria reserva.
+
+   SEM o prazo de 10 minutos (holdUntil null): a rodada das reservas seguradas
+   é a do WhatsApp — ao expirar ela manda mensagem e devolve a ficha a lead.
+   Aqui quem decide é a escola; a reserva não paga aparece no alerta "1ª
+   mensalidade pendente" do painel, e refazer a matrícula solta a anterior. */
+async function abrirReservaDeMatricula(client, { weeklyFreq, mensalistaTipo, slotIds, gerarPix = true }) {
+  if (client.status === "cancelado")
+    throw Object.assign(new Error(`${client.name} está com a inscrição cancelada — reative a ficha antes de matricular.`), { code: 409 });
+  if (client.plan === "mensalista" && client.weeklyFreq)
+    throw Object.assign(new Error("Esta aluna já é mensalista. Para alterar o plano dela, use a troca de plano."), { code: 409 });
+  if (client.matriculaStatus === "paga" || client.matriculaStatus === "convertida")
+    throw Object.assign(new Error("A 1ª mensalidade dela já está paga — use \"Matricular como mensalista\" para montar a grade."), { code: 409 });
+
+  const freq = freqDoPlano(weeklyFreq);
+  const tipo = mensalistaTipo === "escala" ? "escala" : "fixo";
+  const erroEscala = erroEscalaSoAte2x(freq, tipo);
+  if (erroEscala) throw erroEscala;
+
+  // Fixo: um horário por aula da semana (vira a grade). Escala: só a 1ª aula.
+  const ids = [...new Set((slotIds || []).map(Number).filter(Boolean))];
+  const precisa = tipo === "escala" ? 1 : freq;
+  if (ids.length !== precisa)
+    throw Object.assign(new Error(tipo === "escala"
+      ? "Escolha o horário da 1ª aula do plano."
+      : `Escolha ${freq} horário${freq > 1 ? "s" : ""} semanal${freq > 1 ? "is" : ""} diferente${freq > 1 ? "s" : ""}.`), { code: 400 });
+  const slots = (await prisma.slot.findMany({ where: { id: { in: ids } } }))
+    .sort((a, b) => (a.date + hhmm(a.time)).localeCompare(b.date + hhmm(b.time)));
+  if (slots.length !== ids.length) throw Object.assign(new Error("Um dos horários escolhidos não existe mais."), { code: 404 });
+
+  const diaDaSemana = (s) => new Date(s.date + "T00:00Z").getUTCDay();
+  if (new Set(slots.map((s) => `${s.unit}|${diaDaSemana(s)}|${hhmm(s.time)}`)).size !== slots.length)
+    throw Object.assign(new Error("Escolha dias ou horários semanais diferentes para a grade."), { code: 400 });
+  for (let i = 0; i < slots.length; i++) {
+    for (let j = i + 1; j < slots.length; j++) {
+      const a = slots[i], b = slots[j];
+      if (a.unit === b.unit && diaDaSemana(a) === diaDaSemana(b) && haChoque(hhmm(a.time), hhmm(b.time)))
+        throw Object.assign(new Error(`Os horários ${hhmm(a.time)} e ${hhmm(b.time)} caem no mesmo dia da semana e se sobrepõem. Escolha horários que não se cruzem.`), { code: 400 });
+    }
+  }
+
+  // Refazer a matrícula solta a reserva anterior que não foi paga
+  await prisma.booking.updateMany({
+    where: { clientName: client.name, paymentMethod: MARCA_MATRICULA, status: "aguardando", paid: false },
+    data: { status: "cancelada", holdUntil: null, absenceReason: "Reserva de matrícula refeita" },
+  });
+
+  const hoje = todayISO();
+  for (const s of slots) {
+    if (s.date < hoje) throw Object.assign(new Error("Escolha somente aulas futuras."), { code: 400 });
+    if (feriadoNoDia(s.date, s.unit)) throw Object.assign(new Error(recusaFeriado(feriadoNoDia(s.date, s.unit), s.date)), { code: 409 });
+    const dup = await prisma.booking.findFirst({ where: { slotId: s.id, clientName: client.name, status: { not: "cancelada" } } });
+    if (dup) throw Object.assign(new Error(`${client.name} já tem aula em ${fmtDiaBR(s.date)} às ${hhmm(s.time)}. Escolha outro horário.`), { code: 409 });
+    if ((await occupancy(s.id)) >= (s.capacity || 1))
+      throw Object.assign(new Error(`A turma de ${fmtDiaBR(s.date)} às ${hhmm(s.time)} está lotada.`), { code: 409 });
+  }
+
+  const taxa = taxaMatriculaAtual();
+  const total = valorPrimeiroPagamento(freq);
+  const reservas = [];
+  for (const [n, s] of slots.entries()) {
+    reservas.push(await prisma.booking.create({
+      data: {
+        clientName: client.name, phone: client.phone || "", unit: s.unit,
+        date: s.date, time: s.time, prof: s.prof, slotId: s.id,
+        status: "aguardando",
+        value: n === 0 ? total : 0,
+        taxaMatricula: n === 0 ? (taxa || null) : null,
+        paymentMethod: MARCA_MATRICULA,
+        holdUntil: null,
+      },
+    }));
+  }
+  // O plano fica guardado como INTENÇÃO, como no site: quem vira a chave é o pagamento.
+  await prisma.client.update({
+    where: { id: client.id },
+    data: { weeklyFreq: freq, mensalistaTipo: tipo, trialDate: client.trialDate || slots[0].date },
+  });
+
+  /* Pago por fora (dinheiro, cartão, Pix na chave da escola): nenhum Pix é
+     aberto no banco — uma cobrança viva seria a porta para ela pagar duas vezes. */
+  let pixCode = null, pixErro = null;
+  if (gerarPix) {
+    try { pixCode = (await emitirPixDaReserva(reservas[0], {})).pixCode || null; }
+    catch (e) { pixErro = e.message; }
+  }
+  console.log(`[matricula] ${client.name}: reserva de matrícula aberta (${freq}x ${tipo}, ${moedaBR(total)}) — aguardando pagamento.`);
+  return {
+    booking: reservas[0],
+    reservas,
+    valor: total,
+    mensalidade: valorDoPlano(freq),
+    taxa,
+    pixCode,
+    pixErro,
+  };
+}
+
+// Painel (atendimento): abre a reserva de matrícula. O pagamento é o Pix ou a
+// baixa em /api/bookings/:id/pay. body { weeklyFreq, mensalistaTipo, slotIds, gerarPix }
+app.post("/api/clients/:id/matricula", wrap(async (req, res) => {
+  const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
+  if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  try { res.json(await abrirReservaDeMatricula(client, { ...(req.body || {}), gerarPix: req.body?.gerarPix !== false })); }
+  catch (e) { res.status(e.code || 500).json({ error: e.message }); }
+}));
 
 /* ---------- TROCAR O PLANO DE QUEM JÁ É MENSALISTA ----------
 
@@ -5537,7 +5704,9 @@ async function trocarPlanoMensalista(client, { weeklyFreq, mensalistaTipo, billi
 }
 
 /* Matricular OU trocar o plano, pelo painel.
-   body { weeklyFreq, slotId?, billingDay?, mensalistaTipo? } */
+   body { weeklyFreq, slotId?, billingDay?, mensalistaTipo?, novata? }
+   `novata: false` = cadastro de quem JÁ era aluna antes do sistema: não conta
+   como matrícula nova no relatório de Vendas. Sem o campo, conta. */
 app.post("/api/clients/:id/enroll", wrap(async (req, res) => {
   const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
@@ -5546,7 +5715,7 @@ app.post("/api/clients/:id/enroll", wrap(async (req, res) => {
     const jaEMensalista = client.plan === "mensalista" && !!client.weeklyFreq;
     res.json(jaEMensalista
       ? await trocarPlanoMensalista(client, req.body || {})
-      : await converterEmMensalista(client, req.body || {}));
+      : await converterEmMensalista(client, { ...(req.body || {}), novata: req.body?.novata !== false }));
   } catch (e) { res.status(e.code || 500).json({ error: e.message }); }
 }));
 
@@ -7921,6 +8090,10 @@ app.post(
       }
     } else {
       // Caso Aula Avulsa
+      /* O pagamento da avulsa fica registrado NA AULA (não há mais fatura).
+         Sem aula marcada, o dinheiro não teria onde ficar. */
+      if (!bookings.length)
+        return res.status(400).json({ error: `Marque a aula avulsa de ${client.name} na agenda antes de dar baixa — o pagamento fica registrado na aula.` });
       const valorPadrao = Number(SETTINGS.valorAvulsa) || 40;
       if (valorFinal === null) {
         valorFinal = bookings[0]?.value ? Number(bookings[0].value) : valorPadrao;
@@ -7964,29 +8137,8 @@ app.post(
         });
         await avisarMatriculaConfirmada(bookingAtualizado);
       }
-
-      // Cria fatura quitada para constar em Recebimentos / Financeiro
-      const jaExisteInv = await prisma.invoice.findFirst({
-        where: { clientId: client.id, competencia: compAtualStr },
-      });
-      if (!jaExisteInv) {
-        await prisma.invoice.create({
-          data: {
-            clientId: client.id,
-            competencia: compAtualStr,
-            amountCents: Math.round(valorFinal * 100),
-            dueDate: dataPgto,
-            status: "pago",
-            paidAt: dataPgto,
-            baixaManual: true,
-          },
-        });
-      } else if (jaExisteInv.status !== "pago") {
-        await prisma.invoice.update({
-          where: { id: jaExisteInv.id },
-          data: { status: "pago", paidAt: dataPgto, baixaManual: true },
-        });
-      }
+      /* Sem fatura: a avulsa não é mensalidade (ver registrarAulaAvulsaPaga).
+         O dinheiro fica na reserva e sai em Vendas como aula avulsa. */
     }
 
     const clientAtualizado = await prisma.client.findUnique({ where: { id: client.id } });
@@ -8582,6 +8734,8 @@ const COLUNAS_ESPERADAS = [
      20260901140000 para o porquê de serem duas. */
   ["Settings", "taxaMatricula", "DOUBLE NOT NULL DEFAULT 20"],
   ["Booking", "taxaMatricula", "DOUBLE NULL"],
+  // matrícula de aluna nova pelo painel/portal (08/10/2026)
+  ["Client", "matriculaPainelAt", "VARCHAR(10) NULL"],
 ];
 
 /* Tabelas inteiras que o código novo espera. Mesmo espírito das colunas acima:

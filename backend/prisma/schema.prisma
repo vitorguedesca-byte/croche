@@ -47,6 +47,11 @@ model Client {
   matriculaStatus String  @default("nao_aplica") @db.VarChar(20)
   matriculaAt     String? @db.VarChar(10) // quando a taxa foi paga
   matriculaRefundAt String? @db.VarChar(10) // quando a taxa foi devolvida
+  /* Aluna NOVA matriculada pelo painel (atendimento) ou pelo portal da sala —
+     caminhos sem a reserva de matrícula do site/WhatsApp, e por isso sem
+     matriculaAt. É esta data que faz a 1ª mensalidade paga dela contar como
+     matrícula no relatório de Vendas (Vitor, 08/10/2026). */
+  matriculaPainelAt String? @db.VarChar(10)
   trialDate       String? @db.VarChar(10) // data da 1ª aula (nome herdado do fluxo antigo)
   /* De onde veio a ficha. Interessa na tela: o cadastro feito pela conversa do
      WhatsApp é digitado pela própria aluna, sem ninguém conferindo do outro
