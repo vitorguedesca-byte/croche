@@ -43,4 +43,5 @@ Desktop.ini
 # ===== Editores/IDE =====
 .vscode/
 .idea/
+.claude/
 *.swp
