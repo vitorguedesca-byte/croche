@@ -305,7 +305,12 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   /* Código de promoção (campanha da escola). A prévia vem do servidor — é lá
      que a conta é feita — e é refeita quando ela troca de plano, porque o
      desconto depende do plano. A vaga na campanha só é ocupada ao gerar o Pix. */
-  const [codigo, setCodigo] = useState("");
+  const [codigo, setCodigo] = useState(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      return (p.get("cupom") || p.get("voucher") || p.get("codigo") || p.get("c") || "").trim().toUpperCase();
+    } catch { return ""; }
+  });
   const [voucher, setVoucher] = useState(null); // { codigo, beneficios, descricao, pagamento }
   const [erroVoucher, setErroVoucher] = useState("");
   const [validando, setValidando] = useState(false);
@@ -352,6 +357,13 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   useEffect(() => {
     if (voucher && !booking) validarCodigo(voucher.codigo, modalidade, true);
   }, [modalidade]);
+
+  // Se o código veio pela URL, valida assim que entrar no passo de pagamento
+  useEffect(() => {
+    if (codigo && !voucher && !booking && step === "pay") {
+      validarCodigo(codigo, modalidade, true);
+    }
+  }, [step, codigo]);
 
   const loadAvail = async (u) => {
     setLoading(true);
@@ -601,34 +613,51 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 />
               )}
 
-              {/* Código de promoção: antes do resumo, para o resumo já sair com o desconto */}
-              <div style={{ marginTop: "1rem" }}>
+              {/* Cupom ou código de desconto: sempre visível para a aluna encontrar facilmente */}
+              <div style={{ marginTop: "1.2rem" }}>
                 {voucher ? (
-                  <div style={{ padding: ".85rem 1rem", borderRadius: 10, border: "2px solid var(--green-deep)", background: "rgba(28,94,51,.06)" }}>
+                  <div style={{ padding: ".85rem 1rem", borderRadius: 12, border: "2px solid var(--green-deep)", background: "rgba(28,94,51,.06)" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: ".5rem", alignItems: "baseline" }}>
-                      <b style={{ color: "var(--green-deep)" }}>🎟️ Código {voucher.codigo} aplicado!</b>
-                      <button type="button" className="pt-link" style={{ margin: 0, fontSize: ".85rem" }}
+                      <b style={{ color: "var(--green-deep)", fontSize: "1rem" }}>🎟️ Cupom {voucher.codigo} aplicado!</b>
+                      <button type="button" className="pt-link" style={{ margin: 0, fontSize: ".85rem", color: "var(--danger, #c32)" }}
                         onClick={() => { setVoucher(null); setCodigo(""); setErroVoucher(""); }}>Remover</button>
                     </div>
                     {voucher.descricao && <div style={{ fontSize: ".92rem", marginTop: ".25rem" }}>{voucher.descricao}</div>}
-                    <ul style={{ margin: ".35rem 0 0 1.1rem", fontSize: ".92rem" }}>
+                    <ul style={{ margin: ".35rem 0 0 1.1rem", fontSize: ".92rem", color: "var(--green-deep)", fontWeight: 600 }}>
                       {voucher.beneficios.map((t) => <li key={t}>{t}</li>)}
                     </ul>
                   </div>
                 ) : (
-                  <details open={!!codigo || !!erroVoucher}>
-                    <summary style={{ cursor: "pointer", fontWeight: 600, color: "var(--green-deep)" }}>🎟️ Tenho um código de promoção</summary>
-                    <div style={{ display: "flex", gap: ".5rem", marginTop: ".5rem" }}>
-                      <input className="pt-input" style={{ textAlign: "left", fontSize: "1.05rem", textTransform: "uppercase", margin: 0 }}
-                        value={codigo} onChange={(e) => setCodigo(e.target.value)} placeholder="Digite o código"
-                        onKeyDown={(e) => { if (e.key === "Enter") validarCodigo(codigo); }} />
-                      <button type="button" className="pt-btn pt-btn-out" style={{ width: "auto", margin: 0, padding: "0 1.1rem" }}
-                        onClick={() => validarCodigo(codigo)} disabled={validando || !codigo.trim()}>
+                  <div style={{
+                    padding: ".9rem 1rem",
+                    borderRadius: 12,
+                    border: "1.5px dashed var(--green-mid, #2d7a46)",
+                    background: "rgba(28,94,51,.03)",
+                  }}>
+                    <label className="pt-label" style={{ marginTop: 0, marginBottom: ".4rem", display: "flex", alignItems: "center", gap: ".4rem", color: "var(--green-deep)", fontSize: ".95rem" }}>
+                      <span>🎟️</span> <b>Tem um cupom ou código de desconto?</b>
+                    </label>
+                    <div style={{ display: "flex", gap: ".5rem" }}>
+                      <input
+                        className="pt-input"
+                        style={{ textAlign: "left", fontSize: "1.05rem", textTransform: "uppercase", margin: 0, background: "#fff" }}
+                        value={codigo}
+                        onChange={(e) => { setCodigo(e.target.value.toUpperCase()); if (erroVoucher) setErroVoucher(""); }}
+                        placeholder="Digite o código (ex: OUTUBRO100)"
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); validarCodigo(codigo); } }}
+                      />
+                      <button
+                        type="button"
+                        className="pt-btn pt-btn-out"
+                        style={{ width: "auto", margin: 0, padding: "0 1.15rem", whiteSpace: "nowrap", fontWeight: 700 }}
+                        onClick={() => validarCodigo(codigo)}
+                        disabled={validando || !codigo.trim()}
+                      >
                         {validando ? "…" : "Aplicar"}
                       </button>
                     </div>
                     {erroVoucher && <div className="pt-err" style={{ marginTop: ".5rem" }}>{erroVoucher}</div>}
-                  </details>
+                  </div>
                 )}
               </div>
 
@@ -696,6 +725,23 @@ export default function FirstClassBooking({ onBack, fromSite }) {
               <p className="pt-hint">{pix.code
                 ? "A baixa é automática: assim que o Pix for confirmado pelo banco, sua vaga fica garantida. Você também pode clicar no botão acima a qualquer momento para verificar. 💚"
                 : "Depois de pagar, envie o comprovante no WhatsApp: a escola confere e confirma a sua vaga. 💚"}</p>
+
+              <div style={{ marginTop: "1.3rem", paddingTop: ".9rem", borderTop: "1px dashed var(--line)", textAlign: "center" }}>
+                <button
+                  type="button"
+                  className="pt-link"
+                  style={{ fontSize: ".92rem", color: "var(--muted)", textDecoration: "underline", cursor: "pointer", margin: 0 }}
+                  onClick={async () => {
+                    if (booking?.id) {
+                      try { await api.cancelPendingBooking(booking.id); } catch {}
+                    }
+                    setPix(null);
+                    setBooking(null);
+                  }}
+                >
+                  ← Esqueci de colocar o cupom / Alterar plano ou dados
+                </button>
+              </div>
             </>)}
           </div>
         )}

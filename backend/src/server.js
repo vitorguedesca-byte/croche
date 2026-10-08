@@ -161,7 +161,7 @@ const PUBLIC_API = [
      O PATCH saiu daqui em 01/09/2026: ele mexe em status, valor, forma de
      pagamento e `paid` de QUALQUER reserva, e nenhuma tela pública o usa —
      quem o chama é o painel, que já entra logado. */
-  ["POST", /^\/api\/bookings\/\d+\/(invoice|pay)$/],
+  ["POST", /^\/api\/bookings\/\d+\/(invoice|pay|cancel-pending)$/],
   ["POST", /^\/api\/auth\/(check|set-pin|login)$/],
   [null, /^\/api\/portal\//],
   /* Prévia do código de promoção na tela pública de matrícula. Só CONSULTA
@@ -2954,6 +2954,32 @@ app.post(
     } catch (e) {
       res.status(e.code || 500).json({ error: e.message });
     }
+  })
+);
+
+app.post(
+  "/api/bookings/:id/cancel-pending",
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const booking = await prisma.booking.findUnique({ where: { id } });
+    if (!booking) return res.json({ ok: true });
+    if (soMatriculaPelaPortaPublica(req, res, booking)) return;
+    // Cancela a reserva pendente não paga e demais horários da mesma matrícula
+    await prisma.booking.updateMany({
+      where: {
+        clientName: booking.clientName,
+        paymentMethod: booking.paymentMethod,
+        status: "aguardando",
+        paid: false,
+      },
+      data: { status: "cancelada", holdUntil: null, absenceReason: "A aluna voltou para alterar dados ou aplicar cupom" },
+    });
+    // Se havia reserva de uso de voucher ligada a esta reserva, cancela para liberar a vaga da promoção
+    await prisma.voucherUso.updateMany({
+      where: { bookingId: booking.id, status: "reservado" },
+      data: { status: "cancelado" },
+    });
+    res.json({ ok: true });
   })
 );
 

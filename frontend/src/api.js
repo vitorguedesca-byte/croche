@@ -76,6 +76,7 @@ export const api = {
   deleteBooking: (id, series) => req("DELETE", `/api/bookings/${id}${series ? "?series=1" : ""}`),
   payBooking: (id, data) => req("POST", `/api/bookings/${id}/pay`, data),
   createInvoice: (id, data) => req("POST", `/api/bookings/${id}/invoice`, data),
+  cancelPendingBooking: (id) => req("POST", `/api/bookings/${id}/cancel-pending`),
 
   createClient: (data) => req("POST", "/api/clients", data),
   updateClient: (id, data) => req("PATCH", `/api/clients/${id}`, data),
