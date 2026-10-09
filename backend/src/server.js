@@ -95,7 +95,8 @@ import {
 } from "./textosEscola.js";
 import { sicrediConfigured, sicrediMissing, createCharge, getCharge, isPaidStatus, extractPix } from "./sicredi.js";
 import { enviarEventoMeta, contextoDoNavegador, guardarContexto, contextoGuardado } from "./metaCapi.js";
-import { waConfigured, waTemplatesConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, parseTemplateStatuses, normalizePhone, listWaTemplates } from "./wa.js";
+import { waConfigured, waTemplatesConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, parseTemplateStatuses, normalizePhone, listWaTemplates, createWaTemplate } from "./wa.js";
+import { montarTemplate, textoComMarcadores, MARCADORES, LIMITES as LIMITES_TEMPLATE } from "./waTemplateRegras.js";
 import {
   CONVERSA_EXPIRA_H,
   conversaExpirou,
@@ -6069,7 +6070,8 @@ app.post("/api/wa/webhook", async (req, res) => {
        depois da submissão sem ninguém apertar nada. */
     for (const t of parseTemplateStatuses(req.body)) {
       cacheTemplates.em = 0;
-      console.log(`[wa templates] a Meta mudou ${t.name} para ${t.status}${t.reason ? ` (${t.reason})` : ""}.`);
+      const oque = t.campo === "template_category_update" ? "a categoria de" : t.campo === "message_template_quality_update" ? "a qualidade de" : "";
+      console.log(`[wa templates] a Meta mudou ${oque ? oque + " " : ""}${t.name} para ${t.status}${t.reason ? ` (${t.reason})` : ""}.`);
     }
     const msg = parseIncoming(req.body);
     if (!msg || waSeen.has(msg.id)) return;
@@ -6090,9 +6092,14 @@ app.post("/api/wa/webhook", async (req, res) => {
    fechada volta 200 e some — ver `janelaAbertaPara`. Por isso a tela oferece
    dois modos, e nenhum deles "tenta texto e vê no que dá":
 
-     template → chega para todas (é pago por mensagem);
+     template → chega para todas (pago por mensagem; marketing é o mais caro
+                e a Meta segura o excesso por pessoa — erro 131049);
      texto    → só sai para quem falou com a escola nas últimas 24h; as demais
                 são PULADAS e aparecem no resultado como "conversa fechada".
+                Desde 01/10/2026 também é cobrado (preço de utilidade).
+
+   Quando o texto livre não alcança quem precisa, a Inêz cria o template ali
+   mesmo — ver "CRIAR TEMPLATE PELO PAINEL".
 
    O envio roda em segundo plano (180 alunas não cabem numa requisição HTTP) e
    cada mensagem fica em WaMessage com kind "disparo...", então a tela mostra a
@@ -6166,6 +6173,17 @@ const MOTIVO_STATUS = {
   DISABLED: "desativado pela Meta",
   PENDING_DELETION: "marcado para exclusão",
 };
+/* O `rejected_reason` vem em código; a Inêz precisa do que fazer. */
+const MOTIVO_RECUSA = {
+  INVALID_FORMAT: "formato inválido (marcador mal posto, texto curto para os marcadores, ou cabeçalho/rodapé fora da regra)",
+  TAG_CONTENT_MISMATCH: "a categoria escolhida não bate com o texto",
+  INCORRECT_CATEGORY: "categoria errada para o conteúdo",
+  PROMOTIONAL: "conteúdo promocional numa categoria que não é marketing",
+  ABUSIVE_CONTENT: "conteúdo considerado abusivo",
+  SCAM: "parece golpe/spam",
+};
+// GREEN/YELLOW/RED: a Meta pausa template que fica vermelho
+const QUALIDADE = { GREEN: "alta", YELLOW: "média", RED: "baixa", UNKNOWN: null };
 function descreverTemplateDisparo(t) {
   const comp = (tipo) => (t.components || []).find((c) => c.type === tipo);
   const header = comp("HEADER"), body = comp("BODY"), footer = comp("FOOTER"), botoes = comp("BUTTONS");
@@ -6184,7 +6202,10 @@ function descreverTemplateDisparo(t) {
     language: t.language,
     category: t.category,
     status,
-    motivoRecusa: t.rejected_reason && t.rejected_reason !== "NONE" ? String(t.rejected_reason) : null,
+    id: t.id || null,
+    motivoRecusa: t.rejected_reason && t.rejected_reason !== "NONE"
+      ? MOTIVO_RECUSA[t.rejected_reason] || String(t.rejected_reason) : null,
+    qualidade: QUALIDADE[t.quality_score?.score] ?? null,
     doSistema: TEMPLATES_SO_DO_SISTEMA.has(t.name),
     header: header?.format === "TEXT" ? header.text : null,
     body: body?.text || "",
@@ -6192,18 +6213,38 @@ function descreverTemplateDisparo(t) {
     buttons: (botoes?.buttons || []).map((b) => b.text),
     headerVars: headerVars.length,
     bodyVars: bodyVars.length,
+    /* Os valores de exemplo que foram mandados junto na aprovação. A tela mostra
+       cada um ao lado do campo ("exemplo aprovado: Ipatinga") e usa na prévia
+       enquanto o campo está vazio: é o jeito de saber o que a Meta espera em
+       cada {{n}} sem abrir o Gerenciador do WhatsApp. */
+    exemplo: {
+      header: (header?.example?.header_text || []).map(String),
+      body: (body?.example?.body_text?.[0] || []).map(String),
+    },
+    // o texto de volta com {nome}, {unidade}... — para corrigir e submeter de novo
+    rascunho: {
+      cabecalho: header?.format === "TEXT" ? textoComMarcadores(header.text, header?.example?.header_text || []) : "",
+      corpo: textoComMarcadores(body?.text, body?.example?.body_text?.[0] || []),
+      rodape: footer?.text || "",
+      categoria: t.category === "MARKETING" ? "MARKETING" : "UTILITY",
+    },
     suportado: !motivo, // o disparo dá conta do formato
     usavel: status === "APPROVED" && !motivo,
     motivo: motivoStatus || motivo,
   };
 }
 
-// {nome} = primeiro nome, {nome_completo} = como está na ficha.
+/* {nome} = primeiro nome, {nome_completo} = como está na ficha, {unidade} e
+   {endereco} = os da unidade DELA. Sem estes dois, o template do material com
+   endereço ia para Ipatinga e Timóteo com o mesmo endereço digitado à mão. */
+const PEDE_ENDERECO = /\{endere[cç]o\}/i;
 function preencherDisparo(txt, cli) {
   const nome = String(cli.name || "").trim();
   return String(txt ?? "")
     .replace(/\{nome_completo\}/gi, nome)
-    .replace(/\{nome\}/gi, nome.split(/\s+/)[0] || nome);
+    .replace(/\{nome\}/gi, nome.split(/\s+/)[0] || nome)
+    .replace(/\{unidade\}/gi, cli.unit || "")
+    .replace(/\{endere[cç]o\}/gi, enderecoDaUnidade(cli.unit)?.endereco || "");
 }
 
 const PAUSA_ENTRE_ENVIOS_MS = 350;
@@ -6217,8 +6258,10 @@ const PAUSA_ENTRE_ENVIOS_MS = 350;
    que foi exatamente o buraco de setembro.
 
    Devolve a hora em que cada janela FECHA, e não um sim/não, para a tela poder
-   avisar "fecha em 40 min" — a diferença entre mandar de graça agora e pagar um
-   template daqui a pouco. */
+   avisar "fecha em 40 min" — a diferença entre mandar texto livre agora e
+   depender de um template aprovado daqui a pouco. (Desde 01/10/2026 a Meta
+   cobra também o texto livre, pelo preço de utilidade — a janela deixou de ser
+   "de graça", mas continua sendo o único jeito de mandar sem template.) */
 async function janelasAbertas() {
   const desde = new Date(Date.now() - 24 * 3600_000);
   const convs = await prisma.waConversation.findMany({
@@ -6307,13 +6350,21 @@ app.get("/api/wa/disparo/opcoes", wrap(async (req, res) => {
     templates: todos.filter((t) => !t.doSistema),
     // as automações: não entram no disparo, mas a escola precisa ver se estão de pé
     templatesSistema: todos.filter((t) => t.doSistema).map((t) => ({
-      name: t.name, status: t.status, category: t.category, motivoRecusa: t.motivoRecusa,
+      name: t.name, status: t.status, category: t.category, motivoRecusa: t.motivoRecusa, qualidade: t.qualidade,
+      header: t.header, body: t.body, footer: t.footer, buttons: t.buttons, exemplo: t.exemplo,
     })),
     sincronizadoEm: cache.em ? new Date(cache.em).toISOString() : null,
     erroTemplates: cache.erro,
     janelas: await janelasAbertas(),
+    // para a prévia de {endereco}: o endereço de cada unidade que tem um
+    enderecos: Object.fromEntries(
+      (await loadSettings()).units.map((u) => [u, enderecoDaUnidade(u)?.endereco || null]),
+    ),
     agora: new Date().toISOString(),
     horarioBom: podeMandarAgora(),
+    // para a janela "criar template": o que cada marcador vira e os limites da Meta
+    marcadores: Object.fromEntries(Object.entries(MARCADORES).map(([k, d]) => [k, d.desc])),
+    limitesTemplate: LIMITES_TEMPLATE,
     emAndamento: emAndamento?.id || null,
     ultimos: await resumirDisparos(),
   });
@@ -6379,12 +6430,23 @@ app.post("/api/wa/disparo", wrap(async (req, res) => {
 async function rodarDisparo(id, { modo, texto, tpl }) {
   try {
     const itens = await prisma.waDisparoItem.findMany({ where: { disparoId: id }, orderBy: { id: "asc" } });
+    // a unidade não fica no item: vem da ficha, para {unidade} e {endereco}
+    const fichas = await prisma.client.findMany({ where: { id: { in: itens.map((i) => i.clientId) } }, select: { id: true, unit: true } });
+    const unidadeDe = new Map(fichas.map((c) => [c.id, c.unit || ""]));
+    const pedeEndereco = modo === "texto"
+      ? PEDE_ENDERECO.test(texto)
+      : [...tpl.valoresHeader, ...tpl.valoresBody].some((v) => PEDE_ENDERECO.test(v));
     for (const it of itens) {
-      const cli = { name: it.nome };
+      const cli = { name: it.nome, unit: unidadeDe.get(it.clientId) || "" };
       let dados;
       try {
         if (!chaveTelefone(it.phone)) {
           dados = { situacao: "pulada", motivo: "sem telefone válido" };
+        } else if (pedeEndereco && !enderecoDaUnidade(cli.unit)) {
+          // variável vazia a Meta recusa; e mensagem com endereço em branco é pior
+          dados = { situacao: "pulada", motivo: `sem endereço cadastrado para a unidade "${cli.unit || "—"}"` };
+        } else if (modo === "template" && [...tpl.valoresHeader, ...tpl.valoresBody].some((v) => !preencherDisparo(v, cli).trim())) {
+          dados = { situacao: "pulada", motivo: "uma variável ficou vazia para ela (ficha sem unidade?)" };
         } else if (modo === "texto" && !(await janelaAbertaPara(it.phone))) {
           dados = { situacao: "pulada", motivo: "conversa fechada (só template chega)" };
         } else {
@@ -6457,6 +6519,45 @@ app.get("/api/wa/disparo/:id", wrap(async (req, res) => {
       };
     }),
   });
+}));
+
+/* ---------- CRIAR TEMPLATE PELO PAINEL ----------
+
+   Texto livre só chega a quem falou com a escola nas últimas 24h; para o resto
+   é template. Antes, template novo dependia de alguém rodar um script; agora a
+   Inêz escreve na tela e o sistema confere as regras da Meta (waTemplateRegras)
+   e submete. A aprovação é da Meta — minutos, às vezes até 24h — e chega pelo
+   webhook ou pela própria tela, que resincroniza enquanto houver template
+   esperando.
+
+   `conferir` não grava nada: responde enquanto ela digita, com os mesmos
+   erros que a submissão daria. */
+app.post("/api/wa/templates/conferir", wrap(async (req, res) => {
+  const { lista } = await sincronizarTemplates();
+  const r = montarTemplate(req.body || {}, lista);
+  res.json({ name: r.payload.name, erros: r.erros, avisos: r.avisos, previa: r.previa });
+}));
+
+app.post("/api/wa/templates", wrap(async (req, res) => {
+  if (!waTemplatesConfigured()) return res.status(400).json({ error: "A conta do WhatsApp (WA_WABA_ID) não está configurada no servidor." });
+  // lista fresca: o nome pode ter sido usado há um minuto no Gerenciador da Meta
+  const { lista, erro } = await sincronizarTemplates({ forcar: true });
+  if (erro && !lista.length) return res.status(502).json({ error: `Não consegui falar com a Meta: ${erro}` });
+  const r = montarTemplate(req.body || {}, lista);
+  if (r.erros.length) return res.status(400).json({ error: r.erros[0], erros: r.erros });
+  const por = req.admin?.username || "painel";
+  try {
+    const criado = await createWaTemplate(r.payload);
+    console.log(`[wa templates] ${r.payload.name} (${r.payload.category}) submetido por ${por}: ${criado?.status || "PENDING"} (id ${criado?.id || "?"})`);
+    cacheTemplates.em = 0;
+    await sincronizarTemplates({ forcar: true });
+    res.json({ name: r.payload.name, status: criado?.status || "PENDING", category: criado?.category || r.payload.category, avisos: r.avisos });
+  } catch (e) {
+    const er = e?.body?.error || {};
+    const msg = [er.error_user_title, er.error_user_msg].filter(Boolean).join(": ") || er.message || e.message;
+    console.warn(`[wa templates] ${r.payload.name} recusado na submissão: ${msg}`);
+    res.status(400).json({ error: `A Meta não aceitou: ${msg}` });
+  }
 }));
 
 // Histórico: os últimos disparos, para reabrir o de ontem e ver quem ficou faltando.

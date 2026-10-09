@@ -142,6 +142,11 @@ export const api = {
     enviar: (data) => req("POST", "/api/wa/disparo", data),
     status: (id) => req("GET", `/api/wa/disparo/${encodeURIComponent(id)}`),
     historico: () => req("GET", "/api/wa/disparos"),
+    /* Template novo, escrito no painel. `conferirTemplate` só confere as regras
+       da Meta (nada é gravado — a tela chama enquanto a Inêz digita);
+       `criarTemplate` confere de novo e submete para aprovação. */
+    conferirTemplate: (data) => req("POST", "/api/wa/templates/conferir", data),
+    criarTemplate: (data) => req("POST", "/api/wa/templates", data),
   },
 
   /* Feriados: em feriado a escola não abre. `list` traz o calendário já

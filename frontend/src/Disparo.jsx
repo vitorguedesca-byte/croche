@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { toast, confirmModal } from "./toast.jsx";
 import { useStore } from "./store.jsx";
-import { Select } from "./ui.jsx";
+import { Select, Modal, useModal } from "./ui.jsx";
 import { api } from "./api.js";
 import { contemBusca } from "./helpers.js";
 
@@ -26,6 +26,11 @@ import { contemBusca } from "./helpers.js";
    3. a ENTREGA de cada mensagem já enviada — e o disparo fica
       gravado no banco, então dá para fechar a tela, voltar
       amanhã e ainda ver quem recebeu e quem ficou faltando.
+
+   E quando o texto livre não alcança (quase sempre: poucas alunas
+   estão com a janela aberta), a Inêz CRIA o template aqui mesmo —
+   o servidor confere as regras da Meta, submete, e a tela acompanha
+   a aprovação sozinha (ver CriarTemplate).
    ============================================================ */
 
 const SITUACOES = [
@@ -35,6 +40,8 @@ const SITUACOES = [
   { value: "leads", label: "Pagamento não realizado", icon: "⚠️" },
   { value: "inativas", label: "Inativas", icon: "💤" },
   { value: "todas", label: "Todas as fichas", icon: "👩" },
+  // quem recebe TEXTO LIVRE agora — de qualquer situação, lead incluída
+  { value: "conversa", label: "Conversa aberta (24h)", icon: "💬" },
 ];
 const naSituacao = (c, s) =>
   s === "todas" ? true
@@ -47,14 +54,54 @@ const naSituacao = (c, s) =>
 
 const temTelefone = (c) => String(c.phone || "").replace(/\D/g, "").length >= 10;
 const primeiroNome = (n) => String(n || "").trim().split(/\s+/)[0] || "";
-const preencher = (txt, nome) =>
-  String(txt ?? "").replace(/\{nome_completo\}/gi, nome || "").replace(/\{nome\}/gi, primeiroNome(nome));
-// Troca {{1}}, {{2}}... pelos valores (já com o nome da aluna aplicado).
-const montar = (txt, valores, nome) =>
+/* Os mesmos marcadores que o servidor troca (preencherDisparo): {nome},
+   {nome_completo}, e {unidade}/{endereco} — os da unidade DELA. */
+// "Timoteo" e "Timóteo" são a mesma unidade (igual a enderecoDaUnidade no servidor)
+const chaveUnidade = (u) => String(u || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+const enderecoDe = (enderecos, unit) =>
+  Object.entries(enderecos || {}).find(([u]) => chaveUnidade(u) === chaveUnidade(unit))?.[1] || "";
+const preencher = (txt, cli, enderecos = {}) =>
+  String(txt ?? "")
+    .replace(/\{nome_completo\}/gi, cli?.name || "")
+    .replace(/\{nome\}/gi, primeiroNome(cli?.name))
+    .replace(/\{unidade\}/gi, cli?.unit || "")
+    .replace(/\{endere[cç]o\}/gi, enderecoDe(enderecos, cli?.unit));
+/* Troca {{1}}, {{2}}... pelos valores (já com os dados da aluna). Campo ainda
+   vazio mostra o exemplo aprovado na Meta, entre colchetes, para a prévia já
+   dizer o que vai naquele lugar. */
+const montar = (txt, valores, cli, enderecos, exemplos = []) =>
   String(txt || "").replace(/\{\{\s*(\d+)\s*\}\}/g, (_, n) => {
     const v = valores[Number(n) - 1];
-    return v && v.trim() ? preencher(v, nome) : `{{${n}}}`;
+    if (v && v.trim()) return preencher(v, cli, enderecos);
+    const ex = exemplos[Number(n) - 1];
+    return ex ? `[${ex}]` : `{{${n}}}`;
   });
+
+/* O que entra sozinho em cada {{n}} ao escolher o template, lendo o texto em
+   volta e o exemplo aprovado. "Feliz aniversário, {{1}}!" é o nome; "unidade
+   {{1}}:" é a unidade; exemplo com "Rua ..." é o endereço. Fora disso o campo
+   fica vazio, com o exemplo da Meta à vista — antes TODO {{1}} vinha com {nome},
+   e o template do material ia com o nome da aluna no lugar da unidade. */
+function palpite(texto, n, exemplo, unidades = []) {
+  /* Template criado pelo painel leva um exemplo FIXO por marcador (ver
+     waTemplateRegras.js no servidor) — é a resposta exata, vem primeiro. */
+  if (exemplo === "Maria") return "{nome}";
+  if (exemplo === "Maria Silva") return "{nome_completo}";
+  if (exemplo && unidades.some((u) => chaveUnidade(u) === chaveUnidade(exemplo))) return "{unidade}";
+  const antes = String(texto || "").split(new RegExp(`\\{\\{\\s*${n}\\s*\\}\\}`))[0] || "";
+  if (/unidade\s*$/i.test(antes)) return "{unidade}";
+  if (/\b(rua|av\.?|avenida|praça|travessa|rodovia)\b/i.test(exemplo || "")) return "{endereco}";
+  if (/,\s*$/.test(antes) || /\b(oi|ol[aá])\s*$/i.test(antes)) return "{nome}";
+  return "";
+}
+// "…Endereço da unidade {{1}}: {{2}}" — o pedaço do texto em volta da variável
+function trechoDe(texto, n) {
+  const t = String(texto || "").replace(/\s+/g, " ");
+  const m = t.match(new RegExp(`\\{\\{\\s*${n}\\s*\\}\\}`));
+  if (!m) return "";
+  const ini = Math.max(0, m.index - 40), fim = Math.min(t.length, m.index + m[0].length + 25);
+  return (ini > 0 ? "…" : "") + t.slice(ini, fim).trim() + (fim < t.length ? "…" : "");
+}
 
 const SITUACAO_ENVIO = {
   "na fila": ["b-muted", "⏳ na fila"],
@@ -68,6 +115,26 @@ const ENTREGA = {
   lido: ["b-ok", "✓✓ lida"],
   falhou: ["b-danger", "✕ não chegou"],
 };
+/* Os códigos de falha de ENTREGA que mais aparecem, em português e com o que
+   fazer. O 131049 é o limite de marketing por pessoa: a Meta não entrega e
+   reenviar antes de 24h só gasta e falha de novo. */
+const ERRO_META = {
+  131049: "a Meta segurou: limite de marketing por pessoa (ela recebeu muito marketing). Não reenvie antes de 24h.",
+  131050: "ela parou de receber marketing de empresas.",
+  131047: "a conversa de 24h fechou antes de chegar — mande por template.",
+  131026: "não deu para entregar (número sem WhatsApp, versão antiga ou bloqueio).",
+  131056: "mensagens demais para o mesmo número em pouco tempo.",
+  130472: "a Meta não entregou (número em teste interno dela).",
+  131042: "problema de pagamento na conta do WhatsApp da escola.",
+  132001: "template não existe (ou não neste idioma).",
+  132015: "template pausado pela Meta por baixa qualidade.",
+  132016: "template desativado pela Meta.",
+};
+const traduzErro = (txt) => {
+  const cod = Number(String(txt || "").match(/^\d+/)?.[0]);
+  return ERRO_META[cod] ? `${cod}: ${ERRO_META[cod]}` : txt;
+};
+
 // Status de template como a Meta devolve.
 const STATUS_TPL = {
   APPROVED: ["b-ok", "✓ aprovado"],
@@ -103,7 +170,7 @@ function tempoDesde(iso, agora = Date.now()) {
 }
 
 export default function Disparo() {
-  const { data } = useStore();
+  const { data, reload } = useStore();
   const [opcoes, setOpcoes] = useState(null);
   const [erroOpcoes, setErroOpcoes] = useState(null);
   const [sincronizando, setSincronizando] = useState(false);
@@ -113,16 +180,70 @@ export default function Disparo() {
 
   /* `sync` pergunta na hora para a Meta em vez de usar o cache de 5 min do
      servidor. Sem ele a tela ainda sincroniza — só aceita uma resposta de
-     poucos minutos atrás, que é o suficiente para abrir a tela. */
+     poucos minutos atrás, que é o suficiente para abrir a tela.
+
+     O botão "Sincronizar agora" também relê as fichas (aluna nova, telefone
+     corrigido) e SEMPRE responde com um aviso do que achou: antes ele
+     sincronizava em silêncio e, como a lista vinha igual, parecia que não
+     tinha feito nada. Se a Meta falhar aí, a tela fica como estava — só a
+     abertura sem dados nenhuns vira a tela de erro.
+
+     sync = "auto" é a resincronização sozinha enquanto há template esperando a
+     Meta: pergunta para ela, mas sem aviso de "sincronizado" a cada minuto —
+     o único aviso é o que interessa, "aprovou" ou "recusou". */
+  const visto = useRef(null); // name → "STATUS/CATEGORIA" da última leitura
   const carregar = (sync = false) => {
-    setErroOpcoes(null);
-    if (sync) setSincronizando(true);
-    return api.disparo.opcoes(sync)
-      .then((o) => { setOpcoes(o); if (o.emAndamento) setJobId(o.emAndamento); })
-      .catch((e) => setErroOpcoes(e.message))
+    if (!sync) setErroOpcoes(null);
+    if (sync === true) setSincronizando(true);
+    return Promise.all([api.disparo.opcoes(!!sync), sync === true ? reload() : null])
+      .then(([o]) => {
+        setOpcoes(o);
+        setErroOpcoes(null);
+        if (o.emAndamento) setJobId(o.emAndamento);
+        avisarMudancas(o);
+        if (sync !== true) return;
+        if (o.erroTemplates) { toast.error(`A Meta não respondeu: ${o.erroTemplates}`); return; }
+        const prontos = o.templates.filter((t) => t.usavel).length;
+        const esperando = o.templates.filter((t) => !t.usavel).length;
+        toast(`Sincronizado ✓ ${prontos} template(s) pronto(s)${esperando ? `, ${esperando} sem liberar` : ""} · ${o.janelas.filter((j) => new Date(j.fechaEm) > new Date()).length} aluna(s) com a conversa aberta`);
+      })
+      .catch((e) => {
+        if (sync && opcoes) toast.error(`Não consegui sincronizar: ${e.message}`);
+        else setErroOpcoes(e.message);
+      })
       .finally(() => setSincronizando(false));
   };
   useEffect(() => { carregar(false); }, []);
+
+  /* A Meta decidiu algo desde a última leitura: aprovou, recusou, pausou ou
+     reclassificou (utilidade → marketing muda o preço). Avisa uma vez. */
+  function avisarMudancas(o) {
+    const agora = new Map([...o.templates, ...o.templatesSistema].map((t) => [t.name, `${t.status}/${t.category}`]));
+    const antes = visto.current;
+    visto.current = agora;
+    if (!antes) return;
+    for (const t of [...o.templates, ...o.templatesSistema]) {
+      const era = antes.get(t.name);
+      if (!era || era === agora.get(t.name)) continue;
+      const [stEra, catEra] = era.split("/");
+      if (stEra !== t.status) {
+        if (t.status === "APPROVED") toast(`✓ A Meta aprovou “${t.name}” — já dá para usar no disparo.`, "success", { duration: 9000 });
+        else toast.error(`“${t.name}”: ${statusTpl(t.status)[1]}${t.motivoRecusa ? ` — ${t.motivoRecusa}` : ""}.`);
+      } else if (catEra !== t.category) {
+        toast.error(`A Meta mudou a categoria de “${t.name}” para ${t.category === "MARKETING" ? "marketing (mais caro)" : "utilidade"}.`);
+      }
+    }
+  }
+
+  /* Template esperando aprovação: a tela resincroniza com a Meta a cada minuto
+     enquanto estiver aberta, para o "pode usar" virar sozinho — mesmo que o
+     webhook de status não esteja assinado no app da Meta. */
+  const esperandoMeta = !!opcoes && opcoes.templates.some((t) => t.status === "PENDING" || t.status === "IN_APPEAL");
+  useEffect(() => {
+    if (!esperandoMeta || jobId) return;
+    const t = setInterval(() => { if (!document.hidden) carregar("auto"); }, 60_000);
+    return () => clearInterval(t);
+  }, [esperandoMeta, jobId]);
 
   const voltar = (idsParaMarcar) => {
     setPreSel(idsParaMarcar && idsParaMarcar.length ? idsParaMarcar : null);
@@ -140,6 +261,7 @@ export default function Disparo() {
       preSel={preSel}
       sincronizando={sincronizando}
       onSincronizar={() => carregar(true)}
+      onRecarregar={() => carregar("auto")}
       onAbrir={setJobId}
       onIniciado={setJobId}
     />
@@ -172,7 +294,11 @@ function BarraSync({ opcoes, abertas, sincronizando, onSincronizar }) {
   );
 }
 
-function Composer({ data, opcoes, preSel, sincronizando, onSincronizar, onAbrir, onIniciado }) {
+function Composer({ data, opcoes, preSel, sincronizando, onSincronizar, onRecarregar, onAbrir, onIniciado }) {
+  const { open } = useModal();
+  // janela "criar template" — vazia, a partir do texto livre, ou corrigindo um recusado
+  const criarTemplate = (inicial) =>
+    open(<CriarTemplate inicial={inicial} opcoes={opcoes} onCriado={onRecarregar} />);
   /* O relógio anda: uma janela que fechou enquanto a tela estava aberta tem que
      aparecer fechada, senão a Inêz manda texto livre para quem já não recebe
      mais. Por isso o "agora" é estado, e não `Date.now()` solto no render. */
@@ -200,16 +326,17 @@ function Composer({ data, opcoes, preSel, sincronizando, onSincronizar, onAbrir,
   const [enviando, setEnviando] = useState(false);
 
   const tpl = opcoes.templates.find((t) => t.name === tplName) || null;
+  const enderecos = opcoes.enderecos || {};
   const escolherTemplate = (name) => {
     const t = opcoes.templates.find((x) => x.name === name);
     setTplName(name);
-    setHVals(Array(t?.headerVars || 0).fill(""));
-    // quase todo template começa com o nome da aluna em {{1}}
-    setBVals(Array(t?.bodyVars || 0).fill("").map((v, i) => (i === 0 ? "{nome}" : v)));
+    const ex = t?.exemplo || { header: [], body: [] };
+    setHVals(Array.from({ length: t?.headerVars || 0 }, (_, i) => palpite(t.header, i + 1, ex.header[i], data.meta.units)));
+    setBVals(Array.from({ length: t?.bodyVars || 0 }, (_, i) => palpite(t.body, i + 1, ex.body[i], data.meta.units)));
   };
 
   const lista = data.clients
-    .filter((c) => naSituacao(c, sitF))
+    .filter((c) => (sitF === "conversa" ? abertas.has(c.id) : naSituacao(c, sitF)))
     .filter((c) => unitF === "Todas" || c.unit === unitF)
     .filter((c) => contemBusca([c.name, c.phone], search))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -229,19 +356,44 @@ function Composer({ data, opcoes, preSel, sincronizando, onSincronizar, onAbrir,
 
   const selecionadas = data.clients.filter((c) => sel.has(c.id));
   const comConversaAberta = selecionadas.filter((c) => abertas.has(c.id)).length;
-  const exemploNome = selecionadas[0]?.name || "Maria Silva";
+  const exemploCli = selecionadas[0] || { name: "Maria Silva", unit: data.meta.units[0] || "" };
+  const exemploNome = exemploCli.name;
+  // todas as fichas com a conversa aberta agora, marcadas ou não
+  const abertasComTel = data.clients.filter((c) => abertas.has(c.id) && temTelefone(c));
+  const abertasForaDaSel = abertasComTel.filter((c) => !sel.has(c.id));
+  const soAbertas = () => setSel(new Set(abertasComTel.map((c) => c.id)));
+  const tirarFechadas = () => setSel((s) => new Set([...s].filter((id) => abertas.has(id))));
 
   const faltaVariavel = modo === "template" && (!tpl || !tpl.usavel || [...hVals, ...bVals].some((v) => !v.trim()));
   // "Oi, {nome}!" sozinho não é mensagem
   const textoVazio = modo === "texto" && !texto.replace(/\{nome(_completo)?\}/gi, "").replace(/^\s*oi[,!\s]*/i, "").trim();
   const recebem = modo === "template" ? selecionadas.length : comConversaAberta;
-  const podeRevisar = selecionadas.length > 0 && !faltaVariavel && !textoVazio && recebem > 0 && !enviando;
+  /* Por que ainda não dá para revisar — a MESMA frase aparece embaixo do botão
+     e no aviso ao clicar. O botão não fica mais cinza e mudo: cinza sem
+     explicação era o "o revisar envio não funciona". */
+  const pendencia =
+    !selecionadas.length ? "Selecione pelo menos uma aluna."
+    : modo === "template" && !tpl ? "Escolha o template."
+    : modo === "template" && !tpl.usavel ? "Este template ainda não está liberado pela Meta."
+    : faltaVariavel ? "Preencha todas as variáveis do template."
+    : textoVazio ? "Escreva a mensagem."
+    : modo === "texto" && !recebem ? "Nenhuma das selecionadas está com a conversa aberta — texto livre não chega para elas. Use um template, ou filtre por “Conversa aberta (24h)”."
+    : null;
 
   const previa = modo === "template" && tpl
-    ? { header: tpl.header ? montar(tpl.header, hVals, exemploNome) : null, body: montar(tpl.body, bVals, exemploNome), footer: tpl.footer, buttons: tpl.buttons }
-    : { header: null, body: preencher(texto, exemploNome), footer: null, buttons: [] };
+    ? {
+        header: tpl.header ? montar(tpl.header, hVals, exemploCli, enderecos, tpl.exemplo?.header) : null,
+        body: montar(tpl.body, bVals, exemploCli, enderecos, tpl.exemplo?.body),
+        footer: tpl.footer, buttons: tpl.buttons,
+      }
+    : { header: null, body: preencher(texto, exemploCli, enderecos), footer: null, buttons: [] };
+
+  // {endereco} só existe para unidade com endereço cadastrado (o servidor pula as outras)
+  const usaEndereco = (modo === "texto" ? [texto] : [...hVals, ...bVals]).some((v) => /\{endere[cç]o\}/i.test(v));
+  const semEndereco = usaEndereco ? selecionadas.filter((c) => !enderecoDe(enderecos, c.unit)) : [];
 
   const revisar = async () => {
+    if (pendencia) { toast.error(pendencia); return; }
     const nomes = selecionadas.slice(0, 6).map((c) => primeiroNome(c.name)).join(", ") + (selecionadas.length > 6 ? ` e mais ${selecionadas.length - 6}` : "");
     const ok = await confirmModal({
       title: "Confirmar disparo no WhatsApp",
@@ -253,6 +405,7 @@ function Composer({ data, opcoes, preSel, sincronizando, onSincronizar, onAbrir,
           : <>Mensagem: <b>texto livre</b>. Só vai para as <b>{comConversaAberta}</b> que falaram com a escola nas últimas 24h; {selecionadas.length - comConversaAberta} ficam de fora.</>}
         <br /><br />
         Exemplo para {primeiroNome(exemploNome)}: “{previa.body.length > 220 ? previa.body.slice(0, 220) + "…" : previa.body}”
+        {semEndereco.length > 0 && <><br /><br />⚠️ {semEndereco.length} aluna(s) sem endereço de unidade cadastrado ficam de fora: {semEndereco.slice(0, 4).map((c) => primeiroNome(c.name)).join(", ")}{semEndereco.length > 4 ? "…" : ""}.</>}
         {!opcoes.horarioBom && <><br /><br />⚠️ Agora está fora do horário das mensagens automáticas (8h às 20h).</>}
         <br /><br />Depois de enviado não dá para desfazer.
       </>),
@@ -356,7 +509,7 @@ function Composer({ data, opcoes, preSel, sincronizando, onSincronizar, onAbrir,
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1.2rem" }}>
         <div>
           {modo === "template" ? (<>
-            <div className="seg-hint">Chega para <b>todas</b> as selecionadas. É o único jeito de falar com quem não mandou mensagem para a escola nas últimas 24h. Cada envio é cobrado pela Meta.</div>
+            <div className="seg-hint">Chega para <b>todas</b> as selecionadas. É o único jeito de falar com quem não mandou mensagem para a escola nas últimas 24h. Cada envio é cobrado pela Meta (marketing é o mais caro).</div>
             {opcoes.erroTemplates && <div className="help" style={{ marginBottom: ".8rem", borderLeftColor: "var(--danger)" }}>⚠️ Não consegui ler os templates na Meta: {opcoes.erroTemplates}{opcoes.sincronizadoEm ? " — a lista abaixo é da última sincronização que deu certo." : ""}</div>}
             {!opcoes.erroTemplates && !opcoes.templates.length && <div className="help" style={{ marginBottom: ".8rem" }}>Nenhum template cadastrado na conta do WhatsApp. Ele precisa ser criado e aprovado na Meta antes.</div>}
             {opcoes.templates.length > 0 && (
@@ -365,33 +518,61 @@ function Composer({ data, opcoes, preSel, sincronizando, onSincronizar, onAbrir,
                 <Select value={tplName} onChange={escolherTemplate} options={templateOptions} placeholder="Escolha o template" />
               </div>
             )}
+            {opcoes.wabaConfigurada && (
+              <div style={{ marginBottom: ".8rem" }}>
+                <button type="button" className="btn sec sm" onClick={() => criarTemplate()}>＋ Criar template novo</button>
+                <span className="cli-sub" style={{ marginLeft: ".5rem" }}>o sistema confere as regras e manda para a Meta aprovar</span>
+              </div>
+            )}
             {tpl && !tpl.usavel && (
               <div className="help" style={{ borderLeftColor: "var(--danger)" }}>
                 Este template não pode ser disparado: {tpl.motivo}.{tpl.motivoRecusa ? ` Motivo da Meta: ${tpl.motivoRecusa}.` : ""}
               </div>
             )}
-            {tpl && hVals.map((v, i) => (
-              <div className="field" key={"h" + i}>
-                <label>Cabeçalho {`{{${i + 1}}}`}</label>
-                <input value={v} onChange={(e) => setHVals((a) => a.map((x, j) => (j === i ? e.target.value : x)))} />
-              </div>
-            ))}
-            {tpl && bVals.map((v, i) => (
-              <div className="field" key={"b" + i}>
-                <label>Variável {`{{${i + 1}}}`}</label>
-                <input value={v} onChange={(e) => setBVals((a) => a.map((x, j) => (j === i ? e.target.value : x)))} placeholder="texto que entra no lugar da variável" />
-              </div>
-            ))}
-            {tpl && (tpl.bodyVars + tpl.headerVars) > 0 && <div className="help">Escreva <b>{"{nome}"}</b> para o primeiro nome de cada aluna, ou <b>{"{nome_completo}"}</b>. Variável não aceita quebra de linha.</div>}
+            {tpl && tpl.usavel && (tpl.bodyVars + tpl.headerVars) === 0 && (
+              <div className="help">Este template não tem variáveis: vai exatamente o texto da prévia, igual para todas.</div>
+            )}
+            {tpl && [["h", hVals, setHVals, tpl.header, tpl.exemplo?.header], ["b", bVals, setBVals, tpl.body, tpl.exemplo?.body]].map(([k, vals, setVals, txt, exs]) =>
+              vals.map((v, i) => (
+                <div className="field" key={k + i}>
+                  <label>{k === "h" ? "Cabeçalho" : "Variável"} {`{{${i + 1}}}`}</label>
+                  {trechoDe(txt, i + 1) && <div className="cli-sub" style={{ marginBottom: ".3rem" }}>{trechoDe(txt, i + 1)}</div>}
+                  <input
+                    value={v}
+                    onChange={(e) => setVals((a) => a.map((x, j) => (j === i ? e.target.value.replace(/[\r\n]+/g, " ") : x)))}
+                    placeholder={exs?.[i] ? `ex.: ${exs[i]}` : "texto que entra no lugar da variável"}
+                  />
+                  {exs?.[i] && (
+                    <div className="cli-sub" style={{ marginTop: ".25rem" }}>
+                      Exemplo aprovado na Meta: <b>{exs[i]}</b>
+                    </div>
+                  )}
+                </div>
+              )))}
+            {tpl && (tpl.bodyVars + tpl.headerVars) > 0 && <div className="help">Escreva <b>{"{nome}"}</b> para o primeiro nome de cada aluna, <b>{"{nome_completo}"}</b>, <b>{"{unidade}"}</b> ou <b>{"{endereco}"}</b> (os da unidade dela). Variável não aceita quebra de linha.</div>}
           </>) : (<>
             <div className="seg-hint">
-              Gratuito, mas <b>só chega para quem falou com a escola nas últimas 24h</b> — das selecionadas, {comConversaAberta} de {selecionadas.length}. As demais ficam de fora (use um template para elas).
+              Só chega para <b>quem falou com a escola nas últimas 24h</b> — das selecionadas, {comConversaAberta} de {selecionadas.length}. As demais ficam de fora (use um template para elas). Desde 01/10/2026 a Meta cobra também o texto livre, pelo preço de utilidade.
+            </div>
+            <div style={{ display: "flex", gap: ".5rem", flexWrap: "wrap", marginBottom: ".8rem" }}>
+              {abertasForaDaSel.length > 0 && (
+                <button type="button" className="btn sec sm" onClick={soAbertas}>💬 Selecionar só as {abertasComTel.length} com conversa aberta</button>
+              )}
+              {selecionadas.length > comConversaAberta && comConversaAberta > 0 && (
+                <button type="button" className="btn ghost sm" onClick={tirarFechadas}>Desmarcar as {selecionadas.length - comConversaAberta} com conversa fechada</button>
+              )}
+              {!abertasComTel.length && <span className="cli-sub">Ninguém está com a conversa aberta agora — para falar com elas, só por template.</span>}
+              {opcoes.wabaConfigurada && selecionadas.length > comConversaAberta && (
+                <button type="button" className="btn sm" onClick={() => criarTemplate({ corpo: texto, categoria: "UTILITY" })}>
+                  🧾 Transformar este texto em template
+                </button>
+              )}
             </div>
             <div className="field">
               <label>Mensagem</label>
               <textarea rows={7} value={texto} onChange={(e) => setTexto(e.target.value)} maxLength={4000} />
             </div>
-            <div className="help">Escreva <b>{"{nome}"}</b> para o primeiro nome de cada aluna, ou <b>{"{nome_completo}"}</b>.</div>
+            <div className="help">Escreva <b>{"{nome}"}</b> para o primeiro nome de cada aluna, <b>{"{nome_completo}"}</b>, <b>{"{unidade}"}</b> ou <b>{"{endereco}"}</b>.</div>
           </>)}
         </div>
 
@@ -411,6 +592,9 @@ function Composer({ data, opcoes, preSel, sincronizando, onSincronizar, onAbrir,
               </div>
             ) : <div className="cli-sub">Escolha um template para ver a prévia.</div>}
           </div>
+          {modo === "template" && tpl && [...hVals, ...bVals].some((v) => !v.trim()) && (
+            <div className="cli-sub" style={{ marginTop: ".4rem" }}>[entre colchetes] = exemplo aprovado na Meta, no lugar do campo que ainda está vazio.</div>
+          )}
         </div>
       </div>
     </div>
@@ -418,19 +602,15 @@ function Composer({ data, opcoes, preSel, sincronizando, onSincronizar, onAbrir,
     <div className="panel" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
       <div>
         <b>3. Revisar e enviar</b>
-        <div className="cli-sub">
-          {!selecionadas.length ? "Selecione pelo menos uma aluna."
-            : faltaVariavel ? (!tpl ? "Escolha o template." : !tpl.usavel ? "Este template ainda não está liberado pela Meta." : "Preencha todas as variáveis do template.")
-            : textoVazio ? "Escreva a mensagem."
-            : modo === "texto" && !recebem ? "Nenhuma das selecionadas está com a conversa aberta — use um template."
-            : `Vai para ${recebem} aluna(s)${modo === "texto" && recebem < selecionadas.length ? ` (${selecionadas.length - recebem} ficam de fora)` : ""}.`}
+        <div className="cli-sub" style={pendencia && selecionadas.length ? { color: "var(--danger)" } : undefined}>
+          {pendencia || `Vai para ${recebem} aluna(s)${modo === "texto" && recebem < selecionadas.length ? ` (${selecionadas.length - recebem} ficam de fora)` : ""}.`}
           {!opcoes.horarioBom && " · ⚠️ fora do horário das 8h às 20h"}
         </div>
       </div>
-      <button className="btn" disabled={!podeRevisar} onClick={revisar}>📣 Revisar envio</button>
+      <button className={`btn${pendencia ? " sec" : ""}`} disabled={enviando} onClick={revisar}>{enviando ? "Enviando…" : "📣 Revisar envio"}</button>
     </div>
 
-    <TemplatesDaMeta opcoes={opcoes} />
+    <TemplatesDaMeta opcoes={opcoes} onCriar={criarTemplate} />
     <UltimosDisparos lista={opcoes.ultimos} onAbrir={onAbrir} />
   </>);
 }
@@ -438,8 +618,13 @@ function Composer({ data, opcoes, preSel, sincronizando, onSincronizar, onAbrir,
 /* Situação dos templates na Meta — os que ainda não dá para usar e os que as
    automações do sistema dependem. Fica fechado por padrão: no dia a dia não
    interessa, mas no dia em que a cobrança não sai é a primeira coisa a olhar. */
-function TemplatesDaMeta({ opcoes }) {
+function TemplatesDaMeta({ opcoes, onCriar }) {
   const [aberto, setAberto] = useState(false);
+  /* Recusado/pausado não se edita: vira um template NOVO, com o texto de volta
+     em {nome}, {unidade}... e um nome novo (a Meta não deixa reaproveitar o
+     nome de um template apagado). */
+  const corrigir = (t) => onCriar({ ...t.rascunho, titulo: `${t.name}_v2` });
+  const [verTpl, setVerTpl] = useState(null); // linha aberta, com o texto e o exemplo
   const pendentes = opcoes.templates.filter((t) => t.status !== "APPROVED");
   // esperar a Meta é uma coisa; ter sido recusado é outra, e só uma delas passa sozinha
   const esperando = pendentes.filter((t) => t.status === "PENDING" || t.status === "IN_APPEAL");
@@ -457,6 +642,7 @@ function TemplatesDaMeta({ opcoes }) {
           {pendentes.length > 0 && <span className="badge b-warn">{pendentes.length} não liberado(s)</span>}
           {sistemaComProblema.length > 0 && <span className="badge b-danger">{sistemaComProblema.length} automação(ões) em risco</span>}
           {!pendentes.length && !sistemaComProblema.length && <span className="badge b-ok">tudo aprovado</span>}
+          <button className="btn sec sm" onClick={() => onCriar()}>＋ Criar template</button>
           <button className="btn ghost sm" onClick={() => setAberto((a) => !a)}>{aberto ? "Esconder" : "Ver todos"}</button>
         </div>
       </div>
@@ -471,32 +657,47 @@ function TemplatesDaMeta({ opcoes }) {
         pendentes.length > 0 && (<>
           {esperando.length > 0 && (
             <div className="seg-hint">
-              Esperando a Meta aprovar: {esperando.map((t) => t.name).join(", ")}. Costuma sair em minutos — clique em “Sincronizar agora” para conferir.
+              ⏳ Esperando a Meta aprovar: {esperando.map((t) => t.name).join(", ")}. Costuma sair em minutos (pode levar até 24h) — esta tela confere sozinha a cada minuto e avisa quando liberar.
             </div>
           )}
-          {barrados.length > 0 && (
-            <div className="seg-hint">
-              Não dá para usar: {barrados.map((t) => `${t.name} (${statusTpl(t.status)[1]})`).join(", ")}. Um template recusado precisa ser corrigido e submetido de novo na Meta.
+          {barrados.map((t) => (
+            <div className="seg-hint" key={t.name} style={{ display: "flex", gap: ".6rem", alignItems: "center", flexWrap: "wrap" }}>
+              <span><b>{t.name}</b> não pode ser usado: {statusTpl(t.status)[1]}{t.motivoRecusa ? ` — ${t.motivoRecusa}` : ""}.</span>
+              <button className="btn sec sm" onClick={() => corrigir(t)}>✏️ Corrigir e mandar de novo</button>
             </div>
-          )}
+          ))}
         </>)
       ) : (
         <table>
-          <thead><tr><th>Template</th><th>Para quê</th><th>Status na Meta</th></tr></thead>
+          <thead><tr><th>Template</th><th>Para quê</th><th>Status na Meta</th><th>Pode usar?</th></tr></thead>
           <tbody>
             {[...opcoes.templates.map((t) => ({ ...t, uso: "disparo" })), ...sistema.map((t) => ({ ...t, uso: "automação" }))].map((t) => {
               const [cls, lbl] = statusTpl(t.status);
+              const k = t.uso + t.name;
+              const vendo = verTpl === k;
               return (
-                <tr key={t.uso + t.name}>
+                <tr key={k} onClick={() => setVerTpl(vendo ? null : k)} style={{ cursor: "pointer" }} title="Clique para ver o texto com o exemplo aprovado">
                   <td className="c-main">
-                    <span className="cli-name">{t.name}</span>
+                    <span className="cli-name">{vendo ? "▾" : "▸"} {t.name}</span>
                     <div className="cli-sub">{t.category === "MARKETING" ? "marketing (custa mais)" : "utilidade"}</div>
+                    {vendo && <ExemploTemplate t={t} />}
                   </td>
                   <td data-l="Para quê"><span className="chip">{t.uso}</span></td>
                   <td data-l="Status na Meta">
                     <span className={`badge ${cls}`}>{lbl}</span>
                     {t.motivoRecusa && <div className="cli-sub">motivo: {t.motivoRecusa}</div>}
                     {t.status === "APPROVED" && t.uso === "disparo" && !t.usavel && <div className="cli-sub">aprovado, mas o disparo não dá conta: {t.motivo}</div>}
+                    {t.qualidade && t.qualidade !== "alta" && <div className="cli-sub" style={{ color: "var(--danger)" }}>qualidade {t.qualidade} — a Meta pode pausar</div>}
+                  </td>
+                  <td data-l="Pode usar?">
+                    {t.uso === "automação"
+                      ? (t.status === "APPROVED" ? <span className="badge b-ok">✓ automação ok</span> : <span className="badge b-danger">✕ automação parada</span>)
+                      : t.usavel ? <span className="badge b-ok">✓ pode usar</span>
+                      : t.status === "PENDING" || t.status === "IN_APPEAL" ? <span className="badge b-warn">⏳ ainda não</span>
+                      : <span className="badge b-danger">✕ não pode</span>}
+                    {t.uso === "disparo" && !t.usavel && !["PENDING", "IN_APPEAL"].includes(t.status) && t.rascunho && (
+                      <div style={{ marginTop: ".35rem" }}><button className="btn ghost sm" onClick={(e) => { e.stopPropagation(); corrigir(t); }}>✏️ Corrigir e mandar de novo</button></div>
+                    )}
                   </td>
                 </tr>
               );
@@ -504,6 +705,190 @@ function TemplatesDaMeta({ opcoes }) {
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+/* ---------- Criar template ----------
+
+   A Inêz escreve com os mesmos marcadores do disparo ({nome}, {unidade}…) e
+   vê, enquanto digita, o que a Meta recusaria (erros — não deixa mandar) e o
+   que ela precisa saber (avisos — custo, categoria). Quem confere é o
+   servidor (waTemplateRegras.js), o mesmo que submete: não há regra repetida
+   aqui. Depois de enviado, o template aparece na lista como "aguardando a
+   Meta", e a tela avisa sozinha quando ele for aprovado ou recusado. */
+const CATEGORIAS = [
+  { k: "UTILITY", label: "🧾 Utilidade", dica: "Sobre algo DELA: aula, horário, reposição, pagamento. Sem oferta nem convite. Mais barato." },
+  { k: "MARKETING", label: "📢 Marketing", dica: "Novidade, promoção, convite, evento, aniversário. Mais caro, e a Meta limita quantos cada pessoa recebe." },
+];
+
+function CriarTemplate({ inicial, opcoes, onCriado }) {
+  const { close } = useModal();
+  const [f, setF] = useState(() => ({
+    titulo: "", categoria: "UTILITY", cabecalho: "", corpo: "Oi, {nome}! ", rodape: "",
+    ...(inicial || {}),
+  }));
+  const [conf, setConf] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const corpoRef = useRef(null);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+
+  // confere no servidor 0,4s depois de parar de digitar
+  useEffect(() => {
+    const t = setTimeout(() => {
+      api.disparo.conferirTemplate(f).then(setConf).catch((e) => setConf({ erros: [e.message], avisos: [], previa: null, name: "" }));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [f]);
+
+  // põe o marcador onde está o cursor, e não sempre no fim
+  const inserir = (m) => {
+    const el = corpoRef.current;
+    const ini = el ? el.selectionStart : f.corpo.length;
+    const fim = el ? el.selectionEnd : ini;
+    const tag = `{${m}}`;
+    set("corpo", f.corpo.slice(0, ini) + tag + f.corpo.slice(fim));
+    requestAnimationFrame(() => { if (el) { el.focus(); el.setSelectionRange(ini + tag.length, ini + tag.length); } });
+  };
+
+  const enviar = async () => {
+    let c = conf;
+    try { c = await api.disparo.conferirTemplate(f); setConf(c); } catch (e) { toast.error(e.message); return; }
+    if (c.erros.length) { toast.error(c.erros[0]); return; }
+    const cat = CATEGORIAS.find((x) => x.k === f.categoria);
+    const ok = await confirmModal({
+      title: "Enviar para aprovação da Meta",
+      confirmLabel: "📤 Enviar para a Meta",
+      message: (<>
+        Template <b>{c.name}</b> · {cat?.label}.<br /><br />
+        “{c.previa.body.length > 260 ? c.previa.body.slice(0, 260) + "…" : c.previa.body}”<br /><br />
+        A Meta revisa em minutos (às vezes até 24h). Enquanto isso ele aparece como “aguardando a Meta” e não pode ser usado; esta tela avisa quando sair a resposta.
+        {c.avisos.length > 0 && <><br /><br />⚠️ {c.avisos[0]}</>}
+        <br /><br />Depois de enviado, o texto não muda: para corrigir, cria-se outro com nome novo.
+      </>),
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const r = await api.disparo.criarTemplate(f);
+      toast(r.status === "APPROVED" ? `✓ “${r.name}” aprovado na hora — já dá para usar.` : `📤 “${r.name}” enviado. Aguardando a Meta aprovar.`, "success", { duration: 8000 });
+      if (r.category && r.category !== f.categoria) toast.error(`A Meta registrou “${r.name}” como ${r.category === "MARKETING" ? "marketing" : "utilidade"}, não como você escolheu.`);
+      close();
+      onCriado && onCriado(r);
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const lim = opcoes.limitesTemplate || { cabecalho: 60, corpo: 1024, rodape: 60 };
+  const marcadores = opcoes.marcadores || { nome: "primeiro nome da aluna", nome_completo: "nome completo", unidade: "unidade dela", endereco: "endereço da unidade dela" };
+  const erros = conf?.erros || [];
+  const avisos = conf?.avisos || [];
+
+  return (
+    <Modal size="lg" title="Criar template do WhatsApp" footer={<>
+      <button className="btn ghost" onClick={close}>Cancelar</button>
+      <button className={`btn${erros.length ? " sec" : ""}`} disabled={busy} onClick={enviar}>{busy ? "Enviando…" : "📤 Enviar para aprovação da Meta"}</button>
+    </>}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1.2rem" }}>
+        <div>
+          <div className="field">
+            <label>Nome do template</label>
+            <input value={f.titulo} onChange={(e) => set("titulo", e.target.value)} placeholder="ex.: Aviso de feriado" maxLength={80} />
+            <div className="cli-sub" style={{ marginTop: ".25rem" }}>
+              {conf?.name ? <>na Meta fica <b>{conf.name}</b></> : "só para a escola achar depois — a aluna não vê"}
+            </div>
+          </div>
+
+          <div className="field">
+            <label>Categoria</label>
+            <div className="seg seg-tabs">
+              {CATEGORIAS.map((c) => (
+                <button key={c.k} type="button" className={f.categoria === c.k ? "on" : ""} onClick={() => set("categoria", c.k)}>{c.label}</button>
+              ))}
+            </div>
+            <div className="seg-hint" style={{ marginTop: ".4rem" }}>{CATEGORIAS.find((c) => c.k === f.categoria)?.dica}</div>
+          </div>
+
+          <div className="field">
+            <label>Cabeçalho <span className="cli-sub">(opcional · até {lim.cabecalho} · sem emoji)</span></label>
+            <input value={f.cabecalho} onChange={(e) => set("cabecalho", e.target.value)} maxLength={lim.cabecalho + 20} placeholder="ex.: Aviso da escola" />
+          </div>
+
+          <div className="field">
+            <label>Mensagem <span className="cli-sub">({f.corpo.length}/{lim.corpo})</span></label>
+            <textarea ref={corpoRef} rows={8} value={f.corpo} onChange={(e) => set("corpo", e.target.value)} maxLength={lim.corpo + 200} />
+            <div style={{ display: "flex", gap: ".35rem", flexWrap: "wrap", marginTop: ".4rem" }}>
+              {Object.entries(marcadores).map(([k, d]) => (
+                <button key={k} type="button" className="btn ghost sm" title={d} onClick={() => inserir(k)}>＋ {`{${k}}`}</button>
+              ))}
+            </div>
+            <div className="cli-sub" style={{ marginTop: ".3rem" }}>Os marcadores viram o dado de cada aluna na hora do disparo. Não comece nem termine a mensagem com um marcador.</div>
+          </div>
+
+          <div className="field">
+            <label>Rodapé <span className="cli-sub">(opcional · até {lim.rodape} · texto fixo)</span></label>
+            <input value={f.rodape} onChange={(e) => set("rodape", e.target.value)} maxLength={lim.rodape + 20} placeholder="ex.: Fios que Curam · Ipatinga e Timóteo" />
+          </div>
+        </div>
+
+        <div>
+          <label style={{ display: "block", fontSize: ".82rem", fontWeight: 700, color: "var(--brown)", marginBottom: ".35rem" }}>
+            Prévia com o exemplo que vai para a Meta
+          </label>
+          <div style={{ background: "#e5ddd5", borderRadius: 12, padding: "1rem", minHeight: 120 }}>
+            {conf?.previa?.body ? (
+              <div style={{ background: "#fff", borderRadius: "0 10px 10px 10px", padding: ".6rem .8rem", maxWidth: 360, boxShadow: "0 1px 1px rgba(0,0,0,.12)", whiteSpace: "pre-wrap", fontSize: ".9rem", lineHeight: 1.4, color: "#222" }}>
+                {conf.previa.header && <div style={{ fontWeight: 700, marginBottom: ".3rem" }}>{conf.previa.header}</div>}
+                {conf.previa.body}
+                {conf.previa.footer && <div style={{ color: "#8a8a8a", fontSize: ".78rem", marginTop: ".4rem" }}>{conf.previa.footer}</div>}
+              </div>
+            ) : <div className="cli-sub">Escreva a mensagem para ver a prévia.</div>}
+          </div>
+
+          <div style={{ marginTop: ".9rem" }}>
+            {!conf ? <div className="cli-sub">Conferindo as regras da Meta…</div>
+              : !erros.length ? <div className="help" style={{ borderLeftColor: "var(--ok)" }}>✓ Passa nas regras da Meta — pode enviar para aprovação.</div>
+              : (
+                <div className="help" style={{ borderLeftColor: "var(--danger)" }}>
+                  <b>A Meta recusaria — corrija antes:</b>
+                  <ul style={{ margin: ".3rem 0 0 1rem", padding: 0 }}>{erros.map((e, i) => <li key={i}>{e}</li>)}</ul>
+                </div>
+              )}
+            {avisos.map((a, i) => <div key={i} className="seg-hint" style={{ marginTop: ".5rem" }}>⚠️ {a}</div>)}
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* O texto do template como a Meta aprovou, com os valores de exemplo que foram
+   mandados na aprovação no lugar de cada {{n}} — é o "como fica" de cada um,
+   sem precisar abrir o Gerenciador do WhatsApp. */
+function ExemploTemplate({ t }) {
+  const ex = t.exemplo || { header: [], body: [] };
+  const comExemplo = (txt, vals) =>
+    String(txt || "").replace(/\{\{\s*(\d+)\s*\}\}/g, (m, n) => vals[Number(n) - 1] || m);
+  if (!t.body) return <div className="cli-sub" style={{ marginTop: ".4rem" }}>Sem texto para mostrar.</div>;
+  return (
+    <div style={{ background: "#e5ddd5", borderRadius: 10, padding: ".7rem", marginTop: ".5rem", maxWidth: 420, cursor: "default" }} onClick={(e) => e.stopPropagation()}>
+      <div style={{ background: "#fff", borderRadius: "0 10px 10px 10px", padding: ".55rem .75rem", boxShadow: "0 1px 1px rgba(0,0,0,.12)", whiteSpace: "pre-wrap", fontSize: ".85rem", lineHeight: 1.4, color: "#222" }}>
+        {t.header && <div style={{ fontWeight: 700, marginBottom: ".3rem" }}>{comExemplo(t.header, ex.header)}</div>}
+        {comExemplo(t.body, ex.body)}
+        {t.footer && <div style={{ color: "#8a8a8a", fontSize: ".75rem", marginTop: ".4rem" }}>{t.footer}</div>}
+        {(t.buttons || []).map((b, i) => (
+          <div key={i} style={{ borderTop: "1px solid #eee", marginTop: ".5rem", paddingTop: ".4rem", textAlign: "center", color: "#1f8fd6", fontWeight: 600 }}>{b}</div>
+        ))}
+      </div>
+      {ex.body.length + ex.header.length > 0
+        ? <div className="cli-sub" style={{ marginTop: ".35rem" }}>Exemplo aprovado: {[
+            ...ex.header.map((v, i) => `cabeçalho {{${i + 1}}} = ${v}`),
+            ...ex.body.map((v, i) => `{{${i + 1}}} = ${v}`),
+          ].join(" · ")}</div>
+        : <div className="cli-sub" style={{ marginTop: ".35rem" }}>Sem variáveis — vai sempre este texto.</div>}
     </div>
   );
 }
@@ -594,10 +979,22 @@ function Andamento({ id, onNovo }) {
     : filtro === "faltando" ? !recebeu(i)
     : true);
 
-  const mandarDeNovo = () => {
+  const mandarDeNovo = async () => {
     // quem não recebeu volta marcada na tela de composição
-    const ids = d.itens.filter((i) => !recebeu(i)).map((i) => i.clientId);
-    onNovo(ids);
+    let alvo = d.itens.filter((i) => !recebeu(i));
+    // limite de marketing (131049): reenviar antes de 24h falha de novo e é cobrado
+    const seguradas = alvo.filter((i) => /^131049\b/.test(i.erroEntrega || ""));
+    if (seguradas.length && Date.now() - new Date(d.inicioEm).getTime() < 24 * 3600_000) {
+      const r = await confirmModal({
+        title: "Algumas foram seguradas pela Meta",
+        message: `${seguradas.length} aluna(s) não receberam por causa do limite de marketing por pessoa (131049). A Meta pede para esperar 24h — reenviar agora deve falhar de novo.`,
+        confirmLabel: `Deixar essas ${seguradas.length} de fora`,
+        altLabel: "Marcar todas mesmo assim",
+      });
+      if (r === false) return;
+      if (r === true) alvo = alvo.filter((i) => !seguradas.includes(i));
+    }
+    onNovo(alvo.map((i) => i.clientId));
   };
 
   return (<>
@@ -647,7 +1044,7 @@ function Andamento({ id, onNovo }) {
                   <td data-l="Envio"><span className={`badge ${cls}`}>{lbl}</span>{i.motivo && <div className="cli-sub">{i.motivo}</div>}</td>
                   <td data-l="Entrega">
                     {ent ? <span className={`badge ${ent[0]}`}>{ent[1]}</span> : <span className="cli-sub">—</span>}
-                    {i.erroEntrega && <div className="cli-sub">{i.erroEntrega}</div>}
+                    {i.erroEntrega && <div className="cli-sub">{traduzErro(i.erroEntrega)}</div>}
                   </td>
                 </tr>
               );

@@ -7,8 +7,10 @@
 //   node --env-file=.env scripts/wa-templates.mjs --enviar    # submete para aprovação
 //
 // Todos são da categoria UTILITY, e isso é proposital: utilidade custa cerca de
-// R$ 0,04 por mensagem e é GRATUITA dentro de uma janela de 24h aberta pela aluna,
-// enquanto MARKETING custa ~R$ 0,34. Se a Meta reclassificar algum como marketing,
+// R$ 0,04 por mensagem, enquanto MARKETING custa ~R$ 0,34. (Até 30/09/2026 a
+// utilidade era grátis dentro da janela de 24h; desde 01/10/2026 a Meta cobra.)
+// Template novo do dia a dia a Inêz cria pelo painel (Disparo → Criar template),
+// com as regras em src/waTemplateRegras.js. Se a Meta reclassificar algum como marketing,
 // o texto está soando promocional demais — reveja antes de aceitar.
 import { listWaTemplates, createWaTemplate, waTemplatesConfigured } from "../src/wa.js";
 

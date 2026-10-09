@@ -171,7 +171,7 @@ export function sendWaTemplate(to, name, { lang = "pt_BR", header = [], body = [
    segunda página é template invisível. */
 export async function listWaTemplates() {
   if (!WABA_ID) throw new Error("WA_WABA_ID não configurado");
-  const fields = "name,status,language,category,components,rejected_reason";
+  const fields = "id,name,status,language,category,components,rejected_reason,quality_score";
   let after = "", data = [];
   for (let pagina = 0; pagina < 5; pagina++) {
     const r = await graph("GET", `/${WABA_ID}/message_templates?limit=100&fields=${fields}${after ? `&after=${encodeURIComponent(after)}` : ""}`);
@@ -189,19 +189,29 @@ export async function listWaTemplates() {
    que permite a tela dizer "aprovado agora há pouco" sem ficar batendo na
    Graph API de minuto em minuto.
 
-   Exige que o campo esteja assinado no app da Meta (Webhooks → WhatsApp
-   Business Account → message_template_status_update). Sem a assinatura nada
-   quebra: o cache de templates continua expirando pelo relógio. */
+   Mais dois campos mexem no "pode usar ou não" sem ninguém pedir:
+   `template_category_update` (a Meta reclassificou utilidade → marketing;
+   avisa 1 dia antes e de novo quando muda) e `message_template_quality_update`
+   (a qualidade caiu — o passo seguinte dela é pausar o template).
+
+   Exige que os campos estejam assinados no app da Meta (Webhooks → WhatsApp
+   Business Account). Sem a assinatura nada quebra: o cache de templates
+   continua expirando pelo relógio, e a tela do disparo resincroniza sozinha
+   enquanto houver template esperando aprovação. */
+const CAMPOS_TEMPLATE = ["message_template_status_update", "template_category_update", "message_template_quality_update"];
 export function parseTemplateStatuses(body) {
   try {
     const changes = body?.entry?.[0]?.changes || [];
     return changes
-      .filter((c) => c.field === "message_template_status_update")
+      .filter((c) => CAMPOS_TEMPLATE.includes(c.field))
       .map((c) => ({
+        campo: c.field,
         name: c.value?.message_template_name || "",
         language: c.value?.message_template_language || "",
-        status: c.value?.event || "", // APPROVED | REJECTED | PAUSED | ...
-        reason: c.value?.reason && c.value.reason !== "NONE" ? String(c.value.reason) : null,
+        // APPROVED | REJECTED | PAUSED ... — ou a categoria nova, ou a qualidade nova
+        status: c.value?.event || c.value?.new_category || c.value?.new_quality_score || "",
+        reason: c.value?.reason && c.value.reason !== "NONE" ? String(c.value.reason)
+          : c.value?.correct_category ? `deve virar ${c.value.correct_category}` : null,
       }))
       .filter((t) => t.name);
   } catch {
@@ -212,7 +222,10 @@ export function parseTemplateStatuses(body) {
 /* Submete um template para aprovação.
      createWaTemplate({ name, category: "UTILITY", language: "pt_BR", components: [...] })
    category: UTILITY (confirmação, lembrete, cobrança) | MARKETING | AUTHENTICATION.
-   Classificar como UTILITY é o que mantém o custo baixo — ver a política de preços. */
+   Classificar como UTILITY é o que mantém o custo baixo — ver a política de preços.
+   As regras de texto (tamanho, marcadores, categoria) são conferidas ANTES, em
+   waTemplateRegras.js. Sem `parameter_format`: positional ({{1}}) é o padrão da
+   Meta e o único que o disparo entende. */
 export function createWaTemplate({ name, category = "UTILITY", language = "pt_BR", components }) {
   if (!WABA_ID) return Promise.reject(new Error("WA_WABA_ID não configurado"));
   return graph("POST", `/${WABA_ID}/message_templates`, { name, category, language, components });
