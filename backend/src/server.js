@@ -6071,7 +6071,10 @@ app.post("/api/wa/webhook", async (req, res) => {
     for (const t of parseTemplateStatuses(req.body)) {
       cacheTemplates.em = 0;
       const oque = t.campo === "template_category_update" ? "a categoria de" : t.campo === "message_template_quality_update" ? "a qualidade de" : "";
-      console.log(`[wa templates] a Meta mudou ${oque ? oque + " " : ""}${t.name} para ${t.status}${t.reason ? ` (${t.reason})` : ""}.`);
+      const de = t.antes ? ` de ${t.antes}` : "";
+      console.log(t.antecipado
+        ? `[wa templates] AVISO ANTECIPADO: a Meta vai mudar a categoria de ${t.name}${de} para ${t.status} (muda em cerca de 1 dia).`
+        : `[wa templates] a Meta mudou ${oque ? oque + " " : ""}${t.name}${de} para ${t.status}${t.reason ? ` (${t.reason})` : ""}.`);
     }
     const msg = parseIncoming(req.body);
     if (!msg || waSeen.has(msg.id)) return;

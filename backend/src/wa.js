@@ -204,15 +204,25 @@ export function parseTemplateStatuses(body) {
     const changes = body?.entry?.[0]?.changes || [];
     return changes
       .filter((c) => CAMPOS_TEMPLATE.includes(c.field))
-      .map((c) => ({
-        campo: c.field,
-        name: c.value?.message_template_name || "",
-        language: c.value?.message_template_language || "",
-        // APPROVED | REJECTED | PAUSED ... — ou a categoria nova, ou a qualidade nova
-        status: c.value?.event || c.value?.new_category || c.value?.new_quality_score || "",
-        reason: c.value?.reason && c.value.reason !== "NONE" ? String(c.value.reason)
-          : c.value?.correct_category ? `deve virar ${c.value.correct_category}` : null,
-      }))
+      .map((c) => {
+        const v = c.value || {};
+        /* template_category_update chega em dois momentos: o AVISO ANTECIPADO
+           (1 dia antes) traz `correct_category` = a que vai ser e
+           `new_category` = a que ainda é; o aviso de DEPOIS traz `new_category`
+           = a que ficou e `previous_category` = a que era. */
+        const antecipado = c.field === "template_category_update" && !!v.correct_category;
+        return {
+          campo: c.field,
+          name: v.message_template_name || "",
+          language: v.message_template_language || "",
+          // APPROVED | REJECTED | PAUSED ... — ou a categoria (que fica/vai ficar), ou a qualidade nova
+          status: v.event || (antecipado ? v.correct_category : v.new_category) || v.new_quality_score || "",
+          // de onde saiu: a categoria/qualidade anterior
+          antes: (antecipado ? v.new_category : v.previous_category) || v.previous_quality_score || null,
+          antecipado,
+          reason: v.reason && v.reason !== "NONE" ? String(v.reason) : null,
+        };
+      })
       .filter((t) => t.name);
   } catch {
     return [];
