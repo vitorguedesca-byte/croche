@@ -275,6 +275,21 @@ export function ehLeadPrimeiraAula(data, c) {
   return aulaAvulsaDe(data, c).tem;
 }
 
+/* AULA NA AGENDA SEM PLANO (Vitor, 12/10/2026): ficha ativa que NÃO é
+   mensalista mas tem aula de plano marcada — sem valor próprio, que não é
+   avulsa, matrícula nem presente. É a aluna cadastrada cuja matrícula não foi
+   concluída (ou cujo plano nunca foi escolhido na ficha): ela não aparece no
+   Financeiro nem gera mensalidade, e ninguém percebe. Aulas de `desde` a
+   `ate` (ISO; sem `ate`, até o fim da grade). Ligada pelo NOME, como a agenda
+   — pelo telefone puxaria a aula de quem divide o número com outra aluna. */
+export function aulasSemPlano(data, c, desde, ate) {
+  if (c.plan === "mensalista" || c.status === "cancelado" || c.status === "inativo") return [];
+  return (data.bookings || []).filter((b) => b.clientName === c.name && b.status !== "cancelada" &&
+    b.date >= desde && (!ate || b.date <= ate) &&
+    !ehPagamentoDeMatricula(b.paymentMethod) && b.paymentMethod !== PGTO_PRESENTE && b.paymentMethod !== "Avulsa" &&
+    b.paymentMethod !== "Aula Avulsa" && !(Number(b.value) > 0));
+}
+
 export function classifyClient(data, c) {
   if (c.status === "cancelado" || c.status === "inativo") return "ex-aluno";
   // "novato" = aba "Leads 1ª aula" (a chave ficou a mesma para não quebrar os atalhos)

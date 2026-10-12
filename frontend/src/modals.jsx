@@ -2839,8 +2839,24 @@ export function MatricularNovaForm({ client, plano: planoInicial, tipo: tipoInic
     );
   }
 
+  /* Fechar aqui sem Pix nem "recebi por fora" deixa a ficha AVULSA: ela some do
+     Financeiro e marcar aula na agenda não muda isso. Foi o que aconteceu com
+     alunas cadastradas em 09 e 11/10/2026 — por isso a pergunta. */
+  const sairSemMatricular = () => confirmModal({
+    title: "Sair sem matricular?",
+    message: `${client.name} ainda NÃO é mensalista — a ficha fica salva como avulsa.\n\n` +
+      "Enquanto a matrícula não for concluída:\n" +
+      "• ela não aparece no Financeiro e nenhuma mensalidade é gerada\n" +
+      "• marcar aula na agenda não faz dela mensalista\n\n" +
+      "Para terminar depois: na ficha dela, \"🧵 Matricular no plano\" (ela também aparece no Financeiro, em \"🧩 Sem plano\", se tiver aula marcada).\n\n" +
+      "Se ela já era aluna antes do sistema, edite a ficha e marque \"Primeira aula? Não — já é aluno(a)\": entra no plano sem taxa.",
+    confirmLabel: "Sair sem matricular",
+    cancelLabel: "Continuar a matrícula",
+    tone: "danger",
+  });
+
   return (
-    <Modal title="Matricular — taxa + 1ª mensalidade" footer={<>
+    <Modal title="Matricular — taxa + 1ª mensalidade" confirmClose={sairSemMatricular} footer={<>
       <button className="btn ghost" onClick={voltar}>← Voltar ao perfil</button>
       <div style={{ flex: 1 }} />
       <button className="btn sec" onClick={recebiPorFora} disabled={busy}>✓ Recebi por fora</button>

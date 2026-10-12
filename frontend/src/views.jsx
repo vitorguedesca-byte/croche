@@ -6,7 +6,7 @@ import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import {
   SlotCard, DayModal, ManageBooking, ClientProfile, SlotDetail, TurmaView, AlterarMensalidade, FeriadoAulas,
-  baixarMensalidade, AlterarVencimentoModal, BaixarLeadModal,
+  baixarMensalidade, AlterarVencimentoModal, BaixarLeadModal, MatricularNovaForm,
 } from "./modals.jsx";
 import {
   UNITS, STATUS, unitColor,
@@ -16,7 +16,7 @@ import {
   mensalidadeDaComp, precoDaComp, situacaoMensalidade, clientOfBooking, ehPagamentoDeMatricula,
   clientMonthClasses, classifyClient, isNewLead, aulaAvulsaDe,
   aniversariantes, diaMesNasc, diaMesLabel, faltamLabel,
-  proximaCobranca, fraseProximaCobranca, contemBusca, faturaDaComp,
+  proximaCobranca, fraseProximaCobranca, contemBusca, faturaDaComp, aulasSemPlano,
 } from "./helpers.js";
 
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
@@ -1052,17 +1052,30 @@ function FinanceiroOperacao() {
   const emitido = recebido + aReceber + emAtrasoTotal;
   const pctRecebido = emitido ? Math.round((recebido / emitido) * 100) : 0;
 
+  /* Ficha com aula na agenda e SEM plano (Vitor, 12/10/2026): não é
+     mensalista, então não entra na lista acima — mas a escola acha que é aluna
+     e não a encontra aqui. Fica num filtro próprio. No mês atual vale a grade
+     daqui para a frente; mês fechado, só as aulas daquele mês. */
+  const semPlano = data.clients
+    .map((c) => ({ c, aulas: aulasSemPlano(data, c, `${comp}-01`, ehMesAtual ? null : `${comp}-31`) }))
+    .filter((x) => x.aulas.length)
+    .sort((a, b) => a.c.name.localeCompare(b.c.name));
+
   // Filtragem da lista
   const cleanSearch = search.trim();
   const searchDigits = cleanSearch.replace(/\D/g, "");
+  const bateBusca = (c) => {
+    if (!cleanSearch) return true;
+    const matchesName = contemBusca(c.name, cleanSearch);
+    const matchesPhone = (c.phone || "").includes(cleanSearch) || (searchDigits.length > 0 && (c.phone || "").replace(/\D/g, "").includes(searchDigits));
+    const clientCpfDigits = (c.cpf || "").replace(/\D/g, "");
+    const matchesCpf = (c.cpf || "").includes(cleanSearch) || (searchDigits.length > 0 && clientCpfDigits.includes(searchDigits));
+    return matchesName || matchesPhone || matchesCpf;
+  };
+  const semPlanoFiltrados = semPlano.filter((x) => bateBusca(x.c));
+  const verSemPlano = filtroStatus === "semPlano";
   const mensalistasFiltrados = mensalistas.filter((c) => {
-    if (cleanSearch) {
-      const matchesName = contemBusca(c.name, cleanSearch);
-      const matchesPhone = (c.phone || "").includes(cleanSearch) || (searchDigits.length > 0 && (c.phone || "").replace(/\D/g, "").includes(searchDigits));
-      const clientCpfDigits = (c.cpf || "").replace(/\D/g, "");
-      const matchesCpf = (c.cpf || "").includes(cleanSearch) || (searchDigits.length > 0 && clientCpfDigits.includes(searchDigits));
-      if (!matchesName && !matchesPhone && !matchesCpf) return false;
-    }
+    if (!bateBusca(c)) return false;
     if (filtroStatus === "todos") return true;
     const inv = invOf(c);
     if (filtroStatus === "semBoleto") return !inv && c.status !== "cancelado";
@@ -1169,6 +1182,23 @@ function FinanceiroOperacao() {
           <div className="v">{money(previsto)}</div>
           <div className="cli-sub">{previsto ? Math.round((recebido / previsto) * 100) : 0}% fechado</div>
         </div>
+
+        {semPlano.length > 0 && (
+          <div
+            className="fch-card"
+            style={{
+              cursor: "pointer",
+              outline: verSemPlano ? "2px solid var(--danger)" : "none",
+              background: verSemPlano ? "rgba(220,53,69,0.06)" : undefined,
+            }}
+            title="Fichas com aula marcada na agenda que não são mensalistas — não aparecem na lista nem geram mensalidade"
+            onClick={() => setFiltroStatus(verSemPlano ? "todos" : "semPlano")}
+          >
+            <div className="l">🧩 Sem plano</div>
+            <div className="v" style={{ color: "var(--danger)" }}>{semPlano.length}</div>
+            <div className="cli-sub">com aula na agenda · fora desta lista</div>
+          </div>
+        )}
       </div>
 
       {/* Barra de composição visual do mês */}
@@ -1214,10 +1244,25 @@ function FinanceiroOperacao() {
               🚫 Inativas / Canceladas ({canceladasArr.length})
             </button>
           )}
+          {semPlano.length > 0 && (
+            <button className={`btn sm ${verSemPlano ? "" : "ghost"}`} style={verSemPlano ? { background: "var(--danger)", color: "#fff", borderColor: "var(--danger)" } : { color: "var(--danger)" }} onClick={() => setFiltroStatus("semPlano")}>
+              🧩 Sem plano ({semPlano.length})
+            </button>
+          )}
         </div>
 
-        <span className="count">{mensalistasFiltrados.length} de {mensalistas.length}</span>
+        <span className="count">
+          {verSemPlano ? `${semPlanoFiltrados.length} de ${semPlano.length}` : `${mensalistasFiltrados.length} de ${mensalistas.length}`}
+        </span>
       </div>
+
+      {verSemPlano && (
+        <div className="seg-hint">
+          🧩 Fichas com aula marcada na agenda mas <b>sem plano de mensalista</b> — por isso não aparecem na lista de mensalidades nem geram cobrança.
+          {" "}Aluna nova: <b>🧵 Matricular</b> (taxa + 1ª mensalidade, por Pix ou recebido por fora).
+          {" "}Já era aluna antes do sistema: <b>✏️ Ficha</b>, marque “Primeira aula? Não — já é aluno(a)” e escolha o plano (entra sem taxa).
+        </div>
+      )}
 
       {!ehMesAtual && (
         <div className="seg-hint">
@@ -1225,8 +1270,79 @@ function FinanceiroOperacao() {
         </div>
       )}
 
-      {/* Tabela de mensalistas da competência */}
-      {mensalistasFiltrados.length ? (
+      {/* Fichas com aula e sem plano (filtro 🧩) */}
+      {verSemPlano ? (
+        semPlanoFiltrados.length ? (
+          <table>
+            <thead>
+              <tr>
+                <th>Aluno</th>
+                <th>Cadastro</th>
+                <th>Aulas na agenda</th>
+                <th>Situação</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {semPlanoFiltrados.map(({ c, aulas }) => {
+                const hoje = todayISO();
+                const proxima = aulas.find((b) => b.date >= hoje);
+                const ultima = aulas[aulas.length - 1];
+                const matriculaAberta = (data.bookings || []).some((b) => b.clientName === c.name && ehPagamentoDeMatricula(b.paymentMethod) &&
+                  b.status === "aguardando" && !b.paid && Number(b.value) > 0);
+                const podeMatricular = c.matriculaStatus !== "paga" && c.matriculaStatus !== "convertida";
+                return (
+                  <tr key={c.id}>
+                    <td className="c-main">
+                      <div className="cli-row row-click" onClick={() => open(<ClientProfile client={c} />)}>
+                        <span className="cli-av">{initials(c.name)}</span>
+                        <div>
+                          <span className="cli-name">{c.name}</span>
+                          <div className="cli-sub">{c.unit}{c.cpf ? "" : " · ⚠ sem CPF"}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td data-l="Cadastro">
+                      {c.createdAt ? new Date(c.createdAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) : "—"}
+                      <div className="cli-sub">ficha: {c.plan || "avulso"}{c.status === "lead" ? " · lead" : ""}</div>
+                    </td>
+                    <td data-l="Aulas na agenda">
+                      {aulas.length} aula{aulas.length > 1 ? "s" : ""}{ehMesAtual ? "" : ` em ${compLabel(comp)}`}
+                      <div className="cli-sub">{proxima ? `próxima ${fmtDate(proxima.date)}` : `última ${fmtDate(ultima.date)}`}</div>
+                    </td>
+                    <td data-l="Situação">
+                      {matriculaAberta ? (
+                        <span className="badge b-warn" title="O Pix da matrícula foi gerado e ainda não caiu">⏳ matrícula aguardando pagamento</span>
+                      ) : (
+                        <span className="badge b-danger" title="Não é mensalista: não aparece nas mensalidades nem gera cobrança">🧩 sem plano · não gera mensalidade</span>
+                      )}
+                    </td>
+                    <td className="td-actions">
+                      {podeMatricular && (
+                        <button className="btn sm" title="Aluna nova: taxa + 1ª mensalidade (Pix ou recebido por fora)" onClick={() => open(<MatricularNovaForm client={c} />)}>
+                          🧵 Matricular
+                        </button>
+                      )}
+                      <button
+                        className="btn ghost sm"
+                        title="Já era aluna antes do sistema: marque “Primeira aula? Não — já é aluno(a)” e escolha o plano (sem taxa)"
+                        onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}
+                      >
+                        ✏️ Ficha
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty">
+            <div className="ic">🧩</div>
+            <p>{search ? "Nenhuma ficha sem plano encontrada para esta busca." : "Nenhuma ficha com aula na agenda e sem plano. 💚"}</p>
+          </div>
+        )
+      ) : mensalistasFiltrados.length ? (
         <table>
           <thead>
             <tr>
@@ -1390,6 +1506,12 @@ function FinanceiroOperacao() {
         <div className="empty">
           <div className="ic">📅</div>
           <p>{search || filtroStatus !== "todos" ? "Nenhum mensalista encontrado para este filtro." : "Nenhum mensalista nessa competência."}</p>
+          {cleanSearch && semPlanoFiltrados.length > 0 && (
+            <p>
+              {semPlanoFiltrados.map((x) => x.c.name).join(", ")} tem aula na agenda, mas está sem plano de mensalista.
+              {" "}<button className="btn sm" onClick={() => setFiltroStatus("semPlano")}>🧩 Ver em Sem plano</button>
+            </p>
+          )}
         </div>
       )}
     </div>

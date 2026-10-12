@@ -7,13 +7,23 @@ const ModalContext = createContext(null);
 
 export function ModalProvider({ children }) {
   const [node, setNode] = useState(null);
-  const open = useCallback((el) => setNode(el), []);
-  const close = useCallback(() => setNode(null), []);
+  /* Pergunta antes de fechar (ex.: matrícula pela metade). Só o × e o clique
+     fora passam por ela; `close()` e `open()` chamados pelo próprio fluxo
+     (terminou, voltou ao perfil) fecham direto. */
+  const guardRef = useRef(null);
+  const open = useCallback((el) => { guardRef.current = null; setNode(el); }, []);
+  const close = useCallback(() => { guardRef.current = null; setNode(null); }, []);
+  const dismiss = useCallback(async () => {
+    const guard = guardRef.current;
+    if (guard && !(await guard())) return;
+    close();
+  }, [close]);
+  const setGuard = useCallback((fn) => { guardRef.current = fn; }, []);
   return (
-    <ModalContext.Provider value={{ open, close }}>
+    <ModalContext.Provider value={{ open, close, dismiss, setGuard }}>
       {children}
       {node && (
-        <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
+        <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) dismiss(); }}>
           {node}
         </div>
       )}
@@ -22,14 +32,23 @@ export function ModalProvider({ children }) {
 }
 export const useModal = () => useContext(ModalContext);
 
-/* Estrutura visual padrão de um modal */
-export function Modal({ title, children, footer, size, subheader }) {
-  const { close } = useModal();
+/* Estrutura visual padrão de um modal. `confirmClose`: função que resolve
+   true/false — perguntada antes de fechar pelo × ou pelo clique fora. */
+export function Modal({ title, children, footer, size, subheader, confirmClose }) {
+  const { dismiss, setGuard } = useModal();
+  const confirmRef = useRef(confirmClose);
+  confirmRef.current = confirmClose;
+  const temGuarda = !!confirmClose;
+  useEffect(() => {
+    if (!temGuarda) return;
+    setGuard(() => (confirmRef.current ? confirmRef.current() : true));
+    return () => setGuard(null);
+  }, [temGuarda, setGuard]);
   return (
     <div className={`modal${size ? " modal-" + size : ""}`} onClick={(e) => e.stopPropagation()}>
       <div className="modal-h">
         <h3>{title}</h3>
-        <button onClick={close}>×</button>
+        <button onClick={dismiss}>×</button>
       </div>
       {subheader && <div className="modal-sub">{subheader}</div>}
       <div className="modal-b">{children}</div>
