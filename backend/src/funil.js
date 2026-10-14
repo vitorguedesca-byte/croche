@@ -128,6 +128,35 @@ export function descreverConversa(conv) {
   return conv.step === "start" ? passo : `parou em: ${passo}`;
 }
 
+/* ----- /agendar: quem deixou o WhatsApp e não chegou ao Pix (fase 2, 14/10/2026) -----
+   Os passos de uma visita ao /agendar, na ordem. A visita guarda o mais
+   longe que chegou — é o que o relatório "onde param no site" conta. */
+export const PASSOS_SITE = ["inicio", "unidade", "horario", "dados", "pix", "pago"];
+export const passoMaisLonge = (a, b) =>
+  (PASSOS_SITE.indexOf(b) > PASSOS_SITE.indexOf(a) ? b : a);
+
+// Quanto tempo ela pode estar AINDA no site, no meio do pagamento, sem ser chamada de desistente.
+export const SITE_AGORA_MIN = 30;
+
+const DIA_SEMANA = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+// "qui 16/10 às 14:00 · Ipatinga" — a aula que ela escolheu no site
+export function descreverAulaSite(slot) {
+  if (!slot?.date) return null;
+  const [y, m, d] = slot.date.split("-").map(Number);
+  const dow = DIA_SEMANA.at(new Date(Date.UTC(y, m - 1, d)).getUTCDay());
+  return `${dow} ${dm(slot.date)}${slot.time ? ` às ${slot.time}` : ""}${slot.unit ? ` · ${slot.unit}` : ""}`.slice(0, 80);
+}
+
+/* Ela deixou nome e WhatsApp no /agendar e não gerou o Pix. Nos primeiros
+   30 minutos pode estar só preenchendo o pagamento — o cartão diz "agora"
+   para a equipe não chamar quem está no meio da compra. */
+export function descreverSite(lead, agora = Date.now()) {
+  if (!lead?.siteEm) return null;
+  const min = (agora - new Date(lead.siteEm).getTime()) / 60000;
+  if (min < SITE_AGORA_MIN) return "marcando pelo site agora";
+  return `parou no site, no plano e pagamento${lead.siteAula ? ` · aula ${lead.siteAula}` : ""}`;
+}
+
 const tempo = (d) => (d ? new Date(d).getTime() : 0);
 
 /* Onde a lead está agora e até onde ela já chegou.
@@ -141,7 +170,7 @@ const tempo = (d) => (d ? new Date(d).getTime() : 0);
 
    `ganhaAt` é o único que pode voltar a null: se a matrícula foi devolvida, ela
    não é aluna. */
-export function situacaoDaLead({ lead, client = null, reservas = [], conversa = null, hoje }) {
+export function situacaoDaLead({ lead, client = null, reservas = [], conversa = null, hoje, agora = Date.now() }) {
   const entrou = diaBR(lead.createdAt) || hoje;
   const naoAntes = (d) => (d && d < entrou ? entrou : d);
 
@@ -190,7 +219,9 @@ export function situacaoDaLead({ lead, client = null, reservas = [], conversa = 
         : "sem aula marcada";
     } else {
       etapa = "contato";
-      detalhe = descreverConversa(conversa);
+      // o que ela fez por último: a conversa no robô ou a tentativa no site
+      const noSite = lead.siteEm && (!conversa?.lastInboundAt || new Date(lead.siteEm) >= new Date(conversa.lastInboundAt));
+      detalhe = (noSite ? descreverSite(lead, agora) : null) || descreverConversa(conversa) || descreverSite(lead, agora);
     }
   }
   return { etapa, detalhe, marcouAt, pagouAt, ganhaAt };

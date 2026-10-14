@@ -116,12 +116,21 @@ function buildNotifications(data) {
   const funil = data.funilAvisos;
   const etapaTxt = (l) => (ETAPAS.find((e) => e.k === l.etapa) || {}).l || l.etapa;
   const canalTxt = { whatsapp: "pelo WhatsApp", site: "pelo site", escola: "anotada pela equipe" };
-  (funil?.novas || []).forEach((l) => out.push({
-    id: "ln" + l.id, event: true, icon: "🎯", tone: "rgba(194,113,79,.14)",
-    title: `Nova lead — ${l.nome}`,
-    sub: [canalTxt[l.canal], l.detalhe || etapaTxt(l)].filter(Boolean).join(" · "),
-    time: new Date(l.createdAt), nav: (go) => go("funil", { lead: l.id }),
-  }));
+  /* Quem deixou o WhatsApp no /agendar (fase 2) só vira aviso depois de 30
+     min sem gerar o Pix — antes disso ela pode estar no meio do pagamento, e
+     ninguém deve chamá-la. O aviso nasce na hora em que ela "desistiu". */
+  const MIN_NO_SITE = 30 * 60000;
+  (funil?.novas || []).forEach((l) => {
+    const noSite = l.etapa === "contato" && l.siteEm && !(l.detalhe || "").startsWith("parou em");
+    if (noSite && Date.now() - new Date(l.siteEm).getTime() < MIN_NO_SITE) return;
+    out.push({
+      id: "ln" + l.id, event: true, icon: noSite ? "🌐" : "🎯", tone: "rgba(194,113,79,.14)",
+      title: `${noSite ? "Parou no site" : "Nova lead"} — ${l.nome}`,
+      sub: [noSite ? null : canalTxt[l.canal], l.detalhe || etapaTxt(l)].filter(Boolean).join(" · "),
+      time: noSite ? new Date(new Date(l.siteEm).getTime() + MIN_NO_SITE) : new Date(l.createdAt),
+      nav: (go) => go("funil", { lead: l.id }),
+    });
+  });
   (funil?.retornos || []).forEach((l) => out.push({
     id: "lr" + l.id, event: false, icon: "⏰", tone: "rgba(217,164,65,.18)",
     title: `Retornar para ${l.nome}`,

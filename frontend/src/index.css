@@ -1,3 +1,29 @@
+  /* Resumo de reservas compartilhado entre portal, lista e perfil da aluna. */
+  .agendamentos-panel{background:#fff;border:1px solid var(--line);border-radius:16px;padding:1rem 1.1rem;margin:1rem 0}
+  .agendamentos-panel h2{font-size:1.2rem;color:var(--green-deep);margin:0 0 .75rem}
+  .agendamentos{list-style:none;margin:0;padding:0;display:grid;gap:.65rem;min-width:0}
+  .agendamentos li{display:grid;gap:.2rem;border-left:3px solid var(--sage);padding:.15rem 0 .15rem .7rem;min-width:0;overflow-wrap:anywhere}
+  .agendamentos strong{font-size:.9rem;color:var(--green-deep);line-height:1.4}
+  .agendamentos span{font-size:.83rem;color:var(--ink)}
+  .agendamentos strong .agendamentos-horario{display:inline-block;white-space:nowrap;font:inherit;color:inherit}
+  .agendamentos small,.agendamentos-empty{font-size:.78rem;color:var(--brown);line-height:1.45}
+  .agendamentos-empty{margin:.35rem 0}
+  .agendamentos-compact{gap:.5rem;max-width:280px}
+  .agendamentos-compact strong{font-size:.8rem}
+  .agendamentos-compact span,.agendamentos-compact small{font-size:.73rem}
+  .agendamentos + .prof-panel-h{margin-top:1.25rem}
+  @media(max-width:768px){.agendamentos-compact{max-width:none}}
+  @media(min-width:769px) and (max-width:1180px){
+    .content .alunos-table,.content .alunos-table tbody{display:block;width:100%}
+    .content .alunos-table thead{display:none}
+    .content .alunos-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem 1rem;border:1px solid var(--line);border-radius:12px;padding:1rem;margin-bottom:.8rem}
+    .content .alunos-table td{display:block;min-width:0;border:0;padding:.4rem 0;white-space:normal}
+    .content .alunos-table td[data-l]::before{content:attr(data-l);display:block;font-size:.68rem;font-weight:800;color:var(--muted);text-transform:uppercase;margin-bottom:.3rem}
+    .content .alunos-table .c-main,.content .alunos-table .td-actions{grid-column:1/-1}
+    .content .alunos-table .td-actions{display:flex;flex-wrap:wrap;gap:.4rem;border-top:1px solid var(--line);padding-top:.75rem}
+    .content .alunos-table .td-actions .btn{margin-left:0;min-height:40px}
+  }
+
   :root{
     --offwhite:#FAF6EF; --cream:#F3EADB; --sand:#E7D8BE; --beige:#D9C6A4;
     --terracota:#C2714F; --terracota-soft:#D68A68; --sage:#8C9A78; --sage-deep:#6E7C5A;
@@ -1036,7 +1062,7 @@
   .prof-hist{display:flex;align-items:center;gap:.5rem;padding:.42rem 0;border-bottom:1px dashed var(--line);cursor:pointer}
   .prof-hist:last-child{border-bottom:none}
   .prof-hist:hover{background:rgba(243,234,219,.5)}
-  .prof-hist .d{font-weight:700;font-size:.85rem;white-space:nowrap}
+  .prof-hist .d{font-weight:700;font-size:.85rem;white-space:normal}
   .prof-hist .s{font-size:.75rem;color:var(--muted)}
   .prof-hist .r{margin-left:auto;display:flex;gap:.3rem;align-items:center;flex-wrap:wrap;justify-content:flex-end}
   .prof-empty{font-size:.84rem;color:var(--muted);padding:.6rem 0}

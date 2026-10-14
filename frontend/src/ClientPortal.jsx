@@ -6,6 +6,7 @@ import { toast as toastErro, confirmModal } from "./toast.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
+import Agendamentos from "./Agendamentos.jsx";
 import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, compPorExtenso, PLANOS_MENSALISTA, valorPlanoMeta, aulasSeChocam, janelaEscala, PGTO_PRESENTE } from "./helpers.js";
 
 const CPF_KEY = "fqc_portal_cpf";
@@ -359,6 +360,11 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
       ) : (<>
         <ProximaAulaCard booking={prox[0]} meta={meta} />
 
+        <section className="agendamentos-panel" aria-label="Meus agendamentos">
+          <h2>Meus agendamentos</h2>
+          <Agendamentos bookings={bookings} duracao={meta.duracaoAulaMin} />
+        </section>
+
         <div className="pt-actions">
           {podeMarcarAulaNormal && (
             <button className="pt-big" onClick={() => { setModo("normal"); irParaAgenda(); }}>📅<span>Marcar nova aula</span></button>
@@ -428,7 +434,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
         )}
         {proxFiltradas.length ? proxFiltradas.map((b) => (
           <div className="pt-aula" key={b.id}>
-            <div className="pt-when"><b>{fmtDateLong(b.date)}</b><span>{b.time} · {b.unit}</span></div>
+            <div className="pt-when"><b>{fmtDateLong(b.date)}</b><span>{faixaHorario(b.time, meta.duracaoAulaMin)} · {b.unit}</span></div>
             <div className={`pt-status ${b.status}`}>{statusText(b)}</div>
             {ehPresente(b) && <div className="pt-status pt-presente">🎁 Presente</div>}
             {/* A aula não se paga sozinha: ela já está dentro da mensalidade.

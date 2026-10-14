@@ -2,6 +2,7 @@
 import {
   situacaoDaLead, entraNoFunil, ehReservaDeEntrada, origemDaUtm, origemDoAnuncioWa,
   telefoneDaLead, chaveTelefone, limparUtm, utmParaGravar, descreverConversa, diaBR,
+  descreverAulaSite, passoMaisLonge, PASSOS_SITE,
 } from "./src/funil.js";
 
 let falhas = 0;
@@ -93,6 +94,19 @@ ok(limparUtm("texto") === null && limparUtm({}) === null, "lixo vira null");
 const grande = utmParaGravar({ utm_source: "fb", fbclid: "x".repeat(900), referrer: "y".repeat(150) });
 ok(grande && grande.length <= 1000 && JSON.parse(grande).utm_source === "fb" && !JSON.parse(grande).fbclid, "UTM grande cabe na coluna sem cortar o JSON");
 ok(descreverConversa({ step: "aluna" }) === null, "conversa de aluna não descreve");
+
+console.log("\n— /agendar: parou no site (fase 2) —");
+const agora = new Date("2026-10-14T15:00:00Z").getTime();
+const doSite = (minAtras, extra = {}) => ({ ...lead, siteEm: new Date(agora - minAtras * 60000), siteAula: "sex 16/10 às 14:00 · Ipatinga", ...extra });
+ok(sit({ lead: doSite(5), agora }).detalhe === "marcando pelo site agora", "nos primeiros 30 min: ainda está no site");
+ok(sit({ lead: doSite(45), agora }).detalhe === "parou no site, no plano e pagamento · aula sex 16/10 às 14:00 · Ipatinga", "depois: parou no site, com a aula escolhida");
+ok(sit({ lead: doSite(45), conversa: { step: "slot", lastInboundAt: new Date(agora - 10 * 60000) }, agora }).detalhe === "parou em: escolha do horário", "falou no robô depois do site: vale a conversa");
+ok(sit({ lead: doSite(45), conversa: { step: "slot", lastInboundAt: new Date(agora - 90 * 60000) }, agora }).detalhe.startsWith("parou no site"), "site depois do robô: vale o site");
+ok(sit({ lead: doSite(45), client: ficha, agora }).etapa === "cadastro", "com ficha, a etapa segue os fatos da ficha");
+ok(descreverAulaSite({ date: "2026-10-16", time: "14:00", unit: "Ipatinga" }) === "sex 16/10 às 14:00 · Ipatinga", "descreve a aula escolhida");
+ok(descreverAulaSite(null) === null, "sem aula: nada");
+ok(passoMaisLonge("dados", "horario") === "dados" && passoMaisLonge("dados", "pix") === "pix", "a visita só anda para a frente");
+ok(PASSOS_SITE.join(",") === "inicio,unidade,horario,dados,pix,pago", "ordem dos passos do /agendar");
 
 console.log(falhas ? `\n${falhas} FALHA(S)` : "\nTudo certo.");
 process.exit(falhas ? 1 : 0);

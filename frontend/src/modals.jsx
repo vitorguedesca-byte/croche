@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Modal, useModal, StatusBadge, Select } from "./ui.jsx";
 import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
+import Agendamentos from "./Agendamentos.jsx";
 import { useStore } from "./store.jsx";
 import { api } from "./api.js";
 import { toast, confirmModal, promptModal } from "./toast.jsx";
@@ -2292,6 +2293,7 @@ export function ClientProfile({ client, initialTab }) {
   const pago = hist.filter((b) => b.paid).reduce((s, b) => s + b.value, 0);
   const t = todayISO();
   const futuras = hist.filter((b) => b.date >= t && b.status !== "cancelada");
+  const agendamentos = data.bookings.filter((b) => b.clientName === c.name);
   const proxima = futuras.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))[0];
   const temAulaFutura = futuras.length > 0;
   const ehMensalista = c.plan === "mensalista";
@@ -2452,8 +2454,14 @@ export function ClientProfile({ client, initialTab }) {
               <div className="prof-kpi">
                 <div className="l">Próxima aula</div>
                 <div className="v" style={{ fontSize: proxima ? "1.15rem" : "1.45rem" }}>{proxima ? fmtDate(proxima.date) : "—"}</div>
-                <div className="f">{proxima ? `${proxima.time} · ${proxima.unit}` : "nada agendado"}</div>
+                <div className="f">{proxima ? `${faixaHorario(proxima.time, data.meta?.duracaoAulaMin)} · ${proxima.unit}` : "nada agendado"}</div>
               </div>
+            </div>
+            <div className="prof-panel">
+              <div className="prof-panel-h">
+                <b>📅 Agendamentos</b>
+              </div>
+              <Agendamentos bookings={agendamentos} duracao={data.meta?.duracaoAulaMin} />
             </div>
             <div className="prof-panel">
               <div className="prof-panel-h">
@@ -2479,6 +2487,8 @@ export function ClientProfile({ client, initialTab }) {
 
       {tab === "aulas" && (
         <div className="prof-panel">
+          <div className="prof-panel-h"><b>📅 Agendamentos</b></div>
+          <Agendamentos bookings={agendamentos} duracao={data.meta?.duracaoAulaMin} />
           <div className="prof-panel-h">
             <b>📋 Histórico de aulas</b>
             <span className="cli-sub">{hist.length} no total</span>
@@ -2488,7 +2498,7 @@ export function ClientProfile({ client, initialTab }) {
             return (
               <div className="prof-hist" key={b.id} onClick={() => open(<ManageBooking booking={b} onBack={() => open(<ClientProfile client={client} />)} />)}>
                 <div style={{ minWidth: 0 }}>
-                  <div className="d">{fmtDate(b.date)} · {b.time}</div>
+                  <div className="d">{fmtDateLong(b.date)} · {faixaHorario(b.time, data.meta?.duracaoAulaMin)}</div>
                   <div className="s">{b.unit}{b.attendance === "presente" ? " · ✓ presente" : b.attendance === "falta" ? " · ✕ faltou" : ""}</div>
                 </div>
                 <div className="r">

@@ -4,6 +4,7 @@ import { useStore } from "./store.jsx";
 import { useModal, StatusBadge, Select } from "./ui.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
+import Agendamentos from "./Agendamentos.jsx";
 import {
   SlotCard, DayModal, ManageBooking, ClientProfile, SlotDetail, TurmaView, AlterarMensalidade, FeriadoAulas,
   baixarMensalidade, AlterarVencimentoModal, BaixarLeadModal, MatricularNovaForm,
@@ -645,6 +646,11 @@ export function Clientes({ params, go }) {
   const comp = compAtual();
   const mesOf = (c) => clientMonthClasses(data, c.name, comp);
   const cntOf = (c) => mesOf(c).feitas;
+  const agendamentosPorNome = new Map();
+  for (const b of data.bookings) {
+    if (!agendamentosPorNome.has(b.clientName)) agendamentosPorNome.set(b.clientName, []);
+    agendamentosPorNome.get(b.clientName).push(b);
+  }
 
   const groups = { cliente: [], novato: [], lead: [], "ex-aluno": [] };
   data.clients.forEach((c) => {
@@ -790,11 +796,12 @@ export function Clientes({ params, go }) {
         <span className="count">{list.length} de {groups[tab].length}</span>
       </div>
       {list.length ? (
-        <table>
+        <table className="alunos-table">
           <thead>
             <tr>
               <th>Aluno</th>
               <th>Unidade</th>
+              <th>Agendamentos</th>
               <th title={tab === "ex-aluno" ? "Total de presenças registradas no histórico" : `Aulas feitas em ${compLabel(comp)}`}>
                 {tab === "ex-aluno" ? "Aulas no histórico" : "Aulas no mês"}
               </th>
@@ -842,6 +849,9 @@ export function Clientes({ params, go }) {
                     </div>
                   </td>
                   <td data-l="Unidade"><span className="chip">{c.unit}</span></td>
+                  <td data-l="Agendamentos">
+                    <Agendamentos compact bookings={agendamentosPorNome.get(c.name) || []} duracao={data.meta?.duracaoAulaMin} />
+                  </td>
                   <td data-l={tab === "ex-aluno" ? "Aulas no histórico" : "Aulas no mês"}>
                     {tab === "ex-aluno" ? (
                       <b style={{ color: at.pres ? "var(--terracota)" : "var(--muted)" }}>{at.pres} aula(s) feita(s)</b>

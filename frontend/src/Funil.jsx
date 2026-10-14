@@ -105,6 +105,10 @@ export function mensagemDaLead(lead, meta = {}) {
   const plano1x = Number(meta.valorPlano1x) || 0;
   switch (lead?.etapa) {
     case "contato":
+      // parou no site, no plano e pagamento: a aula que ela escolheu está guardada
+      if (det.startsWith("parou no site") || det.includes("pelo site")) {
+        return `${oi} Aqui é da Fios que Curam 💚 Vi que você começou a marcar sua primeira aula pelo site${lead.siteAula ? ` (${lead.siteAula})` : ""}. Ficou alguma dúvida sobre os planos ou o pagamento? Posso te ajudar a concluir!`;
+      }
       return `${oi} Aqui é da Fios que Curam 💚 Vi que você começou a marcar sua aula de crochê com a gente. Posso te ajudar a escolher o melhor horário?`;
     case "cadastro":
       return `${oi} Tudo bem? 💚 Seu cadastro na Fios que Curam já está feito — só falta escolher o horário da sua primeira aula. Quer que eu te mande os horários com vaga${lead.unit ? ` em ${lead.unit}` : ""}?`;
@@ -600,6 +604,54 @@ function BarrasDeConversao({ grupos }) {
   );
 }
 
+/* Barras centradas que encolhem a cada degrau, com quantos seguiram entre um
+   e outro — o mesmo desenho para o funil das leads e para o do /agendar. */
+function Degraus({ degraus }) {
+  const base = degraus[0]?.n || 0;
+  return (
+    <div className="fn-funil">
+      {degraus.map((d, i) => (
+        <div key={d.l}>
+          {i > 0 && <div className="fn-passo">↓ {pct(d.n, degraus[i - 1].n)}% seguiram</div>}
+          <div className="fn-degrau">
+            <div className="fn-degrau-l">{d.l}</div>
+            <div className="fn-degrau-barra"><div style={{ width: `${Math.max(1, pct(d.n, base))}%`, opacity: 1 - i * 0.1 }} /></div>
+            <div className="fn-degrau-n"><b>{d.n}</b> · {pct(d.n, base)}%</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* Onde as visitas ao /agendar param (fase 2, 14/10/2026). Contagem anônima:
+   mostra também quem saiu ANTES de deixar o WhatsApp — esse não vira lead. */
+const PASSO_SITE_TEXTO = {
+  inicio: "Abriram o /agendar", unidade: "Escolheram a unidade", horario: "Escolheram o horário",
+  dados: "Deixaram nome e WhatsApp", pix: "Geraram o Pix", pago: "Pagaram",
+};
+function OndeParamNoSite({ de, ate }) {
+  const [r, setR] = useState(null);
+  useEffect(() => {
+    let vivo = true;
+    setR(null);
+    api.funil.site(de, ate).then((x) => vivo && setR(x)).catch(() => vivo && setR({ erro: true }));
+    return () => { vivo = false; };
+  }, [de, ate]);
+  if (!r) return null;
+  if (r.erro) return null;
+  return (
+    <div className="panel">
+      <div className="panel-h"><h2>🌐 Onde param no /agendar <span className="muted-note">· visitas ao site no período</span></h2></div>
+      {r.total ? <Degraus degraus={r.passos.map((p) => ({ l: PASSO_SITE_TEXTO[p.passo] || p.passo, n: p.n }))} />
+        : <div className="empty" style={{ padding: "1rem" }}><p>Nenhuma visita ao /agendar neste período.</p></div>}
+      <div className="vg-legenda">
+        Contagem sem identificar ninguém{r.desde ? `, desde ${fmtDate(r.desde)}` : ""}. Quem deixou nome e WhatsApp e não gerou o Pix está no Quadro, em Primeiro contato.
+      </div>
+    </div>
+  );
+}
+
 function agrupar(lista, chave, rotulo) {
   const m = new Map();
   for (const l of lista) {
@@ -660,24 +712,16 @@ function Relatorio({ leads, units }) {
       </div>
     </div>
 
-    {coorte.length === 0 ? (
+    {coorte.length === 0 ? (<>
       <div className="panel"><div className="empty"><div className="ic">🎯</div><p>Nenhuma lead entrou neste período.</p></div></div>
-    ) : (<>
+      <OndeParamNoSite de={de} ate={ate} />
+    </>) : (<>
       <div className="panel">
         <div className="panel-h"><h2>🔻 Do contato à matrícula</h2></div>
-        <div className="fn-funil">
-          {degraus.map((d, i) => (
-            <div key={d.l}>
-              {i > 0 && <div className="fn-passo">↓ {pct(d.n, degraus[i - 1].n)}% seguiram</div>}
-              <div className="fn-degrau">
-                <div className="fn-degrau-l">{d.l}</div>
-                <div className="fn-degrau-barra"><div style={{ width: `${Math.max(1, pct(d.n, degraus[0].n))}%`, opacity: 1 - i * 0.12 }} /></div>
-                <div className="fn-degrau-n"><b>{d.n}</b> · {pct(d.n, degraus[0].n)}%</div>
-              </div>
-            </div>
-          ))}
-        </div>
+        <Degraus degraus={degraus} />
       </div>
+
+      <OndeParamNoSite de={de} ate={ate} />
 
       <div className="panel">
         <div className="panel-h"><h2>📣 De onde vêm <span className="muted-note">· verde = viraram aluna</span></h2></div>

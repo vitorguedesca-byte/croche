@@ -314,7 +314,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   // Esta tela marca a PRIMEIRA aula da aluna e a matricula no mesmo passo:
   // ela escolhe unidade, horário e plano e paga a 1ª mensalidade. As aulas
   // seguintes ela marca sozinha pela área do aluno.
-  const [step, setStep] = useState("unit"); // unit | cal1 | pay | done
+  const [step, setStep] = useState("unit"); // unit | cal1 | dados | pay | done
   const [unit, setUnit] = useState(null);
   const [slot, setSlot] = useState(null); // horário da primeira aula
   const [extras, setExtras] = useState([]); // demais horários da semana, no plano 2x a 4x
@@ -330,6 +330,24 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const [tipo, setTipo] = useState("escala");
   const isAvulso = modalidade === "avulso";
   const freq = isAvulso ? 1 : (Number(modalidade.replace("mensal", "")) || 1);
+
+  /* Funil de leads, fase 2 (14/10/2026): até que passo esta visita chegou —
+     anônimo, um número sorteado por aba do navegador — e o nome + WhatsApp do
+     passo "Seus dados", que vira lead na hora (quem para no preço não some
+     mais). Só na tela pública: o "Ver como aluno" do painel não conta. */
+  const [sessao] = useState(() => {
+    const novo = () => (window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2) + Date.now().toString(36));
+    try {
+      let s = sessionStorage.getItem("fqc_sessao");
+      if (!s) { s = novo(); sessionStorage.setItem("fqc_sessao", s); }
+      return s;
+    } catch { return novo(); }
+  });
+  const marcarPasso = (passo, u) => {
+    if (!fromSite) return;
+    api.agendar.passo({ sessao, passo, unit: u || undefined, utm: window.fqcVisita?.() || undefined }).catch(() => {});
+  };
+  useEffect(() => { marcarPasso("inicio"); }, []);
 
   const [booking, setBooking] = useState(null);
   const [inscricao, setInscricao] = useState(null); // { valorMensal, primeiroVencimento }
@@ -409,7 +427,21 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   };
   useEffect(() => { loadAvail(); }, []);
 
-  const stepNum = { unit: 1, cal1: 2, pay: 3, done: 4 }[step];
+  const stepNum = { unit: 1, cal1: 2, dados: 3, pay: 4, done: 5 }[step];
+
+  // Passo 3: nome e WhatsApp. Não espera a resposta — a tela segue na hora.
+  const continuarDados = () => {
+    if (name.trim().length < 2) return flash("Escreva o seu nome. 💚");
+    if (phone.replace(/\D/g, "").length < 10) return flash("Escreva o seu WhatsApp com DDD. 💚");
+    if (fromSite) {
+      api.agendar.contato({
+        sessao, nome: name.trim(), phone: phone.trim(), slotId: slot?.id, unit: slot?.unit,
+        utm: window.fqcVisita?.() || undefined,
+      }).catch(() => {});
+      marcarPasso("dados", slot?.unit);
+    }
+    setStep("pay");
+  };
 
   // Passo 3: gera a cobrança da 1ª mensalidade ou aula avulsa (Sicredi) e cria a reserva provisória
   const gerarPix = async () => {
@@ -443,8 +475,11 @@ export default function FirstClassBooking({ onBack, fromSite }) {
         voucher: voucher?.codigo || undefined,
         // de onde ela veio (link do anúncio, Instagram…) — vira a origem da lead no funil (public/visita.js)
         utm: window.fqcVisita?.() || undefined,
+        // a visita deste passo a passo: liga a reserva à lead do "Seus dados", mesmo com outro WhatsApp
+        sessao: fromSite ? sessao : undefined,
       });
       if (!booking) window.metaTrack?.("Lead", { content_name: isAvulso ? "aula avulsa" : "matricula", value: total, currency: "BRL" }, `lead-${b.id}`);
+      if (!booking) marcarPasso("pix", slot.unit);
       setBooking(b);
       /* O código zerou o pagamento: o servidor já confirmou a vaga (não existe
          Pix de R$ 0), então vai direto para o "tudo certo". */
@@ -493,6 +528,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   // Anúncios: pagamento aprovado = Purchase. O backend manda o mesmo eventID (metaCapi.js).
   useEffect(() => {
     if (step === "done" && booking?.id) window.metaTrack?.("Purchase", { value: total, currency: "BRL" }, `purchase-${booking.id}`);
+    if (step === "done") marcarPasso("pago", slot?.unit);
   }, [step, booking?.id]);
 
   // Polling suave a cada 5s enquanto o Pix estiver na tela para reconhecer o pagamento automático
@@ -534,7 +570,8 @@ export default function FirstClassBooking({ onBack, fromSite }) {
             <div className="pt-steps">
               <span className={`pt-step ${stepNum >= 1 ? "on" : ""}`}>1 · Unidade</span>
               <span className={`pt-step ${stepNum >= 2 ? "on" : ""}`}>2 · Horário</span>
-              <span className={`pt-step ${stepNum >= 3 ? "on" : ""}`}>3 · {isAvulso ? "Opção e pagamento" : "Plano e pagamento"}</span>
+              <span className={`pt-step ${stepNum >= 3 ? "on" : ""}`}>3 · Seus dados</span>
+              <span className={`pt-step ${stepNum >= 4 ? "on" : ""}`}>4 · {isAvulso ? "Opção e pagamento" : "Plano e pagamento"}</span>
             </div>
           )}
         </div>
@@ -545,7 +582,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
             <h2 className="pt-h2" style={{ marginTop: 0 }}>Escolha a unidade</h2>
             <div className="pt-unit-pick">
               {meta.units.map((u) => (
-                <button key={u} className="pt-unit-card" onClick={() => { setUnit(u); setSlot(null); setExtras([]); loadAvail(u); setStep("cal1"); }}>
+                <button key={u} className="pt-unit-card" onClick={() => { setUnit(u); setSlot(null); setExtras([]); loadAvail(u); setStep("cal1"); marcarPasso("unidade", u); }}>
                   <div className="ic">📍</div><b>{u}</b><span>Aulas presenciais</span>
                 </button>
               ))}
@@ -559,7 +596,29 @@ export default function FirstClassBooking({ onBack, fromSite }) {
             <button className="pt-link" onClick={() => { setStep("unit"); setUnit(null); setExtras([]); }}>← Trocar unidade ({unit})</button>
             <h2 className="pt-h2">Escolha o dia e o horário</h2>
             {loading ? <div className="pt-cal-empty">Carregando horários…</div>
-              : <PtAgenda available={available} value={slot} onPick={(s) => { setSlot(s); setExtras([]); setStep("pay"); }} />}
+              : <PtAgenda available={available} value={slot} onPick={(s) => { setSlot(s); setExtras([]); setStep("dados"); marcarPasso("horario", s.unit); }} />}
+          </div>
+        )}
+
+        {/* 3 · SEUS DADOS — nome e WhatsApp antes do plano e do preço (funil, fase 2) */}
+        {step === "dados" && slot && (
+          <div className="pt-card">
+            <button className="pt-link" onClick={() => setStep("cal1")}>← Trocar horário</button>
+            <div className="pt-fc-resume">
+              <div>📍 <b>{slot.unit}</b> · {capitalize(fmtDateLong(slot.date))} · <b>{slot.time}</b></div>
+            </div>
+            <h2 className="pt-h2">Ótima escolha! Como podemos te chamar?</h2>
+            <label className="pt-label">Seu nome</label>
+            <input className="pt-input" style={{ textAlign: "left", fontSize: "1.1rem" }} value={name} autoComplete="name"
+              onChange={(e) => setName(e.target.value)} placeholder="Seu nome completo" />
+            <label className="pt-label" style={{ marginTop: ".9rem" }}>Seu WhatsApp (com DDD)</label>
+            <input className="pt-input" style={{ textAlign: "left", fontSize: "1.1rem" }} inputMode="tel" autoComplete="tel" value={phone}
+              onChange={(e) => setPhone(e.target.value)} placeholder="31988880000"
+              onKeyDown={(e) => { if (e.key === "Enter") continuarDados(); }} />
+            <p className="pt-hint" style={{ marginTop: ".8rem", fontSize: ".9rem" }}>
+              Usamos o seu WhatsApp só para falar sobre a sua aula — e, se você precisar de ajuda para concluir, a gente te chama. 💚
+            </p>
+            <button className="pt-btn" onClick={continuarDados}>Continuar →</button>
           </div>
         )}
 
@@ -618,10 +677,11 @@ export default function FirstClassBooking({ onBack, fromSite }) {
             )}
 
             {!pix ? (<>
-              <label className="pt-label">Seu nome</label>
-              <input className="pt-input" style={{ textAlign: "left", fontSize: "1.1rem" }} value={name} onChange={(e) => setName(e.target.value)} placeholder="Como podemos te chamar?" />
-              <label className="pt-label" style={{ marginTop: ".9rem" }}>Seu WhatsApp (com DDD)</label>
-              <input className="pt-input" style={{ textAlign: "left", fontSize: "1.1rem" }} inputMode="numeric" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="31988880000" />
+              {/* nome e WhatsApp vieram do passo "Seus dados" */}
+              <div style={{ fontSize: ".95rem", color: "var(--brown)", marginBottom: ".2rem" }}>
+                👤 <b>{name.trim()}</b> · {phone}{" "}
+                <button type="button" className="pt-link" style={{ fontSize: ".9rem", padding: 0 }} onClick={() => setStep("dados")}>alterar</button>
+              </div>
               <label className="pt-label" style={{ marginTop: ".9rem" }}>Seu CPF</label>
               <input className="pt-input" style={{ textAlign: "left", fontSize: "1.1rem" }} inputMode="numeric" value={cpf} onChange={(e) => setCpf(formatarCPF(e.target.value))} placeholder="000.000.000-00" />
               <label className="pt-label" style={{ marginTop: ".9rem" }}>Seu email</label>

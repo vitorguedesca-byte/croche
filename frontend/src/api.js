@@ -179,6 +179,14 @@ export const api = {
     evento: (id, data) => req("POST", `/api/funil/${id}/eventos`, data),
     perder: (id, motivo, texto) => req("POST", `/api/funil/${id}/perder`, { motivo, texto }),
     reabrir: (id) => req("POST", `/api/funil/${id}/reabrir`, {}),
+    // onde as visitas ao /agendar param, no período (contagem anônima)
+    site: (de, ate) => req("GET", `/api/funil/site?de=${de}&ate=${ate}`),
+  },
+
+  // /agendar (público): o passo a que a visita chegou, e o nome + WhatsApp do passo "Seus dados"
+  agendar: {
+    passo: (data) => req("POST", "/api/agendar/passo", data),
+    contato: (data) => req("POST", "/api/agendar/contato", data),
   },
 
   vouchers: {

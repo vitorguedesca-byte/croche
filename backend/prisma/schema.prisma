@@ -646,6 +646,12 @@ model Lead {
   ultimoContatoAt DateTime?
   perdidaAt       String?   @db.VarChar(10) // dada como perdida pela equipe; null = aberta
   motivoPerda     String?   @db.VarChar(20) // ver MOTIVOS_PERDA em src/funil.js
+  /* Deixou nome e WhatsApp no /agendar (passo "Seus dados") — fase 2,
+     14/10/2026. `siteEm` = a última vez; `siteAula` = a aula que ela tinha
+     escolhido ("sex 16/10 às 14:00 · Ipatinga"). É o que o cartão mostra de
+     quem parou no plano e pagamento sem gerar o Pix. */
+  siteAula        String?   @db.VarChar(80)
+  siteEm          DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   eventos         LeadEvento[]
@@ -654,6 +660,25 @@ model Lead {
   @@index([etapa])
   @@index([createdAt])
   @@index([proximoContato])
+}
+
+/* Uma visita ao /agendar e o passo mais longe a que ela chegou (fase 2,
+   14/10/2026): inicio → unidade → horario → dados → pix → pago. ANÔNIMA: o id
+   é um número sorteado pela aba do navegador, sem nome, telefone nem IP. É o
+   que mostra onde as pessoas param ANTES de deixar o WhatsApp — e se o passo
+   novo de "Seus dados" fez cair a matrícula. `leadId` liga a visita à lead
+   quando ela deixa o WhatsApp. */
+model SiteVisita {
+  id        String   @id @db.VarChar(40)
+  dia       String   @db.VarChar(10) // 'YYYY-MM-DD' (Brasília) em que a visita começou
+  passo     String   @db.VarChar(12)
+  unit      String?  @db.VarChar(100)
+  origem    String?  @db.VarChar(12) // origemDaUtm da visita (anúncio, redes…)
+  leadId    Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([dia])
 }
 
 /* Histórico da lead: anotação e contato registrados pela equipe, e o que o

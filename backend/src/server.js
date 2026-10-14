@@ -108,6 +108,9 @@ import {
   limparUtm,
   utmParaGravar,
   diaBR,
+  PASSOS_SITE,
+  passoMaisLonge,
+  descreverAulaSite,
 } from "./funil.js";
 import { waConfigured, waTemplatesConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, parseTemplateStatuses, normalizePhone, listWaTemplates, createWaTemplate } from "./wa.js";
 import { montarTemplate, textoComMarcadores, MARCADORES, LIMITES as LIMITES_TEMPLATE } from "./waTemplateRegras.js";
@@ -195,6 +198,9 @@ const PUBLIC_API = [
      (não reserva vaga da campanha) e tem limite de tentativas por IP — ver
      /api/vouchers/validar. Quem reserva é a criação da reserva. */
   ["POST", /^\/api\/vouchers\/validar$/],
+  /* /agendar (funil, fase 2): o passo a que a visita chegou (anônimo) e o nome
+     + WhatsApp do passo "Seus dados". Limite por IP dentro das rotas. */
+  ["POST", /^\/api\/agendar\/(passo|contato)$/],
   ["GET", /^\/api\/testimonials$/],
   ["GET", /^\/api\/settings$/],
   [null, /^\/api\/wa\/webhook$/],
@@ -2409,7 +2415,7 @@ app.post(
       });
       /* Funil: a lead ganha a ficha e a origem da visita (UTM que o site
          guardou). Falhar aqui não pode derrubar a reserva — o Pix vem a seguir. */
-      if (client) registrarLeadDoSite(client, { utm: b.utm, unit }).catch((e) => console.warn("[funil site]", e.message));
+      if (client) registrarLeadDoSite(client, { utm: b.utm, unit, sessao: b.sessao }).catch((e) => console.warn("[funil site]", e.message));
     }
 
     // compatibilidade: sem replicação, devolve a marcação criada (como antes)
@@ -9431,12 +9437,22 @@ async function registrarLeadDoWhatsApp(msg) {
    visita — o que o site guardou do link (UTM do anúncio, fbclid, de onde
    veio). Se ela já estava no funil (falou antes com o robô), a origem que já
    existia fica: o primeiro contato é o que conta. */
-async function registrarLeadDoSite(client, { utm, unit } = {}) {
+async function registrarLeadDoSite(client, { utm, unit, sessao } = {}) {
   const u = limparUtm(utm);
   const key = chaveTelefone(client.phone) || null;
   const origem = origemDaUtm(u);
   let lead = await prisma.lead.findUnique({ where: { clientId: client.id } });
   if (!lead && key) lead = await prisma.lead.findFirst({ where: { phoneKey: key, clientId: null }, orderBy: { createdAt: "asc" } });
+  /* A lead do passo "Seus dados" DESTA visita (fase 2). O telefone que ela
+     digitou ali pode não ser o da ficha: quem volta com o mesmo CPF cai na
+     ficha antiga, que tem outro número. Sem isto, a lead do site ficava solta
+     em "Primeiro contato" mesmo depois de ela marcar. */
+  const visita = SESSAO_RE.test(String(sessao || "")) ? await prisma.siteVisita.findUnique({ where: { id: String(sessao) } }) : null;
+  const daVisita = visita?.leadId ? await prisma.lead.findUnique({ where: { id: visita.leadId } }) : null;
+  if (daVisita && !daVisita.clientId && daVisita.id !== lead?.id) {
+    lead = lead ? (await mesclarLeads(lead, daVisita)).fica : daVisita;
+    await prisma.siteVisita.update({ where: { id: visita.id }, data: { leadId: lead.id } });
+  }
   if (!lead) {
     lead = await prisma.lead.create({
       data: {
@@ -9459,6 +9475,127 @@ async function registrarLeadDoSite(client, { utm, unit } = {}) {
   await recalcularLead(lead.id);
 }
 
+/* ===================== /agendar: QUEM DESISTE NO SITE (fase 2, 14/10/2026) =====================
+   O /agendar ganhou o passo "Seus dados" (nome + WhatsApp) logo depois do
+   horário, ANTES do plano e do preço. Quem deixa o WhatsApp vira lead na
+   hora; se não chegar ao Pix, o cartão fica em "Primeiro contato" dizendo
+   onde parou e a aula que tinha escolhido. Quem gera o Pix é a mesma lead
+   que ganha a ficha (registrarLeadDoSite acha pelo telefone).
+
+   À parte, cada visita guarda o passo mais longe a que chegou (SiteVisita,
+   anônima) — é o que mostra quem sai ANTES de deixar o WhatsApp. */
+const SESSAO_RE = /^[a-z0-9-]{8,40}$/i;
+const AGENDAR_PASSOS_IP = new Map();
+const AGENDAR_CONTATO_IP = new Map();
+/* Limite de chamadas por IP numa janela — as duas rotas são públicas. Folgado
+   de propósito: no 4G, muitos celulares saem pelo MESMO IP da operadora. */
+function excedeuPorIp(mapa, req, limite, janelaMs = 10 * 60_000) {
+  const ip = String(req.headers["x-forwarded-for"] || req.ip || "").split(",")[0].trim() || "?";
+  const agora = Date.now();
+  const lista = (mapa.get(ip) || []).filter((t) => agora - t < janelaMs);
+  lista.push(agora);
+  mapa.set(ip, lista);
+  if (mapa.size > 5000) mapa.clear();
+  return lista.length > limite;
+}
+
+app.post("/api/agendar/passo", wrap(async (req, res) => {
+  // estourou o limite: ignora calado — é só contagem, a tela não depende disto
+  if (excedeuPorIp(AGENDAR_PASSOS_IP, req, 300)) return res.json({ ok: true });
+  const b = req.body || {};
+  const sessao = String(b.sessao || "");
+  if (!SESSAO_RE.test(sessao) || !PASSOS_SITE.includes(b.passo)) return res.status(400).json({ error: "Passo inválido." });
+  const unit = String(b.unit || "").trim().slice(0, 100) || null;
+  const atual = await prisma.siteVisita.findUnique({ where: { id: sessao } });
+  if (!atual) {
+    await prisma.siteVisita.create({
+      data: { id: sessao, dia: todayISO(), passo: b.passo, unit, origem: origemDaUtm(limparUtm(b.utm)) },
+    }).catch(() => {}); // duas chamadas juntas da mesma aba: a segunda perde, tanto faz
+  } else {
+    const passo = passoMaisLonge(atual.passo, b.passo);
+    if (passo !== atual.passo || (unit && unit !== atual.unit)) {
+      await prisma.siteVisita.update({ where: { id: sessao }, data: { passo, ...(unit ? { unit } : {}) } });
+    }
+  }
+  res.json({ ok: true });
+}));
+
+/* Nome + WhatsApp do passo "Seus dados". Responde sempre o mesmo `ok`: a rota
+   é pública e não pode servir para descobrir se um telefone é de aluna. */
+app.post("/api/agendar/contato", wrap(async (req, res) => {
+  if (excedeuPorIp(AGENDAR_CONTATO_IP, req, 20))
+    return res.status(429).json({ error: "Muitas tentativas. Espere alguns minutos e tente de novo. 💚" });
+  const b = req.body || {};
+  const nome = padronizarNome(String(b.nome || "").trim()).slice(0, 120);
+  const phone = telefoneDaLead(b.phone);
+  if (nome.length < 2 || !phone) return res.status(400).json({ error: "Preencha seu nome e o WhatsApp com DDD. 💚" });
+  const slot = Number(b.slotId) ? await prisma.slot.findUnique({ where: { id: Number(b.slotId) } }) : null;
+  const sessao = SESSAO_RE.test(String(b.sessao || "")) ? String(b.sessao) : null;
+  await registrarContatoDoSite({ nome, phone, slot, unit: b.unit, utm: b.utm, sessao })
+    .catch((e) => console.warn("[funil agendar]", e.message));
+  res.json({ ok: true });
+}));
+
+async function registrarContatoDoSite({ nome, phone, slot, unit, utm, sessao }) {
+  const key = chaveTelefone(phone);
+  if (!key) return;
+  const fichas = (await prisma.client.findMany({
+    where: { phone: { not: null } }, select: { id: true, status: true, plan: true, phone: true },
+  })).filter((c) => chaveTelefone(c.phone) === key);
+  // aluna e ex-aluna não são lead (a matrícula delas é barrada adiante, com o aviso de sempre)
+  if (fichas.some((c) => c.status !== "lead" || c.plan === "mensalista")) return;
+  if (fichas.length) await sincronizarFunilSePreciso(0); // a ficha de lead ganha a lead dela antes
+  const u = limparUtm(utm);
+  const origem = origemDaUtm(u);
+  const aula = descreverAulaSite(slot);
+  let lead = await prisma.lead.findFirst({ where: { phoneKey: key }, orderBy: { createdAt: "asc" } });
+  if (!lead) {
+    lead = await prisma.lead.create({
+      data: {
+        nome, phone, phoneKey: key, unit: slot?.unit || String(unit || "").trim().slice(0, 100) || null,
+        canal: "site", origem, utm: utmParaGravar(u), siteAula: aula, siteEm: new Date(),
+      },
+    });
+    await eventoLead(lead.id, "sistema", `🌐 Começou a marcar pelo site e deixou o WhatsApp${aula ? ` — aula escolhida: ${aula}` : ""}.`);
+  } else {
+    // voltou/avançou e voltou no mesmo site em poucos minutos: não repete o histórico
+    const repetido = lead.siteEm && Date.now() - new Date(lead.siteEm).getTime() < 30 * 60_000 && lead.siteAula === aula;
+    const reabre = !!lead.perdidaAt && lead.etapa !== "matriculada"; // está tentando marcar: interessada de novo
+    const patch = { siteAula: aula, siteEm: new Date() };
+    if (!lead.canal) patch.canal = "site";
+    if (u && !lead.utm) patch.utm = utmParaGravar(u);
+    if (origem && !lead.origem) patch.origem = origem;
+    // o nome do perfil do WhatsApp ("Contato do WhatsApp", apelido) dá lugar ao nome que ela digitou
+    if (!lead.clientId && lead.canal === "whatsapp" && lead.nome !== nome) patch.nome = nome;
+    if (reabre) { patch.perdidaAt = null; patch.motivoPerda = null; }
+    lead = await prisma.lead.update({ where: { id: lead.id }, data: patch });
+    if (!repetido || reabre) {
+      await eventoLead(lead.id, reabre ? "reaberta" : "sistema",
+        `🌐 Começou a marcar pelo site${aula ? ` — aula escolhida: ${aula}` : ""}${reabre ? " — lead reaberta" : ""}.`);
+    }
+  }
+  if (sessao) await prisma.siteVisita.updateMany({ where: { id: sessao }, data: { leadId: lead.id } });
+  await recalcularLead(lead.id);
+}
+
+/* Relatório "onde param no /agendar": de cada visita no período, até que
+   passo ela chegou. Quem chegou ao Pix também passou pelo horário — por isso a
+   contagem é de quem chegou ATÉ cada passo, e só desce. */
+app.get("/api/funil/site", wrap(async (req, res) => {
+  const de = dataISO(req.query.de), ate = dataISO(req.query.ate);
+  if (!de || !ate) return res.status(400).json({ error: "Período inválido." });
+  const visitas = await prisma.siteVisita.findMany({
+    where: { dia: { gte: de, lte: ate } }, select: { passo: true, unit: true, origem: true },
+  });
+  const chegou = (i) => visitas.filter((v) => PASSOS_SITE.indexOf(v.passo) >= i).length;
+  const primeira = await prisma.siteVisita.findFirst({ orderBy: { dia: "asc" }, select: { dia: true } });
+  res.json({
+    desde: primeira?.dia || null,
+    total: visitas.length,
+    passos: PASSOS_SITE.map((p, i) => ({ passo: p, n: chegou(i) })),
+  });
+}));
+
 /* Para as notificações (vão no /api/state): retorno marcado até hoje e lead
    que chegou nos últimos 3 dias — só as em aberto. Falhar aqui não pode
    derrubar o painel inteiro. */
@@ -9466,7 +9603,7 @@ async function avisosDoFunil() {
   try {
     const hoje = todayISO();
     const abertas = { etapa: { notIn: ["matriculada", "perdida"] } };
-    const select = { id: true, nome: true, phone: true, etapa: true, detalhe: true, canal: true, origem: true, proximoContato: true, ultimoContatoAt: true, createdAt: true };
+    const select = { id: true, nome: true, phone: true, etapa: true, detalhe: true, canal: true, origem: true, proximoContato: true, ultimoContatoAt: true, siteEm: true, createdAt: true };
     const [retornos, novas, semRetorno] = await Promise.all([
       prisma.lead.findMany({ where: { ...abertas, proximoContato: { lte: hoje } }, select, orderBy: { proximoContato: "asc" }, take: 60 }),
       prisma.lead.findMany({ where: { ...abertas, createdAt: { gte: new Date(Date.now() - 3 * 86400_000) } }, select, orderBy: { createdAt: "desc" }, take: 60 }),
@@ -9488,7 +9625,7 @@ app.get("/api/funil", wrap(async (_req, res) => {
   res.json({ hoje: todayISO(), leads: leads.map((l) => ({ ...l, utm: parseUtm(l.utm) })) });
 }));
 
-app.get("/api/funil/:id", wrap(async (req, res) => {
+app.get("/api/funil/:id(\\d+)", wrap(async (req, res) => {
   await recalcularLead(Number(req.params.id));
   const lead = await prisma.lead.findUnique({
     where: { id: Number(req.params.id) },
@@ -9642,6 +9779,9 @@ app.get("/api/health", (req, res) => res.json({ ok: true }));
 const COLUNAS_ESPERADAS = [
   // replicação de turma
   ["Slot", "seriesId", "VARCHAR(40) NULL"],
+  // funil: quem deixou o WhatsApp no /agendar e não gerou o Pix (14/10/2026)
+  ["Lead", "siteAula", "VARCHAR(80) NULL"],
+  ["Lead", "siteEm", "DATETIME(3) NULL"],
   /* Cadastro da aluna pela conversa do WhatsApp (01/09/2026): a conversa passou
      a começar pelo CPF e guarda os dados até a ficha ficar completa. */
   ["WaConversation", "pendingEmail", "VARCHAR(255) NULL"],
@@ -9700,6 +9840,18 @@ const TABELAS_ESPERADAS = [
       INDEX \`Lead_etapa_idx\`(\`etapa\`),
       INDEX \`Lead_createdAt_idx\`(\`createdAt\`),
       INDEX \`Lead_proximoContato_idx\`(\`proximoContato\`),
+      PRIMARY KEY (\`id\`)
+    ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
+  ["SiteVisita", `CREATE TABLE IF NOT EXISTS \`SiteVisita\` (
+      \`id\` VARCHAR(40) NOT NULL,
+      \`dia\` VARCHAR(10) NOT NULL,
+      \`passo\` VARCHAR(12) NOT NULL,
+      \`unit\` VARCHAR(100) NULL,
+      \`origem\` VARCHAR(12) NULL,
+      \`leadId\` INTEGER NULL,
+      \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      \`updatedAt\` DATETIME(3) NOT NULL,
+      INDEX \`SiteVisita_dia_idx\`(\`dia\`),
       PRIMARY KEY (\`id\`)
     ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
   ["LeadEvento", `CREATE TABLE IF NOT EXISTS \`LeadEvento\` (

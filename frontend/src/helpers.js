@@ -74,6 +74,24 @@ export const faixaHorario = (time, dur) => {
   const ini = hhmm(time);
   return ini ? `${ini} às ${fimDaAula(ini, dur)}` : "";
 };
+
+export function agruparAgendamentos(bookings = [], hoje = todayISO()) {
+  const dias = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"];
+  const grupos = new Map();
+  for (const b of bookings) {
+    if (!b.date || b.date < hoje || b.status === "cancelada" || b.status === "concluida") continue;
+    const time = hhmm(b.time);
+    const dow = new Date(`${b.date}T12:00:00Z`).getUTCDay();
+    if (!time || !Number.isInteger(dow)) continue;
+    const key = JSON.stringify([b.unit || "", dow, time]);
+    if (!grupos.has(key)) grupos.set(key, { key, dia: dias[dow], time, unit: b.unit, datas: [] });
+    const grupo = grupos.get(key);
+    if (!grupo.datas.includes(b.date)) grupo.datas.push(b.date);
+  }
+  return [...grupos.values()]
+    .map((g) => ({ ...g, datas: g.datas.sort() }))
+    .sort((a, b) => (a.datas[0] + a.time).localeCompare(b.datas[0] + b.time) || (a.unit || "").localeCompare(b.unit || ""));
+}
 export function waLink(phone, msg) {
   const p = (phone || "").replace(/\D/g, "");
   return "https://wa.me/55" + p + "?text=" + encodeURIComponent(msg || "");
