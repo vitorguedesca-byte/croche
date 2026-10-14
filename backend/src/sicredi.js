@@ -153,6 +153,15 @@ export async function getCharge(txid) {
   return api("GET", `/cob/${encodeURIComponent(txid)}`);
 }
 
+/* Remove uma cobrança que deixou de valer (baixa manual, mensalidade cancelada,
+   reserva refeita). Sem isto o QR continua pagável no banco até expirar — e com
+   o horizonte de 90 dias da mensalidade, a aluna podia pagar duas vezes.
+   O banco só aceita remover cobrança ATIVA: paga (CONCLUIDA) ele recusa, e é
+   isso que queremos — Pix que já caiu não se desfaz por aqui. */
+export async function cancelCharge(txid) {
+  return api("PATCH", `/cob/${encodeURIComponent(txid)}`, { status: "REMOVIDA_PELO_USUARIO_RECEBEDOR" });
+}
+
 // Uma cobrança paga fica com status CONCLUIDA no padrão BACEN.
 export const isPaidStatus = (s) => String(s || "").toUpperCase() === "CONCLUIDA";
 

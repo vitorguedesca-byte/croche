@@ -981,6 +981,14 @@ function FinanceiroOperacao() {
     toast("Código Pix copiado! 📋", "success");
   };
 
+  /* O QR guardado só serve se ainda vale E cobra o valor de hoje. Vencida, a
+     multa entra e o código antigo cobraria R$ 120 numa conta de R$ 125 — o
+     portal e o robô já trocavam o código; o botão daqui copiava o velho.
+     `pixAtualizado` vem do servidor (comEncargos); sem `pixExpiresOn`, a
+     validade era o próprio vencimento. */
+  const pixServe = (inv) =>
+    !!inv.pixCode && inv.pixAtualizado !== false && (inv.pixExpiresOn || inv.dueDate) >= todayISO();
+
   const reemitir = async (inv) => {
     setBusy(true);
     try {
@@ -1014,7 +1022,7 @@ function FinanceiroOperacao() {
     } else {
       linhas.push("", `*Valor: ${money(inv.amountCents / 100)}*`);
     }
-    if (inv.pixCode && inv.pixAtualizado !== false) {
+    if (pixServe(inv)) {
       linhas.push("", "Segue o Pix copia-e-cola:", inv.pixCode);
     } else {
       linhas.push("", "Me avisa por aqui que eu te mando o Pix atualizado. 💚");
@@ -1482,9 +1490,14 @@ function FinanceiroOperacao() {
                             📄 Boleto
                           </a>
                         )}
-                        {inv.pixCode ? (
+                        {pixServe(inv) ? (
                           <button className="btn sec sm" onClick={() => copyPix(inv.pixCode)} title="Copiar código Pix">
                             💠 Pix
+                          </button>
+                        ) : inv.pixCode ? (
+                          <button className="btn sec sm" disabled={busy} onClick={() => reemitir(inv)}
+                            title="O código guardado cobra o valor antigo (ou venceu). Gera um novo com o valor de hoje e copia.">
+                            💠 Atualizar Pix
                           </button>
                         ) : (
                           <button className="btn sec sm" disabled={busy} onClick={() => reemitir(inv)} title="Gerar código Pix desta mensalidade">

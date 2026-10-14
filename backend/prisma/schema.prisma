@@ -185,6 +185,12 @@ model Invoice {
   // não oferece QR e a rodada automática não emite. O botão "Gerar Pix" do
   // painel limpa a marca — é a saída para quando a aluna pedir o código.
   semPix        Boolean  @default(false)
+  /* txid da via que QUITOU a mensalidade pelo Pix (14/10/2026). null = quitada
+     por fora (baixa manual, cortesia) ou antes desta coluna existir. É o que
+     separa "o webhook repetiu o mesmo Pix" de "caiu um segundo Pix numa
+     mensalidade já paga" — o segundo vira PixAlerta. Não confundir com `txid`,
+     que é a via mais recente emitida (e marca até onde as reemissões foram). */
+  pagoPorTxid   String?  @db.VarChar(40)
   /* Quando cada aviso automático de WhatsApp saiu ('YYYY-MM-DD'). Datas, e não
      booleanos, porque o que interessa é *quando* falamos com a aluna — e
      porque assim o reenvio acidental fica visível no banco.
@@ -570,6 +576,33 @@ model WaRecebida {
 
   @@index([createdAt])
   @@index([phone])
+}
+
+/* Pix que caiu no banco e não deu baixa em nada (14/10/2026). O dinheiro
+   entrou, mas o sistema não tinha onde pô-lo:
+   - ja_quitada:  a mensalidade já estava paga (baixa manual, ou outra via do
+                  QR já tinha sido paga) — Pix a mais, devolver ou abater;
+   - turma_lotada: reserva paga depois do prazo e a turma lotou — remarcar;
+   - sem_registro: a cobrança é nossa (txid FQC…) mas a reserva/mensalidade
+                  foi apagada.
+   Antes disso o caso só ia para o log (Aparecida #122, 09/10/2026). Aparece
+   nas notificações do painel até a Inêz marcar como resolvido. Um por txid:
+   o webhook pode repetir a notificação e não pode duplicar o alerta. */
+model PixAlerta {
+  id           Int      @id @default(autoincrement())
+  txid         String   @unique @db.VarChar(40)
+  motivo       String   @db.VarChar(20) // ja_quitada | turma_lotada | sem_registro
+  valorCents   Int
+  pagoEm       String?  @db.VarChar(30) // horário do Pix, como o Sicredi informa (ISO)
+  e2eId        String?  @db.VarChar(40) // endToEndId — identifica o Pix numa devolução
+  clientId     Int?
+  clientName   String?  @db.VarChar(200)
+  descricao    String   @db.VarChar(500)
+  resolvidoAt  String?  @db.VarChar(10) // 'YYYY-MM-DD'; null = ainda aparece no painel
+  resolvidoPor String?  @db.VarChar(80)
+  createdAt    DateTime @default(now())
+
+  @@index([resolvidoAt])
 }
 
 /* Um disparo em massa (a Inêz escolhe as alunas e manda de uma vez).

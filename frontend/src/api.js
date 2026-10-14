@@ -122,6 +122,8 @@ export const api = {
   alterarMensalidade: (clientId, data) => req("POST", `/api/clients/${clientId}/mensalidade-valor`, data),
   // Reemite o Pix da mensalidade (o QR some quando o valor muda)
   reemitirPix: (invoiceId) => req("POST", `/api/invoices/${invoiceId}/pix`),
+  // Pix que caiu sem destino (pago em dobro, turma lotada…): tira das notificações
+  resolverPixAlerta: (id) => req("POST", `/api/pix-alertas/${id}/resolver`),
   reajustePreview: (data) => req("POST", "/api/mensalidades/reajuste/preview", data),
   reajuste: (data) => req("POST", "/api/mensalidades/reajuste", data),
 

@@ -93,7 +93,8 @@ import {
   textoMaterialPrimeiraAula,
   enderecoDaUnidade,
 } from "./textosEscola.js";
-import { sicrediConfigured, sicrediMissing, createCharge, getCharge, isPaidStatus, extractPix } from "./sicredi.js";
+import { sicrediConfigured, sicrediMissing, createCharge, getCharge, cancelCharge, isPaidStatus, extractPix } from "./sicredi.js";
+import { txidBooking, txidMensalidade, parseTxid, viasDaMensalidade, destinoDoPixNaMensalidade, reservasComPixAberto } from "./pixRegras.js";
 import { enviarEventoMeta, contextoDoNavegador, guardarContexto, contextoGuardado } from "./metaCapi.js";
 import { waConfigured, waTemplatesConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, parseTemplateStatuses, normalizePhone, listWaTemplates, createWaTemplate } from "./wa.js";
 import { montarTemplate, textoComMarcadores, MARCADORES, LIMITES as LIMITES_TEMPLATE } from "./waTemplateRegras.js";
@@ -1235,7 +1236,7 @@ app.get(
   "/api/state",
   wrap(async (req, res) => {
     await sincronizarLeadsPagos().catch((e) => console.warn("[api/state] sincronizarLeadsPagos:", e.message));
-    const [clients, slots, bookings, invoices, makeups, precos, presentes, waRecebidas] = await Promise.all([
+    const [clients, slots, bookings, invoices, makeups, precos, presentes, waRecebidas, pixAlertas] = await Promise.all([
       prisma.client.findMany({ orderBy: { name: "asc" } }),
       prisma.slot.findMany({ include: { waitlist: true }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
       prisma.booking.findMany({ orderBy: [{ date: "asc" }, { time: "asc" }] }),
@@ -1250,6 +1251,8 @@ app.get(
         where: { createdAt: { gt: new Date(Date.now() - 14 * 86400_000) } },
         orderBy: { createdAt: "desc" }, take: 300,
       }),
+      // Pix que caiu sem destino (pago em dobro, turma lotada…) até alguém resolver
+      prisma.pixAlerta.findMany({ where: { resolvidoAt: null }, orderBy: { createdAt: "desc" }, take: 100 }),
     ]);
     const hoje = todayISO();
     res.json({
@@ -1274,6 +1277,7 @@ app.get(
       // aulas de presente, com a situação do dia (vencido não é gravado)
       presentes: presentes.map((p) => resumoPresente(p, hoje)),
       waRecebidas,
+      pixAlertas,
     });
   })
 );
@@ -2068,6 +2072,10 @@ async function sobrasDoLead(client) {
       where: { id: { in: pendentes.map((b) => b.id) }, status: "aguardando", paid: false },
       data: { status: "cancelada", holdUntil: null, absenceReason: "Reserva não paga — a aluna refez a entrada" },
     });
+    /* A entrada nova vai ter Pix próprio. Com o antigo aberto, ela podia pagar
+       os dois — e o antigo ainda reabriria a reserva e rodaria a matrícula de
+       novo (Arlete #254, 13/10/2026). */
+    await fecharPixDasReservas(pendentes, "a aluna refez a entrada");
     console.log(`[lead] ${client.name}: ${pendentes.length} reserva(s) antiga(s) não paga(s) soltas — refazendo a entrada.`);
   }
   return {};
@@ -2427,6 +2435,9 @@ app.patch(
     // ...e cancelar pelo painel a aula de presente devolve o presente
     if (data.status === "cancelada" && cur.status !== "cancelada" && cur.paymentMethod === PGTO_PRESENTE)
       await devolverPresente(id);
+    // ...e cancelar uma reserva ainda não paga fecha o Pix dela no banco
+    if (data.status === "cancelada" && cur.status !== "cancelada")
+      await fecharPixDasReservas([cur], "reserva cancelada no painel");
     res.json(booking);
   })
 );
@@ -2437,6 +2448,9 @@ app.delete(
     const id = Number(req.params.id);
     const bk = await prisma.booking.findUnique({ where: { id } });
     if (!bk) return res.json({ ok: true, deleted: 0 });
+    /* Reserva apagada com Pix em aberto: sem a linha, o Pix que caísse depois
+       não teria onde dar baixa. Fecha no banco antes de apagar. */
+    await fecharPixDasReservas([bk], "reserva excluída no painel");
     // ?series=1 ou ?match=1: exclui também as demais aulas da aluna neste mesmo dia da semana e horário, de hoje em diante
     if (req.query.series === "1" || req.query.match === "1") {
       const dow = new Date(bk.date + "T00:00").getDay();
@@ -2846,6 +2860,8 @@ app.post(
     }
 
     // Baixa manual executada pelo painel administrativo (Inêz / atendente logada):
+    // pagou por fora, então o QR dela fecha no banco (não pode cair um segundo Pix).
+    await fecharPixDasReservas([cur], "baixa manual da reserva");
     const isMatricula = ehPagamentoDeMatricula(cur?.paymentMethod);
     const booking = await prisma.booking.update({
       where: { id },
@@ -2870,33 +2886,9 @@ app.post(
   })
 );
 
-/* ---------- COBRANÇA VIA SICREDI (Pix com confirmação automática) ---------- */
-// O txid é o identificador da cobrança no padrão BACEN e ele é NOSSO: precisa
-// casar com /^[a-zA-Z0-9]{26,35}$/ — nada de hífen. Como é derivado do id da
-// reserva (ou do aluno + competência), o mesmo registro sempre gera o mesmo txid,
-// e o PUT /cob/{txid} do Sicredi é idempotente: reenviar não duplica cobrança.
-const txidBooking = (id) => `FQCB${String(id).padStart(22, "0")}`;
-// `seq` é a via da cobrança: 0 (sem sufixo) é a original; 1, 2, 3… são as
-// reemissões, feitas quando a cobrança anterior expirou no vencimento. Precisa
-// de txid novo porque o PUT /cob/{txid} é idempotente — reenviar o mesmo txid
-// devolveria a cobrança vencida em vez de criar uma válida.
-const txidMensalidade = (clientId, comp, seq = 0) =>
-  `FQCM${String(clientId).padStart(16, "0")}${comp.replace("-", "")}${seq ? String(seq).padStart(2, "0") : ""}`;
-// Caminho inverso: o webhook só nos entrega o txid, então precisamos saber a que
-// ele se refere quando a busca direta no banco não acha. É o que salva o caso da
-// aluna que pagou pelo QR antigo: o txid dela não está mais na invoice (foi
-// substituído pela reemissão), mas cliente + competência ainda identificam a dívida.
-const parseTxid = (txid) => {
-  let m = /^FQCB(\d{22})$/.exec(txid || "");
-  if (m) return { tipo: "booking", id: Number(m[1]) };
-  m = /^FQCX(\d{22})$/.exec(txid || "");
-  if (m) return { tipo: "extra", id: Number(m[1]) };
-  m = /^FQCM(\d{16})(\d{4})(\d{2})(\d{2})?$/.exec(txid || "");
-  if (m) {
-    return { tipo: "mensalidade", clientId: Number(m[1]), competencia: `${m[2]}-${m[3]}`, seq: Number(m[4] || 0) };
-  }
-  return null;
-};
+/* ---------- COBRANÇA VIA SICREDI (Pix com confirmação automática) ----------
+   txidBooking / txidMensalidade / parseTxid moram em pixRegras.js (são puros e
+   têm teste). */
 
 async function clientCpfByName(name) {
   if (!name) return "";
@@ -2964,15 +2956,15 @@ app.post(
     if (!booking) return res.json({ ok: true });
     if (soMatriculaPelaPortaPublica(req, res, booking)) return;
     // Cancela a reserva pendente não paga e demais horários da mesma matrícula
+    const soltas = await prisma.booking.findMany({
+      where: { clientName: booking.clientName, paymentMethod: booking.paymentMethod, status: "aguardando", paid: false },
+    });
     await prisma.booking.updateMany({
-      where: {
-        clientName: booking.clientName,
-        paymentMethod: booking.paymentMethod,
-        status: "aguardando",
-        paid: false,
-      },
+      where: { id: { in: soltas.map((b) => b.id) } },
       data: { status: "cancelada", holdUntil: null, absenceReason: "A aluna voltou para alterar dados ou aplicar cupom" },
     });
+    // Ela vai gerar outro Pix com os dados novos: o de antes fecha no banco.
+    await fecharPixDasReservas(soltas, "a aluna voltou para alterar dados");
     // Se havia reserva de uso de voucher ligada a esta reserva, cancela para liberar a vaga da promoção
     await prisma.voucherUso.updateMany({
       where: { bookingId: booking.id, status: "reservado" },
@@ -2981,6 +2973,61 @@ app.post(
     res.json({ ok: true });
   })
 );
+
+/* ---------- cobrança que deixou de valer: fechar no banco ----------
+   Apagar o QR no nosso banco não basta: no Sicredi ele continua pagável até
+   expirar (90 dias, na mensalidade). Foi assim que a Aparecida #122 pagou em
+   09/10/2026 o QR de uma mensalidade já quitada por baixa manual, e em 13/10
+   havia 75 mensalidades quitadas com QR ainda aberto. Nunca derruba quem
+   chamou: a operação de dinheiro já aconteceu no nosso banco, e se o fechamento
+   falhar o alerta de Pix a mais (registrarPixSemDestino) ainda pega o caso. */
+async function fecharCobrancas(txids, motivo) {
+  if (!sicrediConfigured()) return;
+  for (const txid of new Set((txids || []).filter(Boolean))) {
+    try {
+      await cancelCharge(txid);
+      console.log(`[sicredi] QR ${txid} fechado no banco (${motivo}).`);
+    } catch (e) {
+      // 404 = via que nunca foi emitida. Paga ou já removida o banco recusa —
+      // o que caiu, caiu, e o webhook cuida dele.
+      if (e.status !== 404) console.warn(`[sicredi] não fechei o QR ${txid} (${motivo}): ${e.message}`);
+    }
+  }
+}
+
+// Todas as vias da mensalidade (menos `exceto`, a que acabou de ser paga).
+async function fecharPixDaMensalidade(inv, motivo, { exceto = null } = {}) {
+  if (!inv) return;
+  await fecharCobrancas(viasDaMensalidade(inv).filter((t) => t !== exceto), motivo);
+}
+
+// Reservas que deixaram de valer: só as que têm QR e não foram pagas.
+async function fecharPixDasReservas(bookings, motivo) {
+  await fecharCobrancas(reservasComPixAberto(bookings).map((b) => b.txid), motivo);
+}
+
+/* Pix que caiu e não deu baixa em nada (ver o model PixAlerta). Um por txid:
+   o webhook repete a notificação e não pode duplicar o alerta. */
+async function registrarPixSemDestino(txid, cob, { motivo, clientId = null, clientName = null, descricao }) {
+  const pix = Array.isArray(cob?.pix) ? cob.pix : [];
+  const valorCents = Math.round((pix.reduce((s, p) => s + Number(p.valor || 0), 0) || Number(cob?.valor?.original) || 0) * 100);
+  try {
+    await prisma.pixAlerta.upsert({
+      where: { txid },
+      update: {},
+      create: {
+        txid, motivo, valorCents,
+        pagoEm: pix[0]?.horario ? String(pix[0].horario).slice(0, 30) : null,
+        e2eId: pix[0]?.endToEndId ? String(pix[0].endToEndId).slice(0, 40) : null,
+        clientId, clientName: clientName ? String(clientName).slice(0, 200) : null,
+        descricao: String(descricao).slice(0, 500),
+      },
+    });
+    console.warn(`[sicredi] Pix ${txid} (${moedaBR(valorCents / 100)}) precisa de atenção — ${motivo}: ${descricao}`);
+  } catch (e) {
+    console.error(`[sicredi] não consegui registrar o alerta do Pix ${txid}: ${e.message}`);
+  }
+}
 
 // Confirma (se de fato pago) a reserva ou a mensalidade por trás de um txid.
 // Consulta o Sicredi com mTLS antes de dar qualquer baixa — é isso que faz um
@@ -2995,7 +3042,14 @@ async function confirmarPagamentoPorTxid(txid) {
   if (!booking && ref?.tipo === "booking") {
     booking = await prisma.booking.findUnique({ where: { id: ref.id } });
   }
-  if (booking && !booking.paid) {
+  if (booking && booking.paid) {
+    /* Já quitada. Reserva não guarda se a baixa foi manual, então não dá para
+       separar "webhook repetido" de "Pix a mais" — por isso a baixa manual do
+       painel fecha o QR no banco (fecharPixDasReservas), e o segundo Pix deixa
+       de ser possível. */
+    return false;
+  }
+  if (booking) {
     /* Ela pagou depois de o prazo da vaga estourar. O dinheiro entrou, então a
        reserva não pode simplesmente continuar cancelada — mas a vaga pode ter
        sido ocupada por outra aluna nesse meio-tempo. Se ainda há lugar, a aula
@@ -3010,6 +3064,12 @@ async function confirmarPagamentoPorTxid(txid) {
           data: { paid: true, paymentDate: todayISO(), holdUntil: null },
         });
         console.warn(`[sicredi] reserva ${booking.id} paga fora do prazo e a turma já lotou — remarcar com ${booking.clientName}.`);
+        // Antes só ia para o log: a Inêz dependia de a aluna chamar.
+        await registrarPixSemDestino(txid, cob, {
+          motivo: "turma_lotada",
+          clientName: booking.clientName,
+          descricao: `Pix da reserva de ${fmtDiaBR(booking.date)} às ${hhmm(booking.time)} (${booking.unit}) caiu depois do prazo e a turma lotou. O valor está guardado: remarque com ela (ela já recebeu mensagem).`,
+        });
         if (booking.phone) {
           await waSend(booking.phone, `${(booking.clientName || "").split(" ")[0]}, recebemos o seu pagamento! 💚\n\nSó que o horário que você tinha escolhido lotou enquanto o Pix não caía. Seu valor está guardado — me chama neste número que a gente escolhe outro dia juntas:\n📞 ${WA_ATENDENTE}`);
         }
@@ -3051,7 +3111,10 @@ async function confirmarPagamentoPorTxid(txid) {
   // Aula extra comprada no portal: pagar o Pix libera o calendário para ela.
   let pass = await prisma.extraPass.findFirst({ where: { txid } });
   if (!pass && ref?.tipo === "extra") pass = await prisma.extraPass.findUnique({ where: { id: ref.id } });
-  if (pass && pass.status === "pendente") {
+  /* Cancelada e paga mesmo assim: o cancelamento fecha o QR no banco, então
+     isto só acontece se ela pagou no mesmo instante. O dinheiro entrou — a
+     aula volta a valer, como a reserva paga fora do prazo. */
+  if (pass && (pass.status === "pendente" || pass.status === "cancelado")) {
     await prisma.extraPass.update({ where: { id: pass.id }, data: { status: "pago", paidAt: todayISO() } });
     console.log(`[sicredi] aula extra confirmada — passe ${pass.id}`);
     const dona = await prisma.client.findUnique({ where: { id: pass.clientId } });
@@ -3069,25 +3132,56 @@ async function confirmarPagamentoPorTxid(txid) {
     });
     return true;
   }
+  if (pass) return false; // paga ou usada: foi este Pix
 
   let invoice = await prisma.invoice.findFirst({ where: { txid } });
   if (!invoice && ref?.tipo === "mensalidade") {
     invoice = await prisma.invoice.findFirst({ where: { clientId: ref.clientId, competencia: ref.competencia } });
   }
-  if (invoice && invoice.status !== "pago") {
-    await prisma.invoice.update({ where: { id: invoice.id }, data: { status: "pago", paidAt: todayISO() } });
+  if (invoice) {
+    let destino = destinoDoPixNaMensalidade(invoice, txid);
+    /* Paga antes de `pagoPorTxid` existir, por outra via: só é Pix a mais se a
+       via guardada também caiu. Senão foi esta via que quitou. */
+    if (destino === "conferir") {
+      const guardada = await getCharge(invoice.txid).catch(() => null);
+      destino = isPaidStatus(guardada?.status) ? "alertar" : "nada";
+    }
+    if (destino === "nada") return false;
+    if (destino === "alertar") {
+      const dona = await prisma.client.findUnique({ where: { id: invoice.clientId } });
+      const como = invoice.baixaManual
+        ? `já tinha baixa manual${invoice.paidAt ? ` em ${fmtDiaBR(String(invoice.paidAt).slice(0, 10))}` : ""}`
+        : "já estava paga por outro Pix";
+      await registrarPixSemDestino(txid, cob, {
+        motivo: "ja_quitada",
+        clientId: invoice.clientId,
+        clientName: dona?.name,
+        descricao: `Pix caiu na mensalidade de ${compPorExtenso(invoice.competencia)}, que ${como}. Confira se é pagamento em dobro: devolva ou abata no próximo mês.`,
+      });
+      return false;
+    }
+    await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { status: "pago", paidAt: todayISO(), pagoPorTxid: txid },
+    });
     console.log(`[sicredi] mensalidade confirmada — invoice ${invoice.id}`);
+    /* As outras vias desta mensalidade (o QR do lembrete, a reemissão com a
+       multa) continuariam pagáveis por até 90 dias — e a aluna que guardou um
+       código antigo pagaria duas vezes. Paga uma, fecham as outras. */
+    await fecharPixDaMensalidade(invoice, "paga por outra via", { exceto: txid });
     /* O valor avisado é o que o QR COBROU, não o `amountCents` original nem a
-       conta de hoje. `encargosAte` é a data em que o pixCode foi precificado:
-       usá-la devolve exatamente o número que apareceu no app do banco dela.
-       Recalcular por `todayISO()` daria alguns centavos de juros a mais se o
-       QR foi emitido ontem — e confirmar um valor diferente do que ela acabou
-       de pagar é o tipo de diferença que vira desconfiança. `encargosAte` nulo
-       quer dizer QR emitido sem acréscimo: aí o valor é o original mesmo. */
+       conta de hoje — o próprio banco diz quanto foi. Recalcular por
+       `todayISO()` daria alguns centavos de juros a mais se o QR foi emitido
+       ontem, e confirmar um valor diferente do que ela acabou de pagar é o
+       tipo de diferença que vira desconfiança. Sem o valor do banco, vale a
+       conta da data em que o QR guardado foi precificado (`encargosAte`). */
     const dona = await prisma.client.findUnique({ where: { id: invoice.clientId } });
-    const pagoCents = invoice.encargosAte
-      ? encargosDe(invoice, invoice.encargosAte).totalCents
-      : invoice.amountCents;
+    const doBanco = Math.round(Number(cob?.valor?.original) * 100);
+    const pagoCents = doBanco > 0
+      ? doBanco
+      : invoice.encargosAte
+        ? encargosDe(invoice, invoice.encargosAte).totalCents
+        : invoice.amountCents;
     await avisarPagamento(dona, textoMensalidadePaga({
       nome: dona?.name,
       mes: compPorExtenso(invoice.competencia),
@@ -3097,6 +3191,15 @@ async function confirmarPagamentoPorTxid(txid) {
       body: [primeiroNome(dona?.name) || "aluna", compPorExtenso(invoice.competencia), reaisBR(pagoCents / 100)],
     });
     return true;
+  }
+  /* Cobrança nossa (FQC…) sem registro: a reserva ou a mensalidade foi apagada
+     depois de o QR sair. Pix de fora (sem txid nosso) não chega até aqui. */
+  if (ref) {
+    await registrarPixSemDestino(txid, cob, {
+      motivo: "sem_registro",
+      clientId: ref.clientId || null,
+      descricao: `Pix caiu numa cobrança ${ref.tipo === "mensalidade" ? `de mensalidade (${compPorExtenso(ref.competencia)})` : ref.tipo === "extra" ? "de aula extra" : "de reserva"} que não existe mais no sistema. Descubra de quem é pelo comprovante e dê o destino certo.`,
+    });
   }
   return false;
 }
@@ -3148,6 +3251,19 @@ app.post(
     res.json({ ok: true });
   })
 );
+
+/* A Inêz resolveu o Pix sem destino (devolveu, abateu, remarcou): sai das
+   notificações. O registro fica, com quem resolveu e quando. */
+app.post("/api/pix-alertas/:id/resolver", wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const alerta = Number.isInteger(id) ? await prisma.pixAlerta.findUnique({ where: { id } }) : null;
+  if (!alerta) return res.status(404).json({ error: "Aviso não encontrado." });
+  if (alerta.resolvidoAt) return res.json(alerta);
+  res.json(await prisma.pixAlerta.update({
+    where: { id },
+    data: { resolvidoAt: todayISO(), resolvidoPor: (req.admin?.nome || req.admin?.username || "painel").slice(0, 80) },
+  }));
+}));
 
 // Rede de segurança: reconsulta o Sicredi sob demanda. Serve para homologação
 // (antes do webhook existir) e para destravar um pagamento que não chegou.
@@ -3417,19 +3533,22 @@ app.post("/api/clients/:id/invoice", wrap(async (req, res) => {
 
 /* Marcar mensalidade como paga (baixa manual).
    Registra o pagamento manual da mensalidade (dinheiro, transferência, etc).
-   Não afeta de forma alguma o Pix ou as cobranças dos meses seguintes. */
+   Não afeta as cobranças dos meses seguintes — mas fecha o QR DESTE mês no
+   banco: paga por fora, ele não pode continuar pagável (ver fecharCobrancas). */
 app.post("/api/invoices/:id/pay", wrap(async (req, res) => {
   const manual = req.body?.manual !== false;
   const inv = await prisma.invoice.update({
     where: { id: Number(req.params.id) },
     data: { status: "pago", paidAt: req.body?.paidAt || todayISO(), baixaManual: manual },
   });
+  await fecharPixDaMensalidade(inv, "baixa manual");
   res.json(inv);
 }));
 
-// Cancelar mensalidade
+// Cancelar mensalidade (e o QR dela no banco)
 app.post("/api/invoices/:id/cancel", wrap(async (req, res) => {
   const inv = await prisma.invoice.update({ where: { id: Number(req.params.id) }, data: { status: "cancelado" } });
+  await fecharPixDaMensalidade(inv, "mensalidade cancelada");
   res.json(inv);
 }));
 
@@ -3451,11 +3570,14 @@ app.patch("/api/invoices/:id", wrap(async (req, res) => {
         data.avisoAtrasoAt = null;
         data.avisoAtraso2At = null;
       }
-      // Se a data de vencimento mudou, anula o Pix anterior para que um novo seja gerado com a data e encargos corretos
+      /* Se a data de vencimento mudou, anula o Pix anterior para que um novo
+         seja gerado com a data e encargos corretos. O `txid` FICA: é ele que
+         diz até que via as reemissões já foram. Apagá-lo fazia a próxima via
+         recomeçar do 01 — e se a 01 já existia, o PUT idempotente do Sicredi
+         devolvia a cobrança antiga, com o valor antigo. */
       if (cur.pixCode || cur.encargosAte) {
         data.encargosAte = null;
         data.pixCode = null;
-        data.txid = null;
         data.pixExpiresOn = null;
       }
     }
@@ -3464,8 +3586,7 @@ app.patch("/api/invoices/:id", wrap(async (req, res) => {
     const val = Math.round(Number(req.body.amountCents));
     if (val && val !== cur.amountCents) {
       data.amountCents = val;
-      data.pixCode = null;
-      data.txid = null;
+      data.pixCode = null; // o txid fica — ver o comentário do vencimento acima
       data.pixExpiresOn = null;
       data.encargosAte = null;
     }
@@ -3475,6 +3596,11 @@ app.patch("/api/invoices/:id", wrap(async (req, res) => {
   }
 
   const updated = await prisma.invoice.update({ where: { id }, data });
+  /* O QR descartado aqui ainda vale no banco: fecha, senão a aluna pagaria o
+     valor (ou os encargos) de antes e o sistema daria o mês por quitado. */
+  if (cur.status === "pendente" && cur.pixCode && data.pixCode === null) {
+    await fecharPixDaMensalidade(cur, "vencimento ou valor alterado");
+  }
   res.json(comEncargos(updated));
 }));
 
@@ -3560,6 +3686,8 @@ async function aplicarValorNaCompetencia(client, comp, valorReais, { origem = "a
     where: { id: inv.id },
     data: { amountCents: novoCents, pixCode: null, pixExpiresOn: null, encargosAte: null },
   });
+  // Zerar o pixCode aqui não fecha o QR no banco: ele continuaria pagável.
+  if (inv.pixCode || inv.txid) await fecharPixDaMensalidade(inv, "valor da mensalidade alterado");
   return { comp, resultado: "atualizada", valor: efetivo, invoiceId: atualizada.id };
 }
 
@@ -4990,7 +5118,10 @@ app.post("/api/portal/:key/extra/cancelar", wrap(async (req, res) => {
   const client = await clientByPortalKey(req.params.key);
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const pendente = await passeExtraPendente(client.id);
-  if (pendente) await prisma.extraPass.update({ where: { id: pendente.id }, data: { status: "cancelado" } });
+  if (pendente) {
+    await prisma.extraPass.update({ where: { id: pendente.id }, data: { status: "cancelado" } });
+    await fecharCobrancas([pendente.txid], "aula extra cancelada pela aluna");
+  }
   res.json({ ok: true });
 }));
 
@@ -5178,6 +5309,7 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
    a aula, cancelar uma turma), a aluna não pode pagar por isso. */
 async function liberarAula(client, b, extra = {}, { devolverRepo = false } = {}) {
   await prisma.booking.update({ where: { id: b.id }, data: { status: "cancelada", ...extra } });
+  await fecharPixDasReservas([b], "aula liberada"); // só age se ainda havia Pix em aberto
   if (b.paymentMethod === "Reposição") {
     if (devolverRepo) {
       const devolvido = await devolverCredito(b.id);
@@ -5545,11 +5677,15 @@ async function abrirReservaDeMatricula(client, { weeklyFreq, mensalistaTipo, slo
     }
   }
 
-  // Refazer a matrícula solta a reserva anterior que não foi paga
-  await prisma.booking.updateMany({
+  // Refazer a matrícula solta a reserva anterior que não foi paga — e o QR dela
+  const anteriores = await prisma.booking.findMany({
     where: { clientName: client.name, paymentMethod: MARCA_MATRICULA, status: "aguardando", paid: false },
+  });
+  await prisma.booking.updateMany({
+    where: { id: { in: anteriores.map((b) => b.id) } },
     data: { status: "cancelada", holdUntil: null, absenceReason: "Reserva de matrícula refeita" },
   });
+  await fecharPixDasReservas(anteriores, "reserva de matrícula refeita");
 
   const hoje = todayISO();
   for (const s of slots) {
@@ -5778,6 +5914,7 @@ app.post("/api/clients/:id/matricula/refund", wrap(async (req, res) => {
      matrícula está PAGA — é justamente o dinheiro que está voltando — então ela
      cai junto, senão o financeiro seguiria contando como receita algo devolvido. */
   const compDaMatricula = (client.matriculaAt || t).slice(0, 7);
+  const abertasDaDevolvida = await prisma.invoice.findMany({ where: { clientId: client.id, status: "pendente" } });
   const inv = await prisma.invoice.updateMany({
     where: {
       clientId: client.id,
@@ -5786,6 +5923,8 @@ app.post("/api/clients/:id/matricula/refund", wrap(async (req, res) => {
     data: { status: "cancelado" },
   });
   desfez.mensalidades = inv.count;
+  // Os QRs das que estavam em aberto continuariam pagáveis no banco.
+  for (const i of abertasDaDevolvida) await fecharPixDaMensalidade(i, "matrícula devolvida");
 
   const updated = await prisma.client.update({
     where: { id: client.id },
@@ -8058,10 +8197,14 @@ async function encerrarAluna(client) {
     where: { clientId: client.id, status: "pendente" },
   });
   if (mensalidadesPendentes.length > 0) {
+    /* O QR guardado sai junto: ele é fechado no banco logo abaixo, e se a
+       inscrição for reativada a mensalidade volta sem ele e ganha uma via nova
+       (o txid fica, para a via seguinte não repetir número). */
     await prisma.invoice.updateMany({
       where: { id: { in: mensalidadesPendentes.map((i) => i.id) } },
-      data: { status: "cancelado" },
+      data: { status: "cancelado", pixCode: null, pixExpiresOn: null, encargosAte: null },
     });
+    for (const i of mensalidadesPendentes) await fecharPixDaMensalidade(i, "aluna inativada");
   }
 
   // 4. Salva no undoManager (backup da aluna + histórico de Ctrl+Z)
@@ -8141,11 +8284,13 @@ async function reativarAlunaComManutencao(clientId) {
       aulasRestauradas++;
     }
 
-    // Reativa mensalidades que foram canceladas no encerramento
+    /* Reativa mensalidades que foram canceladas no encerramento. Sem QR: o
+       antigo foi fechado no banco na inativação, e um código morto na tela é
+       pior que nenhum — o portal (ou o botão do painel) emite uma via nova. */
     if (Array.isArray(backup.invoiceIds) && backup.invoiceIds.length > 0) {
       await prisma.invoice.updateMany({
         where: { id: { in: backup.invoiceIds }, status: "cancelado" },
-        data: { status: "pendente" },
+        data: { status: "pendente", pixCode: null, pixExpiresOn: null, encargosAte: null },
       });
     }
   }
@@ -8358,6 +8503,7 @@ app.post(
           where: { id: jaExisteInv.id },
           data: { status: "pago", paidAt: dataPgto, baixaManual: true },
         });
+        await fecharPixDaMensalidade(jaExisteInv, "baixa manual do lead");
       }
     } else {
       // Caso Aula Avulsa
@@ -8411,6 +8557,11 @@ app.post(
       /* Sem fatura: a avulsa não é mensalidade (ver registrarAulaAvulsaPaga).
          O dinheiro fica na reserva e sai em Vendas como aula avulsa. */
     }
+
+    /* Pagou por fora: o QR da reserva de entrada (avulsa ou matrícula) não pode
+       continuar pagável no banco. `bookings` é a foto de ANTES da baixa, então
+       pega também a reserva que acabou de ser quitada aqui. */
+    await fecharPixDasReservas(bookings, "baixa manual do lead");
 
     const clientAtualizado = await prisma.client.findUnique({ where: { id: client.id } });
     console.log(`[baixa lead] ${client.name} (id ${client.id}) ativado com pagamento ${formaPgto} R$ ${valorFinal}.`);
@@ -8570,7 +8721,9 @@ app.post(
   wrap(async (req, res) => {
     const b = await ownedBooking(req.params.phone, req.params.bookingId);
     if (!b) return res.status(403).json({ error: "Marcação não encontrada para este WhatsApp." });
-    res.json(await prisma.booking.update({ where: { id: b.id }, data: { status: "cancelada" } }));
+    const cancelada = await prisma.booking.update({ where: { id: b.id }, data: { status: "cancelada" } });
+    await fecharPixDasReservas([b], "reserva cancelada pela aluna");
+    res.json(cancelada);
   })
 );
 

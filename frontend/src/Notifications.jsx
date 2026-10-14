@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useStore } from "./store.jsx";
 import { WaIcon } from "./icons.jsx";
+import { api } from "./api.js";
+import { confirmModal, toast } from "./toast.jsx";
 import {
   todayISO, fmtDate, money, waLink, classifyClient, aulaAvulsaDe,
   slotCapacity, slotOccupancy, diasAteAniversario, faltamLabel, idadeQueFaz,
@@ -70,6 +72,18 @@ function buildNotifications(data) {
     });
   });
 
+  /* 💸 Pix que caiu e não deu baixa em nada (14/10/2026): mensalidade já
+     quitada (pagou em dobro), reserva paga depois que a turma lotou, cobrança
+     apagada. O dinheiro está na conta — fica aqui até alguém resolver. */
+  const MOTIVO_PIX = { ja_quitada: "Pago em dobro?", turma_lotada: "Turma lotou", sem_registro: "Cobrança apagada" };
+  (data.pixAlertas || []).forEach((a) => out.push({
+    id: "px" + a.id, event: true, icon: "💸", tone: "rgba(194,84,63,.16)",
+    title: `${MOTIVO_PIX[a.motivo] || "Pix a conferir"} — ${a.clientName || "sem cadastro"} · ${money(a.valorCents / 100)}`,
+    sub: `${a.pagoEm ? `Pix de ${fmtDate(String(a.pagoEm).slice(0, 10))}. ` : ""}${a.descricao}`,
+    time: new Date(a.createdAt),
+    pixAlerta: a,
+  }));
+
   // 💰 Pagamentos atrasados (aguardando há 3+ dias)
   data.bookings
     .filter((b) => b.status === "aguardando" && daysSince(b.createdAt, t) >= 3)
@@ -123,7 +137,7 @@ function buildNotifications(data) {
   return out;
 }
 
-function NotifRow({ n, nav, unread }) {
+function NotifRow({ n, nav, unread, onResolver }) {
   const clickable = !!n.nav;
   return (
     <div
@@ -143,13 +157,18 @@ function NotifRow({ n, nav, unread }) {
             <WaIcon /> {n.wa.label}
           </button>
         )}
+        {n.pixAlerta && (
+          <button className="btn sec sm" onClick={(e) => { e.stopPropagation(); onResolver(n.pixAlerta); }}>
+            ✓ Resolvido
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
 export function Notifications({ go }) {
-  const { data } = useStore();
+  const { data, run } = useStore();
   const [open, setOpen] = useState(false);
   const [lastSeen, setLastSeen] = useState(() => Number(localStorage.getItem(SEEN_KEY)) || 0);
   const ref = useRef();
@@ -162,6 +181,24 @@ export function Notifications({ go }) {
   const markSeen = () => { const now = Date.now(); localStorage.setItem(SEEN_KEY, String(now)); setLastSeen(now); };
   const toggle = () => setOpen((o) => { const nv = !o; if (nv) markSeen(); return nv; });
   const nav = (fn) => { setOpen(false); fn(go); };
+
+  /* Sai da lista só depois de confirmado: é dinheiro na conta, e o aviso some
+     para todo mundo do painel. */
+  const resolverPix = async (a) => {
+    const ok = await confirmModal({
+      title: "Pix resolvido?",
+      message:
+        `${a.clientName || "Pix sem cadastro"} · ${money(a.valorCents / 100)}\n\n${a.descricao}\n\n` +
+        "Marque como resolvido só depois de devolver, abater ou remarcar. O aviso sai das notificações.",
+      confirmLabel: "✓ Marcar como resolvido",
+      cancelLabel: "Voltar",
+    });
+    if (!ok) return;
+    try {
+      await run(api.resolverPixAlerta(a.id));
+      toast("Aviso do Pix marcado como resolvido.", "success");
+    } catch { /* o erro já foi mostrado pelo run */ }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -187,7 +224,7 @@ export function Notifications({ go }) {
             {events.length === 0 && reminders.length === 0 && (
               <div className="notif-empty"><div style={{ fontSize: "1.9rem" }}>✨</div><span>Tudo tranquilo por aqui.</span></div>
             )}
-            {events.map((n) => <NotifRow key={n.id} n={n} nav={nav} unread={n.time.getTime() > lastSeen} />)}
+            {events.map((n) => <NotifRow key={n.id} n={n} nav={nav} unread={n.time.getTime() > lastSeen} onResolver={resolverPix} />)}
             {reminders.length > 0 && <div className="notif-sep">Lembretes</div>}
             {reminders.map((n) => <NotifRow key={n.id} n={n} nav={nav} unread={false} />)}
           </div>
