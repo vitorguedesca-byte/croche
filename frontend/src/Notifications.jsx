@@ -4,9 +4,10 @@ import { WaIcon } from "./icons.jsx";
 import { api } from "./api.js";
 import { confirmModal, toast } from "./toast.jsx";
 import {
-  todayISO, fmtDate, money, waLink, classifyClient, aulaAvulsaDe,
+  todayISO, fmtDate, money, waLink,
   slotCapacity, slotOccupancy, diasAteAniversario, faltamLabel, idadeQueFaz,
 } from "./helpers.js";
+import { ETAPAS, mensagemDaLead } from "./Funil.jsx";
 
 const SEEN_KEY = "fqc:notif:lastSeen";
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
@@ -107,17 +108,33 @@ function buildNotifications(data) {
       nav: (go) => go("agenda"),
     }));
 
-  // 🌱 Leads a converter — inclusive a lead de 1ª aula que não pagou a avulsa
-  data.clients
-    .map((c) => ({ c, k: classifyClient(data, c) }))
-    .filter(({ c, k }) => k === "lead" || (k === "novato" && !aulaAvulsaDe(data, c).paga))
-    .forEach(({ c, k }) => out.push({
-      id: "ld" + c.id, event: false, icon: "🌱", tone: "rgba(140,154,120,.18)",
-      title: `${k === "novato" ? "Avulsa não paga" : "Lead a converter"} — ${c.name}`,
-      sub: c.phone || "sem telefone",
-      nav: (go) => go("clientes", { tab: k }),
-      wa: c.phone ? { phone: c.phone, label: "Convidar", msg: `Olá ${c.name}! Vi que você se interessou pelas aulas de crochê 💚 Posso te ajudar a escolher um horário?` } : null,
-    }));
+  /* 🎯 Funil de leads (14/10/2026). Substitui o antigo "🌱 Lead a converter",
+     que listava TODA lead sem pagamento, todo dia, para sempre — virava
+     paisagem. Agora: a lead que chegou (aconteceu), o retorno marcado para
+     hoje ou atrasado (com quem falar), e um aviso só de quantas estão sem
+     retorno marcado. */
+  const funil = data.funilAvisos;
+  const etapaTxt = (l) => (ETAPAS.find((e) => e.k === l.etapa) || {}).l || l.etapa;
+  const canalTxt = { whatsapp: "pelo WhatsApp", site: "pelo site", escola: "anotada pela equipe" };
+  (funil?.novas || []).forEach((l) => out.push({
+    id: "ln" + l.id, event: true, icon: "🎯", tone: "rgba(194,113,79,.14)",
+    title: `Nova lead — ${l.nome}`,
+    sub: [canalTxt[l.canal], l.detalhe || etapaTxt(l)].filter(Boolean).join(" · "),
+    time: new Date(l.createdAt), nav: (go) => go("funil", { lead: l.id }),
+  }));
+  (funil?.retornos || []).forEach((l) => out.push({
+    id: "lr" + l.id, event: false, icon: "⏰", tone: "rgba(217,164,65,.18)",
+    title: `Retornar para ${l.nome}`,
+    sub: `${etapaTxt(l)}${l.proximoContato < t ? ` · atrasado desde ${fmtDate(l.proximoContato)}` : " · hoje"}`,
+    nav: (go) => go("funil", { lead: l.id }),
+    wa: l.phone ? { phone: l.phone, label: "Chamar", msg: mensagemDaLead(l, data.meta) } : null,
+  }));
+  if (funil?.semRetorno) out.push({
+    id: "lsr", event: false, icon: "🎯", tone: "rgba(140,154,120,.18)",
+    title: `${funil.semRetorno} lead(s) sem retorno marcado`,
+    sub: "Abra o funil e marque quando falar com cada uma",
+    nav: (go) => go("funil"),
+  });
 
   // 🎂 Aniversários nos próximos 7 dias — a lista completa fica na tela
   // Aniversariantes; aqui é só o aviso de quem está chegando.

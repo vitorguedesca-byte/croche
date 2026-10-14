@@ -96,6 +96,19 @@ import {
 import { sicrediConfigured, sicrediMissing, createCharge, getCharge, cancelCharge, isPaidStatus, extractPix } from "./sicredi.js";
 import { txidBooking, txidMensalidade, parseTxid, viasDaMensalidade, destinoDoPixNaMensalidade, reservasComPixAberto } from "./pixRegras.js";
 import { enviarEventoMeta, contextoDoNavegador, guardarContexto, contextoGuardado } from "./metaCapi.js";
+import {
+  ETAPA_TEXTO,
+  MOTIVOS_PERDA,
+  ORIGENS,
+  situacaoDaLead,
+  entraNoFunil,
+  telefoneDaLead,
+  origemDaUtm,
+  origemDoAnuncioWa,
+  limparUtm,
+  utmParaGravar,
+  diaBR,
+} from "./funil.js";
 import { waConfigured, waTemplatesConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, parseTemplateStatuses, normalizePhone, listWaTemplates, createWaTemplate } from "./wa.js";
 import { montarTemplate, textoComMarcadores, MARCADORES, LIMITES as LIMITES_TEMPLATE } from "./waTemplateRegras.js";
 import {
@@ -1236,7 +1249,11 @@ app.get(
   "/api/state",
   wrap(async (req, res) => {
     await sincronizarLeadsPagos().catch((e) => console.warn("[api/state] sincronizarLeadsPagos:", e.message));
-    const [clients, slots, bookings, invoices, makeups, precos, presentes, waRecebidas, pixAlertas] = await Promise.all([
+    /* Etapas do funil em dia para os avisos (no máximo uma vez por minuto).
+       Sem esperar: a carga inicial do funil, no primeiro boot, cria centenas
+       de linhas — o painel não pode ficar em "Carregando…" por causa disso. */
+    sincronizarFunilSePreciso();
+    const [clients, slots, bookings, invoices, makeups, precos, presentes, waRecebidas, pixAlertas, funilAvisos] = await Promise.all([
       prisma.client.findMany({ orderBy: { name: "asc" } }),
       prisma.slot.findMany({ include: { waitlist: true }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
       prisma.booking.findMany({ orderBy: [{ date: "asc" }, { time: "asc" }] }),
@@ -1253,6 +1270,7 @@ app.get(
       }),
       // Pix que caiu sem destino (pago em dobro, turma lotada…) até alguém resolver
       prisma.pixAlerta.findMany({ where: { resolvidoAt: null }, orderBy: { createdAt: "desc" }, take: 100 }),
+      avisosDoFunil(),
     ]);
     const hoje = todayISO();
     res.json({
@@ -1278,6 +1296,8 @@ app.get(
       presentes: presentes.map((p) => resumoPresente(p, hoje)),
       waRecebidas,
       pixAlertas,
+      // funil de leads: retornos marcados para hoje (ou atrasados) e leads novas
+      funilAvisos,
     });
   })
 );
@@ -2387,6 +2407,9 @@ app.post(
         ctx,
         custom: { content_name: b.plan === "avulso" ? "aula avulsa" : "matricula", currency: "BRL" },
       });
+      /* Funil: a lead ganha a ficha e a origem da visita (UTM que o site
+         guardou). Falhar aqui não pode derrubar a reserva — o Pix vem a seguir. */
+      if (client) registrarLeadDoSite(client, { utm: b.utm, unit }).catch((e) => console.warn("[funil site]", e.message));
     }
 
     // compatibilidade: sem replicação, devolve a marcação criada (como antes)
@@ -6219,7 +6242,9 @@ app.post("/api/wa/webhook", async (req, res) => {
     if (!msg || waSeen.has(msg.id)) return;
     waSeen.add(msg.id);
     if (waSeen.size > 2000) waSeen.clear();
-    console.log(`[wa] recebido de ${msg.from} (${msg.name}): "${msg.text}"`);
+    console.log(`[wa] recebido de ${msg.from} (${msg.name}): "${msg.text}"${msg.referral ? ` [anúncio: ${msg.referral.headline || msg.referral.source_id || "?"}]` : ""}`);
+    // Funil: quem não é aluna e escreveu vira lead. Não espera — o robô responde já.
+    registrarLeadDoWhatsApp(msg).catch((e) => console.warn("[funil wa]", e.message));
     if (!waConfigured()) return;
     await handleWaMessage(msg);
   } catch (e) {
@@ -8945,7 +8970,8 @@ app.post("/api/admin/login", wrap(async (req, res) => {
   const user = await prisma.adminUser.findFirst({ where: { username } });
   if (!user || !(await bcrypt.compare(password, user.pass))) return res.status(401).json({ error: "Usuário ou senha inválidos." });
   const role = user.role === "instrutora" ? "instrutora" : "admin";
-  const token = genToken(); adminTokens.set(token, { username, role });
+  // `nome` vai na sessão para o histórico dizer QUEM fez (ex.: funil de leads)
+  const token = genToken(); adminTokens.set(token, { username, role, nome: user.nome || null });
   res.json({ ok: true, token, username, role, nome: user.nome || null });
 }));
 
@@ -9129,6 +9155,483 @@ app.delete("/api/testimonials/:id", wrap(async (req, res) => {
   res.status(204).end();
 }));
 
+/* ===================== FUNIL DE LEADS (Vitor, 14/10/2026) =====================
+   Do primeiro "oi" até a matrícula. As regras (etapa, marcos, origem) estão
+   em src/funil.js, com teste; aqui só o banco e as rotas.
+
+   Por onde uma lead nasce:
+   • WhatsApp — quem escreve e não é aluna (registrarLeadDoWhatsApp);
+   • site     — a 1ª aula marcada no /agendar, com a UTM da visita (registrarLeadDoSite);
+   • painel   — a equipe anota quem chamou no Instagram, ligou, passou na porta;
+   • ficha    — toda ficha que passa pela entrada e ainda não tem lead (as de
+                antes do funil, e as criadas pelo painel ou pelo tablet da sala)
+                entra na sincronização. É ela que faz a carga inicial sozinha
+                no primeiro boot: nenhum script precisa rodar na produção.
+
+   A sincronização roda a cada 5 minutos, a cada minuto com o painel aberto
+   (/api/state) e na hora em que a tela do funil abre. */
+const quemFez = (req) => String(req.admin?.nome || req.admin?.username || "painel").slice(0, 80);
+const parseUtm = (s) => { try { return s ? JSON.parse(s) : null; } catch { return null; } };
+const dataISO = (s) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) ? String(s) : null);
+const ROTULO_ORIGEM = {
+  anuncio: "anúncio", redes: "Instagram/Facebook", indicacao: "indicação", google: "Google",
+  porta: "passou na escola", evento: "evento", outro: "outra origem",
+};
+const SELECT_FICHA_FUNIL = {
+  id: true, name: true, phone: true, unit: true, status: true, plan: true, matriculaStatus: true,
+  matriculaAt: true, matriculaPainelAt: true, trialDate: true, firstClass: true, weeklyFreq: true,
+  origem: true, createdAt: true,
+};
+const SELECT_RESERVA_FUNIL = {
+  clientName: true, paymentMethod: true, value: true, status: true, paid: true, paymentDate: true,
+  date: true, time: true, attendance: true, createdAt: true,
+};
+const SELECT_CONVERSA_FUNIL = { phone: true, step: true, clientId: true, lastInboundAt: true };
+
+function eventoLead(leadId, tipo, texto, { por = null, em = null } = {}) {
+  return prisma.leadEvento.create({
+    data: { leadId, tipo, texto: String(texto || "").slice(0, 1000), por, ...(em ? { createdAt: em } : {}) },
+  });
+}
+
+// Por onde a ficha entrou, quando a lead nasce dela (e não de um gancho)
+function canalDaFicha(c) {
+  if (c.origem === "whatsapp") return "whatsapp";
+  if (c.origem === "site") return "site";
+  if (c.origem === "portal" || c.matriculaPainelAt) return "escola";
+  return null;
+}
+
+/* Recalcula uma lead e grava só o que mudou. Cada troca de etapa vira linha
+   no histórico. `nova`: lead que acabou de nascer de uma ficha antiga — a
+   etapa dela começou no marco (o dia em que matriculou, por exemplo), não
+   agora; senão a carga inicial inteira apareceria como "há 0 dias". */
+async function atualizarLead(l, { ficha, reservas, conversa, hoje, nova = false }) {
+  const s = situacaoDaLead({ lead: l, client: ficha, reservas, conversa, hoje });
+  const patch = {};
+  if (l.clientId && !ficha) patch.clientId = null; // a ficha foi apagada
+  if (s.etapa !== l.etapa) {
+    patch.etapa = s.etapa;
+    const marco = nova ? { matriculada: s.ganhaAt, marcada: s.marcouAt, aula: s.pagouAt || s.marcouAt }[s.etapa] : null;
+    if (!nova) patch.etapaDesde = new Date();
+    else if (marco) patch.etapaDesde = new Date(`${marco}T12:00:00-03:00`);
+  }
+  const det = s.detalhe ? s.detalhe.slice(0, 160) : null;
+  if (det !== (l.detalhe || null)) patch.detalhe = det;
+  for (const k of ["marcouAt", "pagouAt", "ganhaAt"]) if ((s[k] || null) !== (l[k] || null)) patch[k] = s[k] || null;
+  if (ficha) {
+    if (ficha.name && ficha.name !== l.nome) patch.nome = ficha.name.slice(0, 120);
+    if (ficha.unit && ficha.unit !== l.unit) patch.unit = ficha.unit;
+    const fone = telefoneDaLead(ficha.phone);
+    if (fone && fone !== l.phone) { patch.phone = fone; patch.phoneKey = chaveTelefone(fone) || null; }
+  }
+  // matriculou depois de dada como perdida: a perda deixa de valer
+  if (s.etapa === "matriculada" && l.perdidaAt) { patch.perdidaAt = null; patch.motivoPerda = null; }
+  if (!Object.keys(patch).length) return l;
+  const atual = await prisma.lead.update({ where: { id: l.id }, data: patch });
+  if (patch.etapa && !nova) await eventoLead(l.id, "etapa", `${ETAPA_TEXTO[s.etapa]}${det ? ` — ${det}` : ""}`);
+  if (patch.etapa && nova) await eventoLead(l.id, "etapa", `Etapa hoje: ${ETAPA_TEXTO[s.etapa]}${det ? ` — ${det}` : ""}`);
+  return atual;
+}
+
+async function conversaDoTelefone(phoneKey) {
+  if (!phoneKey) return null;
+  const convs = await prisma.waConversation.findMany({
+    where: { phone: { endsWith: phoneKey.slice(-8) } }, select: SELECT_CONVERSA_FUNIL,
+  });
+  return convs.find((c) => chaveTelefone(c.phone) === phoneKey) || null;
+}
+
+async function recalcularLead(id) {
+  const l = await prisma.lead.findUnique({ where: { id } });
+  if (!l) return null;
+  const ficha = l.clientId ? await prisma.client.findUnique({ where: { id: l.clientId }, select: SELECT_FICHA_FUNIL }) : null;
+  const reservas = ficha ? await prisma.booking.findMany({ where: { clientName: ficha.name }, select: SELECT_RESERVA_FUNIL }) : [];
+  const conversa = ficha ? null : await conversaDoTelefone(l.phoneKey);
+  return atualizarLead(l, { ficha, reservas, conversa, hoje: todayISO() });
+}
+
+/* Duas linhas para a mesma pessoa (falou com o robô por um número e se
+   cadastrou com outro, por exemplo). Fica a mais antiga — o primeiro contato
+   é o que diz a origem — com o que a outra sabia a mais. */
+async function mesclarLeads(a, b) {
+  const [fica, sai] = new Date(a.createdAt) <= new Date(b.createdAt) ? [a, b] : [b, a];
+  const patch = {};
+  for (const k of ["origem", "origemDetalhe", "utm", "canal", "unit", "phone", "phoneKey"]) if (!fica[k] && sai[k]) patch[k] = sai[k];
+  if (!fica.clientId && sai.clientId) patch.clientId = sai.clientId;
+  const prox = [fica.proximoContato, sai.proximoContato].filter(Boolean).sort()[0] || null;
+  if (prox !== (fica.proximoContato || null)) patch.proximoContato = prox;
+  if (sai.ultimoContatoAt && (!fica.ultimoContatoAt || new Date(sai.ultimoContatoAt) > new Date(fica.ultimoContatoAt))) patch.ultimoContatoAt = sai.ultimoContatoAt;
+  await prisma.leadEvento.updateMany({ where: { leadId: sai.id }, data: { leadId: fica.id } });
+  await prisma.lead.delete({ where: { id: sai.id } }); // antes do update: o clientId é único
+  const atual = Object.keys(patch).length ? await prisma.lead.update({ where: { id: fica.id }, data: patch }) : fica;
+  await eventoLead(fica.id, "sistema", `🔗 Juntei com outro registro da mesma pessoa (${sai.nome}, de ${fmtDiaBR(diaBR(sai.createdAt))}).`);
+  return { fica: atual, sai };
+}
+
+let funilSync = null;
+let funilSyncEm = 0;
+function sincronizarFunilSePreciso(idadeMaxMs = 60_000) {
+  if (funilSync) return funilSync;
+  if (Date.now() - funilSyncEm < idadeMaxMs) return Promise.resolve();
+  funilSync = sincronizarFunil()
+    .catch((e) => console.warn("[funil] sincronização:", e.message))
+    .finally(() => { funilSync = null; funilSyncEm = Date.now(); });
+  return funilSync;
+}
+
+async function sincronizarFunil() {
+  const inicio = Date.now();
+  const hoje = todayISO();
+  const [leadsDb, clients, convs] = await Promise.all([
+    prisma.lead.findMany({ orderBy: { createdAt: "asc" } }),
+    prisma.client.findMany({ select: SELECT_FICHA_FUNIL }),
+    prisma.waConversation.findMany({ select: SELECT_CONVERSA_FUNIL }),
+  ]);
+  let leads = leadsDb;
+  const troca = (atual) => { leads = leads.map((x) => (x.id === atual.id ? atual : x)); };
+  const fichaPorId = new Map(clients.map((c) => [c.id, c]));
+  const convPorChave = new Map();
+  for (const cv of convs) { const k = chaveTelefone(cv.phone); if (k) convPorChave.set(k, cv); }
+  const leadPorFicha = new Map(leads.filter((l) => l.clientId).map((l) => [l.clientId, l]));
+  const removidas = new Set();
+  const novas = new Set();
+
+  /* 1. Lead sem ficha: a ficha nasceu? A conversa do robô guarda a ficha que
+        criou; sem ela, vale o telefone de uma ficha NOVA (de depois do
+        contato) — ficha antiga com o mesmo número pode ser a mãe, não ela. */
+  for (const l of [...leads]) {
+    if (l.clientId || removidas.has(l.id)) continue;
+    const cv = l.phoneKey ? convPorChave.get(l.phoneKey) : null;
+    let ficha = cv?.clientId ? fichaPorId.get(cv.clientId) || null : null;
+    if (ficha && !entraNoFunil(ficha)) ficha = null;
+    if (!ficha && l.phoneKey) {
+      const desde = new Date(l.createdAt).getTime() - 86400_000;
+      ficha = clients.find((c) => chaveTelefone(c.phone) === l.phoneKey && entraNoFunil(c) && new Date(c.createdAt).getTime() >= desde) || null;
+    }
+    if (!ficha) continue;
+    const dona = leadPorFicha.get(ficha.id);
+    if (dona && dona.id !== l.id) {
+      const { fica, sai } = await mesclarLeads(dona, l);
+      removidas.add(sai.id);
+      leadPorFicha.set(ficha.id, fica);
+      troca(fica);
+      continue;
+    }
+    const atual = await prisma.lead.update({ where: { id: l.id }, data: { clientId: ficha.id } });
+    await eventoLead(l.id, "sistema", `📝 Ficha criada: ${ficha.name}.`);
+    leadPorFicha.set(ficha.id, atual);
+    troca(atual);
+  }
+
+  /* 2. Fichas que passaram pela entrada e ainda não têm lead: as de antes do
+        funil (carga inicial) e as criadas por caminho sem gancho. */
+  for (const c of clients) {
+    if (leadPorFicha.has(c.id) || !entraNoFunil(c)) continue;
+    const l = await prisma.lead.create({
+      data: {
+        nome: c.name.slice(0, 120), phone: telefoneDaLead(c.phone), phoneKey: chaveTelefone(c.phone) || null,
+        unit: c.unit || null, clientId: c.id, canal: canalDaFicha(c),
+        createdAt: c.createdAt, etapaDesde: c.createdAt,
+      },
+    });
+    await eventoLead(l.id, "sistema", `📥 Entrou no funil pela ficha (cadastro de ${fmtDiaBR(diaBR(c.createdAt))}).`, { em: c.createdAt });
+    leadPorFicha.set(c.id, l);
+    leads.push(l);
+    novas.add(l.id);
+  }
+  if (novas.size) console.log(`[funil] ${novas.size} lead(s) criada(s) a partir das fichas.`);
+
+  // 3. Etapa e marcos de todas
+  const nomes = [...new Set([...leadPorFicha.keys()].map((id) => fichaPorId.get(id)?.name).filter(Boolean))];
+  const reservas = nomes.length
+    ? await prisma.booking.findMany({ where: { clientName: { in: nomes } }, select: SELECT_RESERVA_FUNIL })
+    : [];
+  const reservasPorNome = new Map();
+  for (const r of reservas) {
+    if (!reservasPorNome.has(r.clientName)) reservasPorNome.set(r.clientName, []);
+    reservasPorNome.get(r.clientName).push(r);
+  }
+  for (const l of leads) {
+    if (removidas.has(l.id)) continue;
+    const ficha = l.clientId ? fichaPorId.get(l.clientId) || null : null;
+    await atualizarLead(l, {
+      ficha,
+      reservas: ficha ? reservasPorNome.get(ficha.name) || [] : [],
+      conversa: !ficha && l.phoneKey ? convPorChave.get(l.phoneKey) || null : null,
+      hoje,
+      nova: novas.has(l.id),
+    });
+  }
+  const ms = Date.now() - inicio;
+  if (ms > 2000) console.warn(`[funil] sincronização de ${leads.length} lead(s) levou ${ms} ms.`);
+}
+
+/* Quem escreveu no WhatsApp e não é aluna vira lead no primeiro "oi". Era o
+   topo que sumia: a conversa que parava antes do CPF não deixava rastro em
+   tela nenhuma. Aluna e ex-aluna (ficha com o mesmo telefone que não é lead)
+   não entram — a mensagem delas vai para as notificações por outro caminho
+   (WaRecebida). Lead perdida que volta a escrever é reaberta, menos a que a
+   equipe marcou como "não era lead". */
+const leadWaEmCurso = new Set(); // duas mensagens seguidas não criam duas leads
+async function registrarLeadDoWhatsApp(msg) {
+  if (ehEventoSemConteudo(msg.type)) return;
+  const phone = normalizePhone(msg.from);
+  const key = chaveTelefone(phone);
+  if (!key || leadWaEmCurso.has(key)) return;
+  leadWaEmCurso.add(key);
+  try {
+    const anuncio = origemDoAnuncioWa(msg.referral);
+    const lead = await prisma.lead.findFirst({ where: { phoneKey: key }, orderBy: { createdAt: "asc" } });
+    if (lead) {
+      const patch = {};
+      if (anuncio && !lead.origem) {
+        patch.origem = anuncio.origem;
+        if (!lead.origemDetalhe && anuncio.detalhe) patch.origemDetalhe = anuncio.detalhe;
+        if (!lead.utm) patch.utm = utmParaGravar(anuncio.utm);
+      }
+      const reabre = !!lead.perdidaAt && lead.motivoPerda !== "nao_lead" && lead.etapa !== "matriculada";
+      if (reabre) { patch.perdidaAt = null; patch.motivoPerda = null; }
+      if (Object.keys(patch).length) await prisma.lead.update({ where: { id: lead.id }, data: patch });
+      if (reabre) {
+        await eventoLead(lead.id, "reaberta", "💬 Voltou a falar pelo WhatsApp — lead reaberta.");
+        await recalcularLead(lead.id);
+      }
+      return;
+    }
+    const fichas = (await prisma.client.findMany({
+      where: { phone: { not: null } }, select: { id: true, name: true, phone: true, status: true, plan: true },
+    })).filter((c) => chaveTelefone(c.phone) === key);
+    if (fichas.some((c) => c.status !== "lead" || c.plan === "mensalista")) return; // aluna ou ex-aluna
+    if (fichas.length) {
+      /* Lead que já tinha ficha (veio pelo site semana passada): a lead nasce
+         da ficha, com a data do cadastro — é a sincronização que faz isso. */
+      await sincronizarFunilSePreciso(0);
+      const daFicha = await prisma.lead.findUnique({ where: { clientId: fichas[0].id } });
+      if (daFicha) await eventoLead(daFicha.id, "sistema", "💬 Escreveu no WhatsApp da escola.");
+      return;
+    }
+    const nova = await prisma.lead.create({
+      data: {
+        nome: String(msg.name || "").trim().slice(0, 120) || "Contato do WhatsApp",
+        phone: telefoneDaLead(phone), phoneKey: key, canal: "whatsapp",
+        origem: anuncio?.origem || null, origemDetalhe: anuncio?.detalhe || null,
+        utm: anuncio ? utmParaGravar(anuncio.utm) : null,
+      },
+    });
+    const veio = anuncio ? ` — veio ${anuncio.origem === "anuncio" ? "do anúncio" : "da publicação"}${anuncio.detalhe ? ` “${anuncio.detalhe}”` : ""}` : "";
+    await eventoLead(nova.id, "sistema", `💬 Primeiro contato pelo WhatsApp${msg.name ? ` (perfil: ${msg.name})` : ""}${veio}.`);
+    await recalcularLead(nova.id);
+  } finally {
+    leadWaEmCurso.delete(key);
+  }
+}
+
+/* A 1ª aula marcada pelo site (/agendar): a lead ganha a ficha e a origem da
+   visita — o que o site guardou do link (UTM do anúncio, fbclid, de onde
+   veio). Se ela já estava no funil (falou antes com o robô), a origem que já
+   existia fica: o primeiro contato é o que conta. */
+async function registrarLeadDoSite(client, { utm, unit } = {}) {
+  const u = limparUtm(utm);
+  const key = chaveTelefone(client.phone) || null;
+  const origem = origemDaUtm(u);
+  let lead = await prisma.lead.findUnique({ where: { clientId: client.id } });
+  if (!lead && key) lead = await prisma.lead.findFirst({ where: { phoneKey: key, clientId: null }, orderBy: { createdAt: "asc" } });
+  if (!lead) {
+    lead = await prisma.lead.create({
+      data: {
+        nome: client.name.slice(0, 120), phone: telefoneDaLead(client.phone), phoneKey: key,
+        unit: client.unit || unit || null, clientId: client.id, canal: "site", origem, utm: utmParaGravar(u),
+      },
+    });
+    await eventoLead(lead.id, "sistema", `🌐 Marcou a 1ª aula pelo site${origem ? ` (${ROTULO_ORIGEM[origem]})` : ""}.`);
+  } else {
+    const patch = {};
+    if (!lead.clientId) patch.clientId = client.id;
+    if (!lead.canal) patch.canal = "site";
+    if (u && !lead.utm) patch.utm = utmParaGravar(u);
+    if (origem && !lead.origem) patch.origem = origem;
+    const reabre = !!lead.perdidaAt; // marcou de novo: está interessada, seja qual for o motivo anotado
+    if (reabre) { patch.perdidaAt = null; patch.motivoPerda = null; }
+    if (Object.keys(patch).length) lead = await prisma.lead.update({ where: { id: lead.id }, data: patch });
+    await eventoLead(lead.id, reabre ? "reaberta" : "sistema", `🌐 Marcou a 1ª aula pelo site${reabre ? " — lead reaberta" : ""}.`);
+  }
+  await recalcularLead(lead.id);
+}
+
+/* Para as notificações (vão no /api/state): retorno marcado até hoje e lead
+   que chegou nos últimos 3 dias — só as em aberto. Falhar aqui não pode
+   derrubar o painel inteiro. */
+async function avisosDoFunil() {
+  try {
+    const hoje = todayISO();
+    const abertas = { etapa: { notIn: ["matriculada", "perdida"] } };
+    const select = { id: true, nome: true, phone: true, etapa: true, detalhe: true, canal: true, origem: true, proximoContato: true, ultimoContatoAt: true, createdAt: true };
+    const [retornos, novas, semRetorno] = await Promise.all([
+      prisma.lead.findMany({ where: { ...abertas, proximoContato: { lte: hoje } }, select, orderBy: { proximoContato: "asc" }, take: 60 }),
+      prisma.lead.findMany({ where: { ...abertas, createdAt: { gte: new Date(Date.now() - 3 * 86400_000) } }, select, orderBy: { createdAt: "desc" }, take: 60 }),
+      prisma.lead.count({ where: { ...abertas, proximoContato: null } }),
+    ]);
+    return { retornos, novas, semRetorno };
+  } catch (e) {
+    console.warn("[funil] avisos:", e.message);
+    return null;
+  }
+}
+
+/* A tela do funil sempre abre em dia: a baixa que a Inêz acabou de dar em
+   Alunos tem que aparecer como "matriculada" já, não no minuto seguinte. Duas
+   telas abertas ao mesmo tempo dividem a mesma rodada (sincronizarFunilSePreciso). */
+app.get("/api/funil", wrap(async (_req, res) => {
+  await sincronizarFunilSePreciso(0);
+  const leads = await prisma.lead.findMany({ orderBy: { createdAt: "desc" } });
+  res.json({ hoje: todayISO(), leads: leads.map((l) => ({ ...l, utm: parseUtm(l.utm) })) });
+}));
+
+app.get("/api/funil/:id", wrap(async (req, res) => {
+  await recalcularLead(Number(req.params.id));
+  const lead = await prisma.lead.findUnique({
+    where: { id: Number(req.params.id) },
+    include: { eventos: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 300 } },
+  });
+  if (!lead) return res.status(404).json({ error: "Lead não encontrada." });
+  res.json({ ...lead, utm: parseUtm(lead.utm) });
+}));
+
+// O mesmo WhatsApp já é lead, aluna ou ex-aluna? Devolve a frase da recusa.
+async function telefoneJaConhecido(key, ignorarLeadId = null) {
+  if (!key) return null;
+  const ja = await prisma.lead.findFirst({ where: { phoneKey: key, ...(ignorarLeadId ? { id: { not: ignorarLeadId } } : {}) }, orderBy: { createdAt: "asc" } });
+  if (ja) return { error: `Esse WhatsApp já está no funil: ${ja.nome} (${ETAPA_TEXTO[ja.etapa]}).`, leadId: ja.id };
+  const aluna = (await prisma.client.findMany({
+    where: { phone: { not: null } }, select: { name: true, phone: true, status: true, plan: true },
+  })).find((c) => chaveTelefone(c.phone) === key && (c.status !== "lead" || c.plan === "mensalista"));
+  if (aluna) return { error: `Esse WhatsApp é da ${aluna.status === "cancelado" ? "ex-aluna" : "aluna"} ${aluna.name}.` };
+  return null;
+}
+
+// Lead anotada pela equipe: chamou no Instagram, ligou, passou na porta…
+app.post("/api/funil", wrap(async (req, res) => {
+  const b = req.body || {};
+  const nome = String(b.nome || "").trim().replace(/\s+/g, " ").slice(0, 120);
+  if (nome.length < 2) return res.status(400).json({ error: "Escreva o nome da lead." });
+  const phone = telefoneDaLead(b.phone);
+  if (String(b.phone || "").replace(/\D/g, "") && !phone)
+    return res.status(400).json({ error: "WhatsApp incompleto: escreva com o DDD, ex.: (31) 99999-8888." });
+  if (b.origem && !ORIGENS.includes(b.origem)) return res.status(400).json({ error: "Origem desconhecida." });
+  const key = phone ? chaveTelefone(phone) : null;
+  // a ficha de lead com o mesmo número ganha a lead dela antes da conferência
+  if (key) await sincronizarFunilSePreciso(0);
+  const conhecido = await telefoneJaConhecido(key);
+  if (conhecido) return res.status(409).json(conhecido);
+  const por = quemFez(req);
+  const lead = await prisma.lead.create({
+    data: {
+      nome, phone, phoneKey: key, unit: String(b.unit || "").trim().slice(0, 100) || null, canal: "escola",
+      origem: b.origem || null, origemDetalhe: String(b.origemDetalhe || "").trim().slice(0, 200) || null,
+      proximoContato: dataISO(b.proximoContato),
+    },
+  });
+  await eventoLead(lead.id, "sistema", `✍️ Anotada no painel${b.origem ? ` (${ROTULO_ORIGEM[b.origem]})` : ""}.`, { por });
+  if (String(b.nota || "").trim()) await eventoLead(lead.id, "nota", String(b.nota).trim(), { por });
+  if (lead.proximoContato) await eventoLead(lead.id, "sistema", `⏰ Retorno marcado para ${fmtDiaBR(lead.proximoContato)}.`, { por });
+  res.json(await recalcularLead(lead.id));
+}));
+
+app.patch("/api/funil/:id", wrap(async (req, res) => {
+  const l = await prisma.lead.findUnique({ where: { id: Number(req.params.id) } });
+  if (!l) return res.status(404).json({ error: "Lead não encontrada." });
+  const b = req.body || {};
+  const por = quemFez(req);
+  const patch = {};
+  const eventos = [];
+  // Nome, telefone e unidade de quem já tem ficha vêm da ficha (é lá que se corrige).
+  if (!l.clientId) {
+    if ("nome" in b) {
+      const nome = String(b.nome || "").trim().replace(/\s+/g, " ").slice(0, 120);
+      if (nome.length < 2) return res.status(400).json({ error: "Escreva o nome da lead." });
+      if (nome !== l.nome) patch.nome = nome;
+    }
+    if ("phone" in b) {
+      const phone = telefoneDaLead(b.phone);
+      if (String(b.phone || "").replace(/\D/g, "") && !phone)
+        return res.status(400).json({ error: "WhatsApp incompleto: escreva com o DDD." });
+      const key = phone ? chaveTelefone(phone) : null;
+      if (key !== l.phoneKey) {
+        const conhecido = await telefoneJaConhecido(key, l.id);
+        if (conhecido) return res.status(409).json(conhecido);
+      }
+      if (phone !== l.phone) { patch.phone = phone; patch.phoneKey = key; }
+    }
+    if ("unit" in b) patch.unit = String(b.unit || "").trim().slice(0, 100) || null;
+  }
+  if ("origem" in b) {
+    const o = b.origem || null;
+    if (o && !ORIGENS.includes(o)) return res.status(400).json({ error: "Origem desconhecida." });
+    if (o !== l.origem) { patch.origem = o; eventos.push(["sistema", `📍 Origem: ${o ? ROTULO_ORIGEM[o] : "não informada"}.`]); }
+  }
+  if ("origemDetalhe" in b) patch.origemDetalhe = String(b.origemDetalhe || "").trim().slice(0, 200) || null;
+  if ("proximoContato" in b) {
+    const p = b.proximoContato ? dataISO(b.proximoContato) : null;
+    if (b.proximoContato && !p) return res.status(400).json({ error: "Data do retorno inválida." });
+    if (p !== (l.proximoContato || null)) {
+      patch.proximoContato = p;
+      eventos.push(["sistema", p ? `⏰ Retorno marcado para ${fmtDiaBR(p)}.` : "⏰ Retorno desmarcado."]);
+    }
+  }
+  if (!Object.keys(patch).length) return res.json(l);
+  const atual = await prisma.lead.update({ where: { id: l.id }, data: patch });
+  for (const [tipo, texto] of eventos) await eventoLead(l.id, tipo, texto, { por });
+  res.json(patch.phoneKey !== undefined ? await recalcularLead(l.id) : atual);
+}));
+
+// Anotação ou contato feito (com o próximo retorno, se a equipe marcar)
+app.post("/api/funil/:id/eventos", wrap(async (req, res) => {
+  const l = await prisma.lead.findUnique({ where: { id: Number(req.params.id) } });
+  if (!l) return res.status(404).json({ error: "Lead não encontrada." });
+  const b = req.body || {};
+  const tipo = b.tipo === "contato" ? "contato" : "nota";
+  const texto = String(b.texto || "").trim().slice(0, 1000) || (tipo === "contato" ? "Falei com ela." : "");
+  if (!texto) return res.status(400).json({ error: "Escreva a anotação." });
+  const por = quemFez(req);
+  const patch = {};
+  if (tipo === "contato") patch.ultimoContatoAt = new Date();
+  let p;
+  if ("proximoContato" in b) {
+    p = b.proximoContato ? dataISO(b.proximoContato) : null;
+    if (b.proximoContato && !p) return res.status(400).json({ error: "Data do retorno inválida." });
+    if (p !== (l.proximoContato || null)) patch.proximoContato = p;
+  }
+  await eventoLead(l.id, tipo, texto, { por });
+  if ("proximoContato" in patch) await eventoLead(l.id, "sistema", p ? `⏰ Retorno marcado para ${fmtDiaBR(p)}.` : "⏰ Retorno desmarcado.", { por });
+  res.json(Object.keys(patch).length ? await prisma.lead.update({ where: { id: l.id }, data: patch }) : l);
+}));
+
+app.post("/api/funil/:id/perder", wrap(async (req, res) => {
+  const l = await prisma.lead.findUnique({ where: { id: Number(req.params.id) } });
+  if (!l) return res.status(404).json({ error: "Lead não encontrada." });
+  const { motivo } = req.body || {};
+  if (!MOTIVOS_PERDA[motivo]) return res.status(400).json({ error: "Escolha o motivo." });
+  if (l.etapa === "matriculada") return res.status(400).json({ error: "Ela já é aluna — não dá para dar como perdida." });
+  const texto = String(req.body?.texto || "").trim().slice(0, 500);
+  await prisma.lead.update({ where: { id: l.id }, data: { perdidaAt: todayISO(), motivoPerda: motivo, proximoContato: null } });
+  await eventoLead(l.id, "perdida", `✖ Perdida: ${MOTIVOS_PERDA[motivo]}${texto ? ` — ${texto}` : ""}`, { por: quemFez(req) });
+  res.json(await recalcularLead(l.id));
+}));
+
+app.post("/api/funil/:id/reabrir", wrap(async (req, res) => {
+  const l = await prisma.lead.findUnique({ where: { id: Number(req.params.id) } });
+  if (!l) return res.status(404).json({ error: "Lead não encontrada." });
+  if (!l.perdidaAt)
+    return res.status(400).json({ error: l.etapa === "perdida" ? "A ficha dela está inativada — reative a aluna em Alunos › Ex-Alunos." : "Esta lead não está como perdida." });
+  await prisma.lead.update({ where: { id: l.id }, data: { perdidaAt: null, motivoPerda: null } });
+  await eventoLead(l.id, "reaberta", "↩️ Lead reaberta.", { por: quemFez(req) });
+  res.json(await recalcularLead(l.id));
+}));
+
+setInterval(() => { sincronizarFunilSePreciso(0); }, 5 * 60 * 1000);
+setTimeout(() => { sincronizarFunilSePreciso(0); }, 45_000);
+
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
 /* Migração leve e idempotente: cria as colunas que o código novo espera, se o
@@ -9167,6 +9670,49 @@ const COLUNAS_ESPERADAS = [
    Prisma que cria a mesma tabela. Sem `Holiday`, toda checagem de feriado
    quebraria — e a checagem roda em todo caminho de marcação. */
 const TABELAS_ESPERADAS = [
+  /* Funil de leads (14/10/2026). O `prisma db push` do container já cria as
+     duas; ficam aqui para o backend que sobe sem ele. */
+  ["Lead", `CREATE TABLE IF NOT EXISTS \`Lead\` (
+      \`id\` INTEGER NOT NULL AUTO_INCREMENT,
+      \`nome\` VARCHAR(120) NOT NULL,
+      \`phone\` VARCHAR(20) NULL,
+      \`phoneKey\` VARCHAR(12) NULL,
+      \`unit\` VARCHAR(100) NULL,
+      \`clientId\` INTEGER NULL,
+      \`canal\` VARCHAR(12) NULL,
+      \`origem\` VARCHAR(12) NULL,
+      \`origemDetalhe\` VARCHAR(200) NULL,
+      \`utm\` VARCHAR(1000) NULL,
+      \`etapa\` VARCHAR(12) NOT NULL DEFAULT 'contato',
+      \`etapaDesde\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      \`detalhe\` VARCHAR(160) NULL,
+      \`marcouAt\` VARCHAR(10) NULL,
+      \`pagouAt\` VARCHAR(10) NULL,
+      \`ganhaAt\` VARCHAR(10) NULL,
+      \`proximoContato\` VARCHAR(10) NULL,
+      \`ultimoContatoAt\` DATETIME(3) NULL,
+      \`perdidaAt\` VARCHAR(10) NULL,
+      \`motivoPerda\` VARCHAR(20) NULL,
+      \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      \`updatedAt\` DATETIME(3) NOT NULL,
+      UNIQUE INDEX \`Lead_clientId_key\`(\`clientId\`),
+      INDEX \`Lead_phoneKey_idx\`(\`phoneKey\`),
+      INDEX \`Lead_etapa_idx\`(\`etapa\`),
+      INDEX \`Lead_createdAt_idx\`(\`createdAt\`),
+      INDEX \`Lead_proximoContato_idx\`(\`proximoContato\`),
+      PRIMARY KEY (\`id\`)
+    ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
+  ["LeadEvento", `CREATE TABLE IF NOT EXISTS \`LeadEvento\` (
+      \`id\` INTEGER NOT NULL AUTO_INCREMENT,
+      \`leadId\` INTEGER NOT NULL,
+      \`tipo\` VARCHAR(12) NOT NULL,
+      \`texto\` VARCHAR(1000) NOT NULL,
+      \`por\` VARCHAR(80) NULL,
+      \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      INDEX \`LeadEvento_leadId_idx\`(\`leadId\`),
+      PRIMARY KEY (\`id\`),
+      CONSTRAINT \`LeadEvento_leadId_fkey\` FOREIGN KEY (\`leadId\`) REFERENCES \`Lead\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
+    ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`],
   /* Campanhas com código (30/09/2026). O `prisma db push` do container já
      cria as duas; ficam aqui também para o backend que sobe sem ele. */
   ["Voucher", `CREATE TABLE IF NOT EXISTS \`Voucher\` (

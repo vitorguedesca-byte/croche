@@ -46,9 +46,11 @@ async function req(method, url, body) {
   });
   if (!res.ok) {
     let msg = "Erro na requisição";
-    try { msg = (await res.json()).error || msg; } catch {}
+    let corpo = null;
+    try { corpo = await res.json(); msg = corpo.error || msg; } catch {}
     const err = new Error(msg);
     err.status = res.status;
+    err.data = corpo; // ex.: o funil devolve o `leadId` de quem já está lá
     throw err;
   }
   return res.status === 204 ? null : res.json();
@@ -168,6 +170,17 @@ export const api = {
   /* Campanhas com código (voucher). `validar` é a prévia pública da tela de
      matrícula — só confere, não ocupa vaga na campanha. Quem ocupa é a criação
      da reserva, com `voucher` no corpo de createBooking. */
+  // Funil de leads: do primeiro contato até a matrícula
+  funil: {
+    list: () => req("GET", "/api/funil"),
+    get: (id) => req("GET", `/api/funil/${id}`),
+    create: (data) => req("POST", "/api/funil", data),
+    update: (id, data) => req("PATCH", `/api/funil/${id}`, data),
+    evento: (id, data) => req("POST", `/api/funil/${id}/eventos`, data),
+    perder: (id, motivo, texto) => req("POST", `/api/funil/${id}/perder`, { motivo, texto }),
+    reabrir: (id) => req("POST", `/api/funil/${id}/reabrir`, {}),
+  },
+
   vouchers: {
     list: () => req("GET", "/api/vouchers"),
     create: (data) => req("POST", "/api/vouchers", data),

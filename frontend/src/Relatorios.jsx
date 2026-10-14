@@ -29,7 +29,7 @@ import {
 const pad = (n) => String(n).padStart(2, "0");
 
 /* ----------------- período (dia / semana / mês / ano) ----------------- */
-function intervalo(tipo, ref) {
+export function intervalo(tipo, ref) {
   if (tipo === "dia") return [ref, ref];
   if (tipo === "semana") { const s = weekStart(ref); return [s, addDays(s, 6)]; }
   // grade típica: 4 semanas a partir da semana de referência (a tela mostra a média)
@@ -55,7 +55,7 @@ function rotuloPeriodo(tipo, ref) {
   return ref.slice(0, 4);
 }
 
-function Periodo({ tipos, tipo, setTipo, refDia, setRefDia, children }) {
+export function Periodo({ tipos, tipo, setTipo, refDia, setRefDia, children }) {
   const hoje = todayISO();
   const [de, ate] = intervalo(tipo, refDia);
   const ehAtual = hoje >= de && hoje <= ate;

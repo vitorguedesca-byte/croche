@@ -441,6 +441,8 @@ export default function FirstClassBooking({ onBack, fromSite }) {
         weeklyFreq: isAvulso ? null : freq,
         mensalistaTipo: isAvulso ? null : tipo,
         voucher: voucher?.codigo || undefined,
+        // de onde ela veio (link do anúncio, Instagram…) — vira a origem da lead no funil (public/visita.js)
+        utm: window.fqcVisita?.() || undefined,
       });
       if (!booking) window.metaTrack?.("Lead", { content_name: isAvulso ? "aula avulsa" : "matricula", value: total, currency: "BRL" }, `lead-${b.id}`);
       setBooking(b);

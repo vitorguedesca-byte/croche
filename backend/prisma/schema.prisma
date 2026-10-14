@@ -605,6 +605,72 @@ model PixAlerta {
   @@index([resolvidoAt])
 }
 
+/* FUNIL DE LEADS (Vitor, 14/10/2026). Uma linha por pessoa interessada, do
+   primeiro "oi" no WhatsApp até a matrícula — ou até ser dada como perdida.
+
+   Existe à parte da ficha (Client) porque o funil começa ANTES dela: quem
+   conversa com o robô e para antes do CPF, ou quem chamou no Instagram e a
+   Inêz anotou, ainda não tem ficha. E ficha de aluna é ligada pelo NOME à
+   agenda — criar ficha para cada curioso seria arriscar a aula de uma aluna
+   cair no nome errado. Quando a ficha nasce, `clientId` liga as duas.
+
+   A ETAPA não é escolhida por ninguém: é calculada dos fatos (ficha, reservas
+   de entrada, pagamento, plano) por `situacaoDaLead` em src/funil.js, e
+   gravada aqui pela sincronização só para o painel e as notificações lerem
+   rápido e para cada mudança ficar no histórico. O que é da equipe — origem,
+   próximo contato, anotações, motivo da perda — mora só aqui.
+
+   Os marcos (`marcouAt`, `pagouAt`, `ganhaAt`) são o que o relatório conta:
+   a reserva que caiu sem Pix some da agenda, mas "ela chegou a marcar" fica. */
+model Lead {
+  id              Int       @id @default(autoincrement())
+  nome            String    @db.VarChar(120)
+  phone           String?   @db.VarChar(20) // só dígitos, sem o 55 (DDD + número)
+  phoneKey        String?   @db.VarChar(12) // chaveTelefone: DDD + 8 dígitos — é por ela que a mesma pessoa é achada
+  unit            String?   @db.VarChar(100)
+  clientId        Int?      @unique // ficha da aluna, quando já existe
+  // Por onde ENTROU: "whatsapp" | "site" | "escola" (painel/tablet). null = lead de antes do funil
+  canal           String?   @db.VarChar(12)
+  // De onde VEIO (marketing): anuncio | redes | indicacao | google | porta | evento | outro. null = não informada
+  origem          String?   @db.VarChar(12)
+  origemDetalhe   String?   @db.VarChar(200) // quem indicou, nome do anúncio…
+  utm             String?   @db.VarChar(1000) // JSON: utm_*, fbclid, gclid, referrer, anúncio do WhatsApp
+  // contato | cadastro | marcada | aula | matriculada | perdida — calculada (ver acima)
+  etapa           String    @default("contato") @db.VarChar(12)
+  etapaDesde      DateTime  @default(now())
+  detalhe         String?   @db.VarChar(160) // "Pix pendente · aula 20/10", "parou na escolha do horário"…
+  marcouAt        String?   @db.VarChar(10) // 1ª reserva de entrada (avulsa ou matrícula), 'YYYY-MM-DD'
+  pagouAt         String?   @db.VarChar(10) // 1º pagamento de entrada
+  ganhaAt         String?   @db.VarChar(10) // matrícula paga — virou aluna
+  proximoContato  String?   @db.VarChar(10) // 'YYYY-MM-DD': o painel avisa no dia
+  ultimoContatoAt DateTime?
+  perdidaAt       String?   @db.VarChar(10) // dada como perdida pela equipe; null = aberta
+  motivoPerda     String?   @db.VarChar(20) // ver MOTIVOS_PERDA em src/funil.js
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  eventos         LeadEvento[]
+
+  @@index([phoneKey])
+  @@index([etapa])
+  @@index([createdAt])
+  @@index([proximoContato])
+}
+
+/* Histórico da lead: anotação e contato registrados pela equipe, e o que o
+   sistema viu acontecer (mudou de etapa, voltou a falar no WhatsApp). */
+model LeadEvento {
+  id        Int      @id @default(autoincrement())
+  leadId    Int
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  // nota | contato | etapa | perdida | reaberta | sistema
+  tipo      String   @db.VarChar(12)
+  texto     String   @db.VarChar(1000)
+  por       String?  @db.VarChar(80) // quem da equipe; null = o sistema
+  createdAt DateTime @default(now())
+
+  @@index([leadId])
+}
+
 /* Um disparo em massa (a Inêz escolhe as alunas e manda de uma vez).
 
    Mora no banco, e não só na memória do processo, por um motivo prático: o

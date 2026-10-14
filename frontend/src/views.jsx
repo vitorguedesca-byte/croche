@@ -632,7 +632,7 @@ export function Marcacoes() {
 /* ============================= CLIENTES ============================= */
 const initials = (n) => (n || "").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 
-export function Clientes({ params }) {
+export function Clientes({ params, go }) {
   const { data, run } = useStore();
   const { open } = useModal();
   const [tab, setTab] = useState(params?.tab === "novato" ? "novato" : params?.tab === "lead" ? "lead" : "cliente"); // cliente | novato | lead
@@ -750,7 +750,13 @@ export function Clientes({ params }) {
       <div className="seg seg-tabs" style={{ marginBottom: "1rem" }}>
         {TABS.map((t) => <button key={t[0]} className={tab === t[0] ? "on" : ""} onClick={() => setTab(t[0])}>{t[1]} <span className="seg-count">{t[2]}</span></button>)}
       </div>
-      <div className="seg-hint">{hint}</div>
+      <div className="seg-hint">
+        {hint}
+        {/* as duas abas de lead também vivem no Funil, com retorno, origem e histórico */}
+        {(tab === "novato" || tab === "lead") && go && (
+          <> <button className="btn ghost sm" style={{ marginLeft: ".4rem" }} onClick={() => go("funil")}>🎯 Acompanhar no Funil de leads</button></>
+        )}
+      </div>
       <div className="filters">
         <input className="grow" placeholder="🔍 Buscar por nome, CPF ou telefone..." value={search} onChange={(e) => setSearch(e.target.value)} />
         <Select

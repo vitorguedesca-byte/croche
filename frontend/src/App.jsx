@@ -10,6 +10,7 @@ import ClienteApp from "./ClienteApp.jsx";
 import Config from "./Config.jsx";
 import Disparo from "./Disparo.jsx";
 import Campanhas, { CampanhaForm } from "./Campanhas.jsx";
+import Funil, { LeadForm } from "./Funil.jsx";
 import { exportBookingsCsv } from "./exports.js";
 import ClientPortal from "./ClientPortal.jsx";
 import FirstClassBooking from "./FirstClassBooking.jsx";
@@ -41,6 +42,7 @@ const NAV = [
   { view: "marcacoes", ic: "📝", label: "Marcações" },
   { sep: "Relacionamento" },
   { view: "clientes", ic: "👩", label: "Alunos" },
+  { view: "funil", ic: "🎯", label: "Funil de leads" },
   { view: "aniversariantes", ic: "🎂", label: "Aniversariantes" },
   { view: "disparo", ic: "📣", label: "Disparo WhatsApp" },
   { sep: "Financeiro" },
@@ -65,6 +67,7 @@ const TITLES = {
   agenda:       ["Agenda",        "Horários e ocupação por unidade"],
   marcacoes:    ["Marcações",     "Novos e alunas com acesso — confirmações e remarcações"],
   clientes:     ["Alunos",        "Alunos, leads e novatos — CRM e contato direto"],
+  funil:        ["Funil de leads", "Do primeiro contato até a matrícula — com quem falar e de onde vêm as alunas"],
   aniversariantes: ["Aniversariantes", "Quem faz aniversário na semana e no mês"],
   disparo:      ["Disparo WhatsApp", "Mensagem para várias alunas de uma vez, pelo WhatsApp oficial"],
   financeiro:   ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
@@ -159,6 +162,7 @@ export default function App() {
     agenda: <button className="btn" onClick={() => open(<SlotForm />)}>＋ Novo horário</button>,
     marcacoes: <button className="btn" onClick={() => open(<BookingForm />)}>＋ Nova marcação</button>,
     clientes: <button className="btn" onClick={() => open(<ClientForm />)}>＋ Novo aluno</button>,
+    funil: <button className="btn" onClick={() => open(<LeadForm />)}>＋ Nova lead</button>,
     campanhas: <button className="btn" onClick={() => open(<CampanhaForm />)}>＋ Nova campanha</button>,
   };
   const Body = instrutora ? Agenda : {
@@ -166,6 +170,7 @@ export default function App() {
     agenda: Agenda,
     marcacoes: Marcacoes,
     clientes: Clientes,
+    funil: Funil,
     aniversariantes: Aniversariantes,
     disparo: Disparo,
     financeiro: Financeiro,

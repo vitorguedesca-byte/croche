@@ -283,7 +283,10 @@ export function parseIncoming(body) {
       inter?.list_reply?.title ||
       msg.button?.text ||
       "";
-    return { id: msg.id, from: msg.from, name, text, replyId, type: msg.type };
+    /* `referral`: a 1ª mensagem de quem tocou num anúncio (ou publicação) de
+       clique para o WhatsApp traz de qual anúncio ela veio — é a origem da
+       lead no funil (funil.js → origemDoAnuncioWa). */
+    return { id: msg.id, from: msg.from, name, text, replyId, type: msg.type, referral: msg.referral || null };
   } catch {
     return null;
   }
