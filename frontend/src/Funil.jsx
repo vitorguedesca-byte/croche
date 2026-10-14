@@ -542,7 +542,7 @@ function Quadro({ leads, meta, abrir, chamar }) {
   const hoje = todayISO();
   const limiteMatricula = addDays(hoje, -30);
   return (
-    <div className="fn-board">
+    <div className="fn-quadro"><div className="fn-board">
       {ETAPAS.map((e) => {
         let lista = leads.filter((l) => l.etapa === e.k);
         if (e.k === "matriculada") lista = lista.filter((l) => (l.ganhaAt || "") >= limiteMatricula);
@@ -565,7 +565,7 @@ function Quadro({ leads, meta, abrir, chamar }) {
           </div>
         );
       })}
-    </div>
+    </div></div>
   );
 }
 
