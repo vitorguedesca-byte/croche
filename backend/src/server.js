@@ -24,6 +24,7 @@ import {
   validadePresente,
   situacaoPresente,
   presenteParaAula,
+  destinoNaTurmaFechada,
   primeiroPagamento,
   mensalidadeDoPagamento,
   JUROS_DIA_PERCENTUAL,
@@ -321,6 +322,17 @@ async function occupancy(slotId) {
   });
 }
 
+/* ---------- TURMA FECHADA PELA ESCOLA ----------
+   A ADMIN liberou a turma por completo (ver liberarTurma): ela não recebe aluna
+   nova por NENHUM caminho. Toda porta que põe aluna numa turma confere isto ao
+   lado da lotação — nas listas, a turma fechada some como a lotada; nos lotes,
+   vira pulo "turma fechada pela escola"; na marcação avulsa, recusa com este
+   texto. Ao contrário do feriado, é por AULA (slot), não por dia. */
+const TURMA_FECHADA = "Esta turma foi fechada pela escola e não recebe novas alunas. Escolha outro horário. 💚";
+const turmaFechada = (slot) => !!slot?.bloqueada;
+// Lotada OU fechada: as duas querem dizer "não cabe mais ninguém aqui".
+const semVaga = (slot, occ) => turmaFechada(slot) || occ >= (slot?.capacity || 1);
+
 /* ---------- A ALUNA JÁ RESOLVEU ESTA TURMA? ----------
    Para o LOTE, "já resolvida" tem dois sentidos, e os dois impedem criar aula:
 
@@ -407,7 +419,8 @@ async function exigirRegras(client, alvo, { forcar = false, ignorarJanela = fals
   /* Feriado vem ANTES do `forcar`, e de propósito: as outras regras deste
      módulo são do plano da aluna, e a Inêz pode passar por cima delas porque a
      agenda é dela. Feriado não é regra de plano — é o dia em que a escola não
-     abre. Não há aula para forçar. */
+     abre. Não há aula para forçar. A turma fechada pela escola, idem. */
+  if (turmaFechada(alvo)) throw Object.assign(new Error(TURMA_FECHADA), { code: 409, codigo: "turma_fechada" });
   const nomeFeriado = feriadoNoDia(alvo?.date, alvo?.unit);
   if (nomeFeriado)
     throw Object.assign(new Error(recusaFeriado(nomeFeriado, alvo?.date)), { code: 409, codigo: "feriado" });
@@ -640,7 +653,8 @@ async function concederCredito(client, booking) {
   });
   if (motivo) return { credito: null, motivo };
   const competencia = booking.date.slice(0, 7);
-  const noMes = await prisma.makeupCredit.count({ where: { clientId: client.id, competencia } });
+  // O crédito da turma fechada pela escola não come o teto dela (ver porEscola).
+  const noMes = await prisma.makeupCredit.count({ where: { clientId: client.id, competencia, porEscola: false } });
   if (noMes >= REPO_MAX_MES)
     return { credito: null, motivo: `Você já atingiu o limite de ${REPO_MAX_MES} reposições de ${compPorExtenso(competencia)}.` };
   const credito = await prisma.makeupCredit.create({
@@ -1496,6 +1510,10 @@ app.post(
           pulos.push({ date, clientName: b.clientName, motivo: sit.motivo });
           continue;
         }
+        if (turmaFechada(alvo)) {
+          pulos.push({ date, clientName: b.clientName, motivo: "turma fechada pela escola" });
+          continue;
+        }
         if ((await occupancy(alvo.id)) >= alvo.capacity) {
           pulos.push({ date, clientName: b.clientName, motivo: "turma lotada" });
           continue;
@@ -1682,6 +1700,10 @@ app.post("/api/agenda/replicate", wrap(async (req, res) => {
         if (sit?.tipo === "ativa") continue;
         if (sit?.tipo === "liberada") {
           resultado.pulos.push({ date, unit: fonte.unit, clientName: b.clientName, motivo: sit.motivo });
+          continue;
+        }
+        if (turmaFechada(alvo)) {
+          resultado.pulos.push({ date, unit: fonte.unit, clientName: b.clientName, motivo: "turma fechada pela escola" });
           continue;
         }
         if ((await occupancy(alvo.id)) >= (alvo.capacity || 1)) {
@@ -1904,6 +1926,154 @@ app.delete(
   })
 );
 
+/* ---------- LIBERAR TURMA POR COMPLETO (Vitor, 14/10/2026) ----------
+   Só a ADMIN: a instrutora não chega aqui (INSTRUTORA_API só tem leitura).
+   Mexe só NESTA aula — as irmãs da turma seguem como estão. A regra de quem
+   recebe o quê é destinoNaTurmaFechada() em regrasAula.js; aqui só o banco.
+
+   A ordem importa: a turma é trancada ANTES de as alunas saírem, para que
+   ninguém ocupe pelo site ou pelo WhatsApp a vaga que está abrindo. */
+const fmtTurma = (s) => `${fmtDiaBR(s.date)} às ${hhmm(s.time)} (${s.unit})`;
+
+// Crédito que nasce sem olhar regra nenhuma: a escola tirou a aula.
+async function creditoDaEscola(client, b) {
+  const competencia = b.date.slice(0, 7);
+  return prisma.makeupCredit.create({
+    data: {
+      clientId: client.id,
+      competencia,
+      expiresOn: fimDoMesSeguinte(competencia),
+      originBookingId: b.id,
+      originDate: b.date,
+      originTime: hhmm(b.time) || String(b.time || "").slice(0, 5),
+      porEscola: true,
+    },
+  });
+}
+
+// O que de fato foi gravado para UMA aluna. Cada degrau cai no seguinte quando
+// o que ela tinha não existe mais (crédito vencido, passe fora do banco).
+async function compensarAluna(client, b, slot, quem) {
+  const d = destinoNaTurmaFechada(b, client);
+  const presente = async () => {
+    // validade contada da AULA, não de hoje: fechar uma aula de daqui a 3
+    // semanas não pode dar um presente que vence 9 dias depois dela
+    await prisma.aulaPresente.create({
+      data: {
+        clientId: client.id,
+        expiresOn: validadePresente(slot.date),
+        motivo: `Turma de ${fmtTurma(slot)} fechada pela escola`,
+        dadoPor: quem,
+      },
+    });
+    return { tipo: "presente", texto: `ganhou 1 aula de presente (até ${fmtDiaBR(validadePresente(slot.date))})` };
+  };
+  const credito = async () => {
+    const c = await creditoDaEscola(client, b);
+    return { tipo: "credito", texto: `ganhou 1 crédito de reposição (vale até ${fmtDiaBR(c.expiresOn)})` };
+  };
+  const mensalistaAtiva = client?.plan === "mensalista";
+
+  if (d.tipo === "credito") return credito();
+  if (d.tipo === "presente") return presente();
+  if (d.tipo === "devolver_credito") {
+    if (await devolverCredito(b.id)) return { tipo: "devolver_credito", texto: "o crédito de reposição que ela usou voltou" };
+    return mensalistaAtiva ? credito() : presente();
+  }
+  if (d.tipo === "devolver_presente") {
+    if (await devolverPresente(b.id)) return { tipo: "devolver_presente", texto: "a aula de presente voltou" };
+    return presente();
+  }
+  if (d.tipo === "devolver_passe") {
+    const pass = await prisma.extraPass.findFirst({ where: { usedBookingId: b.id } });
+    if (pass) {
+      await prisma.extraPass.update({ where: { id: pass.id }, data: { status: "pago", usedBookingId: null, usedAt: null } });
+      return { tipo: "devolver_passe", texto: "a aula extra voltou — ela escolhe outro horário no portal" };
+    }
+    return presente();
+  }
+  return { tipo: "nada", texto: d.motivo || "sem crédito" };
+}
+
+app.post(
+  "/api/slots/:id/liberar-turma",
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const slot = await prisma.slot.findUnique({ where: { id } });
+    if (!slot) return res.status(404).json({ error: "Turma não encontrada." });
+    const hoje = todayISO();
+    if (slot.date < hoje) return res.status(400).json({ error: "Aula que já passou não se libera: o histórico não se reescreve." });
+    if (turmaFechada(slot)) return res.status(409).json({ error: "Esta turma já está fechada." });
+
+    const ativas = await prisma.booking.findMany({
+      where: { slotId: id, status: { not: "cancelada" } },
+      orderBy: { createdAt: "asc" },
+    });
+    // Chamada feita = a aula aconteceu. Aí não há o que liberar, só o que registrar.
+    if (ativas.some((b) => b.attendance))
+      return res.status(409).json({ error: "A chamada desta aula já foi feita — ela aconteceu e não pode ser liberada." });
+
+    const quem = (req.admin?.nome || req.admin?.username || "a escola").slice(0, 60);
+    const motivo = String(req.body?.motivo || "").trim().slice(0, 200) || null;
+
+    // 1º tranca a porta, depois esvazia a sala
+    await prisma.slot.update({
+      where: { id },
+      data: { bloqueada: true, bloqueadaEm: hoje, bloqueadaPor: quem, bloqueioMotivo: motivo },
+    });
+    if (ativas.length) {
+      await prisma.booking.updateMany({
+        where: { id: { in: ativas.map((b) => b.id) } },
+        data: {
+          status: "cancelada",
+          holdUntil: null,
+          absenceReason: `Turma fechada pela escola${motivo ? ` — ${motivo}` : ""}`.slice(0, 500),
+        },
+      });
+      await fecharPixDasReservas(ativas, "turma fechada pela escola");
+    }
+    // ninguém vai ser promovido para uma turma que não existe mais
+    const espera = await prisma.waitlist.deleteMany({ where: { slotId: id } });
+
+    const nomes = [...new Set(ativas.map((b) => b.clientName))];
+    const fichas = nomes.length ? await prisma.client.findMany({ where: { name: { in: nomes } } }) : [];
+    const alunas = [];
+    for (const b of ativas) {
+      const client = fichas.find((c) => c.name === b.clientName) || null;
+      let r;
+      try {
+        r = await compensarAluna(client, b, slot, quem);
+      } catch (e) {
+        // a aluna JÁ saiu da turma; o que falhou foi só o crédito — a tela avisa
+        console.error(`[turma fechada] ${b.clientName}: saiu da turma, mas a compensação falhou: ${e.message}`);
+        r = { tipo: "erro", texto: "saiu da turma, mas não consegui registrar o crédito — confira na ficha" };
+      }
+      if (client && r.tipo !== "erro")
+        await anotarNaFicha(client.id, `🔒 ${fmtDiaBR(hoje)}: turma de ${fmtTurma(slot)} fechada por ${quem}${motivo ? ` (${motivo})` : ""} — ${r.texto}.`);
+      alunas.push({ bookingId: b.id, clientId: client?.id || null, clientName: b.clientName, phone: b.phone || client?.phone || "", ...r });
+    }
+    console.log(`[turma fechada] ${fmtTurma(slot)} por ${quem}: ${alunas.length} aluna(s) retirada(s).`);
+    res.json({ ok: true, slotId: id, alunas, listaDeEspera: espera.count });
+  })
+);
+
+// Reabre as vagas. Ninguém volta sozinho e os créditos dados continuam.
+app.post(
+  "/api/slots/:id/desbloquear",
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const slot = await prisma.slot.findUnique({ where: { id } });
+    if (!slot) return res.status(404).json({ error: "Turma não encontrada." });
+    if (!turmaFechada(slot)) return res.json({ ok: true, jaAberta: true });
+    await prisma.slot.update({
+      where: { id },
+      data: { bloqueada: false, bloqueadaEm: null, bloqueadaPor: null, bloqueioMotivo: null },
+    });
+    console.log(`[turma fechada] ${fmtTurma(slot)} reaberta por ${req.admin?.nome || req.admin?.username || "painel"}.`);
+    res.json({ ok: true });
+  })
+);
+
 // Exclusão de dia: individual (só esta data) ou em lote (todas as semanas do mesmo dia da semana)
 app.post(
   "/api/slots/delete-day",
@@ -1978,7 +2148,7 @@ app.get(
        aulas extras e alunas de escala. Alunos novos (1ª aula) não podem marcar nessas vagas.
        Logo, para novos alunos, a turma precisa ter totalReservas < s.capacity. */
     const available = slots
-      .filter((s) => s.date >= t && !feriadoNoDia(s.date, s.unit) && (!unit || s.unit === unit) && (occ[s.id] || 0) < s.capacity && (totalReservas[s.id] || 0) < s.capacity)
+      .filter((s) => s.date >= t && !turmaFechada(s) && !feriadoNoDia(s.date, s.unit) && (!unit || s.unit === unit) && (occ[s.id] || 0) < s.capacity && (totalReservas[s.id] || 0) < s.capacity)
       .map((s) => ({
         id: s.id,
         date: s.date,
@@ -2209,6 +2379,10 @@ app.post(
         : await prisma.slot.findFirst({ where: { date, time, unit } });
 
       if (slot) {
+        if (turmaFechada(slot)) {
+          if (!replicando) return res.status(409).json({ error: TURMA_FECHADA });
+          pulos.lotada++; continue;
+        }
         const occ = await occupancy(slot.id);
         if (occ >= slot.capacity) {
           if (!replicando) return res.status(409).json({ error: "Turma lotada." });
@@ -2445,6 +2619,7 @@ app.patch(
       const ns = await prisma.slot.findUnique({ where: { id: Number(req.body.slotId) } });
       if (!ns) return res.status(404).json({ error: "Horário não encontrado" });
       if (barrarFeriado(res, ns.date, ns.unit)) return;
+      if (turmaFechada(ns)) return res.status(409).json({ error: TURMA_FECHADA });
       const occ = await occupancy(ns.id);
       if (occ >= ns.capacity) return res.status(409).json({ error: "Turma lotada." });
       data.slotId = ns.id; data.date = ns.date; data.time = ns.time; data.unit = ns.unit; data.prof = ns.prof;
@@ -3087,20 +3262,22 @@ async function confirmarPagamentoPorTxid(txid) {
     if (booking.status === "cancelada") {
       const slot = await prisma.slot.findUnique({ where: { id: booking.slotId } });
       const occ = await occupancy(booking.slotId);
-      if (!slot || occ >= slot.capacity) {
+      if (!slot || semVaga(slot, occ)) {
+        // turma fechada pela escola entra aqui como a lotada: a aula não volta
+        const fechada = turmaFechada(slot);
         await prisma.booking.update({
           where: { id: booking.id },
           data: { paid: true, paymentDate: todayISO(), holdUntil: null },
         });
-        console.warn(`[sicredi] reserva ${booking.id} paga fora do prazo e a turma já lotou — remarcar com ${booking.clientName}.`);
+        console.warn(`[sicredi] reserva ${booking.id} paga fora do prazo e a turma já ${fechada ? "foi fechada pela escola" : "lotou"} — remarcar com ${booking.clientName}.`);
         // Antes só ia para o log: a Inêz dependia de a aluna chamar.
         await registrarPixSemDestino(txid, cob, {
           motivo: "turma_lotada",
           clientName: booking.clientName,
-          descricao: `Pix da reserva de ${fmtDiaBR(booking.date)} às ${hhmm(booking.time)} (${booking.unit}) caiu depois do prazo e a turma lotou. O valor está guardado: remarque com ela (ela já recebeu mensagem).`,
+          descricao: `Pix da reserva de ${fmtDiaBR(booking.date)} às ${hhmm(booking.time)} (${booking.unit}) caiu depois do prazo e a turma ${fechada ? "foi fechada pela escola" : "lotou"}. O valor está guardado: remarque com ela (ela já recebeu mensagem).`,
         });
         if (booking.phone) {
-          await waSend(booking.phone, `${(booking.clientName || "").split(" ")[0]}, recebemos o seu pagamento! 💚\n\nSó que o horário que você tinha escolhido lotou enquanto o Pix não caía. Seu valor está guardado — me chama neste número que a gente escolhe outro dia juntas:\n📞 ${WA_ATENDENTE}`);
+          await waSend(booking.phone, `${(booking.clientName || "").split(" ")[0]}, recebemos o seu pagamento! 💚\n\nSó que o horário que você tinha escolhido ${fechada ? "foi cancelado pela escola" : "lotou enquanto o Pix não caía"}. Seu valor está guardado — me chama neste número que a gente escolhe outro dia juntas:\n📞 ${WA_ATENDENTE}`);
         }
         return true;
       }
@@ -5005,7 +5182,7 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
   ]);
   const occ = {}; ativas.forEach((b) => { occ[b.slotId] = (occ[b.slotId] || 0) + 1; });
   const available = slots
-    .filter((s) => (occ[s.id] || 0) < (s.capacity || 1))
+    .filter((s) => !semVaga(s, occ[s.id] || 0))
     // Feriado: a escola não abre, então o dia não é oferecido para marcar.
     .filter((s) => !feriadoNoDia(s.date, s.unit))
     // Restringe à unidade da aluna, se cadastrada — Inêz pode alterar pelo painel admin
@@ -5310,6 +5487,7 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
   if (!slot) return res.status(404).json({ error: "Horário não encontrado." });
   const dup = await prisma.booking.findFirst({ where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } } });
   if (dup) return res.status(400).json({ error: "Você já tem essa aula marcada." });
+  if (turmaFechada(slot)) return res.status(409).json({ error: TURMA_FECHADA });
   if ((await occupancy(slot.id)) >= (slot.capacity || 1)) return res.status(400).json({ error: "Turma lotada." });
   // Na escala, a janela de marcação continua valendo. A reserva criada aqui é
   // somente desta ocorrência e nunca entra em replicação.
@@ -5465,6 +5643,10 @@ async function criarGradeInicial12Meses(client, slotsBase) {
         pulos.push({ date, unit: base.unit, motivo: sit.motivo });
         continue;
       }
+      if (turmaFechada(alvo)) {
+        pulos.push({ date, unit: base.unit, motivo: "turma fechada pela escola" });
+        continue;
+      }
       if ((await occupancy(alvo.id)) >= (alvo.capacity || 1)) {
         pulos.push({ date, unit: base.unit, motivo: "turma lotada" });
         continue;
@@ -5559,6 +5741,7 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
   for (const slot of slotsBase) {
     if (slot.date < todayISO()) throw Object.assign(new Error("Escolha somente aulas futuras."), { code: 400 });
     if (feriadoNoDia(slot.date, slot.unit)) throw Object.assign(new Error(recusaFeriado(feriadoNoDia(slot.date, slot.unit), slot.date)), { code: 409 });
+    if (turmaFechada(slot)) throw Object.assign(new Error(`A turma de ${fmtDiaBR(slot.date)} às ${hhmm(slot.time)} foi fechada pela escola. Escolha outro horário.`), { code: 409 });
     if ((await occupancy(slot.id)) >= (slot.capacity || 1)) {
       const sit = await situacaoNaTurma(slot.id, client.name);
       if (sit?.tipo !== "ativa") {
@@ -5722,6 +5905,7 @@ async function abrirReservaDeMatricula(client, { weeklyFreq, mensalistaTipo, slo
     if (feriadoNoDia(s.date, s.unit)) throw Object.assign(new Error(recusaFeriado(feriadoNoDia(s.date, s.unit), s.date)), { code: 409 });
     const dup = await prisma.booking.findFirst({ where: { slotId: s.id, clientName: client.name, status: { not: "cancelada" } } });
     if (dup) throw Object.assign(new Error(`${client.name} já tem aula em ${fmtDiaBR(s.date)} às ${hhmm(s.time)}. Escolha outro horário.`), { code: 409 });
+    if (turmaFechada(s)) throw Object.assign(new Error(`A turma de ${fmtDiaBR(s.date)} às ${hhmm(s.time)} foi fechada pela escola. Escolha outro horário.`), { code: 409 });
     if ((await occupancy(s.id)) >= (s.capacity || 1))
       throw Object.assign(new Error(`A turma de ${fmtDiaBR(s.date)} às ${hhmm(s.time)} está lotada.`), { code: 409 });
   }
@@ -6099,8 +6283,8 @@ app.post("/api/clients/:id/batch-book", wrap(async (req, res) => {
     const sit = await situacaoNaTurma(slot.id, client.name);
     if (sit?.tipo === "ativa") { pulos.jaAgendado++; continue; }
     if (sit?.tipo === "liberada") { pulos.liberada++; continue; }
-    // capacidade
-    if ((await occupancy(slot.id)) >= (slot.capacity || 1)) { pulos.cheia++; continue; }
+    // capacidade (a turma fechada pela escola conta como cheia)
+    if (semVaga(slot, await occupancy(slot.id))) { pulos.cheia++; continue; }
     const b = await prisma.booking.create({
       data: {
         clientName: client.name, phone: client.phone || "", unit, date, time, prof: slot.prof || profFor(unit),
@@ -6818,8 +7002,9 @@ async function waAvailableSlots(unit) {
 
   return slots
     .map((s) => ({ ...s, time: hhmm(s.time) || String(s.time || "").slice(0, 5) }))
-    // feriado não é oferecido no WhatsApp: a escola não abre naquele dia
-    .filter((s) => !feriadoNoDia(s.date, s.unit))
+    // feriado não é oferecido no WhatsApp: a escola não abre naquele dia;
+    // turma fechada pela escola, também não (nem como "esgotada")
+    .filter((s) => !feriadoNoDia(s.date, s.unit) && !turmaFechada(s))
     .filter((s) => slotAindaDaTempo(s, t, corte))
     .map((s) => {
       const capacidade = s.capacity || 1;
@@ -6916,7 +7101,7 @@ async function segurarHorariosExtras({ clientName, phone }, slot, extraSlotIds, 
     const s = await prisma.slot.findUnique({ where: { id } });
     if (!s || s.unit !== slot.unit || !mesmaSemana(s.date, slot.date) || feriadoNoDia(s.date, s.unit)) continue;
     if ([slot, ...extraSlots].some((j) => j.date === s.date && haChoque(hhmm(j.time), hhmm(s.time)))) continue;
-    if ((await occupancy(s.id)) >= (s.capacity || 1)) continue;
+    if (semVaga(s, await occupancy(s.id))) continue;
     extras.push(await prisma.booking.create({
       data: {
         clientName,
@@ -7318,6 +7503,7 @@ async function handleWaMessage(msg) {
     // A lotação é conferida DE NOVO aqui: entre a lista e o toque no botão pode
     // ter entrado outra aluna, e a lista pode ser de uma mensagem de ontem.
     if (lot.nivel === "esgotada") return telaHorarios(slot.unit, "Essa turma acabou de lotar. 😔 ");
+    if (turmaFechada(slot)) return telaHorarios(slot.unit, "Essa turma foi cancelada pela escola. 😔 ");
     await setConv({ step: "confirm", unit: slot.unit, slotId: slot.id });
     return waButtons(
       msg.from,
@@ -7452,6 +7638,7 @@ async function handleWaMessage(msg) {
   const cadastrarECobrar = async (freq, extraSlotIds = []) => {
     const slot = conv.slotId ? await prisma.slot.findUnique({ where: { id: conv.slotId } }) : null;
     if (!slot) return telaUnidade("Esse horário expirou. ");
+    if (turmaFechada(slot)) return telaHorarios(slot.unit, "Essa turma foi cancelada pela escola. 😔 ");
     if ((await occupancy(slot.id)) >= (slot.capacity || 1))
       return telaHorarios(slot.unit, "Esse horário lotou enquanto conversávamos. 😔 ");
 
@@ -8565,7 +8752,7 @@ app.post(
         if (bk.status === "cancelada" && bk.date >= todayISO()) {
           const slot = await prisma.slot.findUnique({ where: { id: bk.slotId } });
           const occ = await occupancy(bk.slotId);
-          if (slot && occ < (slot.capacity || 1)) {
+          if (slot && !semVaga(slot, occ)) {
             deveReativar = true;
             reativouAula = true;
           }
@@ -8646,6 +8833,8 @@ app.post(
     const name = padronizarNome(req.body.name);
     const { phone } = req.body;
     if (!name) return res.status(400).json({ error: "name é obrigatório" });
+    const slot = await prisma.slot.findUnique({ where: { id: slotId } });
+    if (turmaFechada(slot)) return res.status(409).json({ error: TURMA_FECHADA });
     const entry = await prisma.waitlist.create({ data: { slotId, name, phone: phone || "" } });
     res.json(entry);
   })
@@ -8666,6 +8855,7 @@ app.post(
     const w = await prisma.waitlist.findUnique({ where: { id }, include: { slot: true } });
     if (!w) return res.status(404).json({ error: "Entrada não encontrada" });
     if (barrarFeriado(res, w.slot.date, w.slot.unit)) return;
+    if (turmaFechada(w.slot)) return res.status(409).json({ error: TURMA_FECHADA });
     const occ = await occupancy(w.slotId);
     if (occ >= w.slot.capacity) return res.status(409).json({ error: "Turma ainda está lotada." });
     const booking = await prisma.booking.create({
@@ -8705,7 +8895,7 @@ app.get(
     allBookings.filter((b) => b.status !== "cancelada").forEach((b) => { occ[b.slotId] = (occ[b.slotId] || 0) + 1; });
     const available = slots
       // feriado não é oferecido: a escola não abre naquele dia
-      .filter((s) => s.date >= t && !feriadoNoDia(s.date, s.unit) && (occ[s.id] || 0) < s.capacity)
+      .filter((s) => s.date >= t && !feriadoNoDia(s.date, s.unit) && !semVaga(s, occ[s.id] || 0))
       .map((s) => ({ id: s.id, date: s.date, time: s.time, unit: s.unit, prof: s.prof || profFor(s.unit), vagas: s.capacity - (occ[s.id] || 0) }))
       .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
     res.json({
@@ -8728,6 +8918,7 @@ app.post(
     const slot = await prisma.slot.findUnique({ where: { id: Number(req.body.slotId) } });
     if (!slot) return res.status(404).json({ error: "Horário não encontrado." });
     if (barrarFeriado(res, slot.date, slot.unit)) return;
+    if (turmaFechada(slot)) return res.status(409).json({ error: TURMA_FECHADA });
     if ((await occupancy(slot.id)) >= slot.capacity) return res.status(409).json({ error: "Esta turma acabou de lotar. Escolha outro horário." });
     const cli = (await prisma.client.findMany()).find((c) => onlyDigits(c.phone) === phone);
     const clientName = (cli && cli.name) || padronizarNome(req.body.name);

@@ -152,6 +152,11 @@ model MakeupCredit {
   originTime      String   @db.VarChar(5)
   usedBookingId   Int? // aula de reposição marcada com este crédito
   usedAt          String?  @db.VarChar(10)
+  /* Crédito GARANTIDO, dado porque a escola fechou a turma (liberarTurma).
+     Nasce sem olhar antecedência, teto do mês nem atraso — quem cancelou foi a
+     escola — e por isso também não conta no teto de REPO_MAX_MES: senão a aula
+     que a escola tirou comeria o direito da aluna de liberar as dela. */
+  porEscola       Boolean  @default(false)
   createdAt       DateTime @default(now())
 
   @@index([clientId])
@@ -220,6 +225,16 @@ model Slot {
   prof      String?
   capacity  Int        @default(4)
   seriesId  String?    @db.VarChar(40) // horários criados juntos (replicação) compartilham o mesmo id
+  /* Turma FECHADA pela ADMIN (Vitor, 14/10/2026): "Liberar turma por completo"
+     tira todas as alunas DESTA aula (só esta data — as irmãs seguem normais),
+     dá a cada uma o crédito do que ela tinha ali e tranca a porta: nenhum
+     caminho (site, portal, WhatsApp, painel, lote, lista de espera) põe aluna
+     nova aqui enquanto `bloqueada` for true. Desbloquear só reabre as vagas —
+     ninguém volta sozinho e os créditos dados continuam. Ver liberarTurma(). */
+  bloqueada      Boolean  @default(false)
+  bloqueadaEm    String?  @db.VarChar(10) // 'YYYY-MM-DD'
+  bloqueadaPor   String?  @db.VarChar(60) // admin que fechou
+  bloqueioMotivo String?  @db.VarChar(200)
   createdAt DateTime   @default(now())
   bookings  Booking[]
   waitlist  Waitlist[]

@@ -122,7 +122,8 @@ export function SlotCard({ slot, showUnit, todosAlunos = false, somenteLeitura =
   const occ = bks.length;
   const full = occ >= cap;
   const wlc = slotWaitlist(slot).length;
-  const cls = occ === 0 ? "free" : full ? "full" : "partial";
+  // turma fechada pela escola: não é "livre" nem "lotada" — está trancada
+  const cls = slot.bloqueada ? "fechada" : occ === 0 ? "free" : full ? "full" : "partial";
   const pct = Math.round((occ / cap) * 100);
   const todas = slotBookingsAll(data, slot.id); // inclui canceladas
   return (
@@ -130,7 +131,9 @@ export function SlotCard({ slot, showUnit, todosAlunos = false, somenteLeitura =
       onClick={() => open(somenteLeitura ? <TurmaView slotId={slot.id} /> : <SlotDetail slotId={slot.id} />)}>
       <div className="slot-top">
         <span className="t" style={{ color: occ ? uc : undefined }}>{hhmm(slot.time)}</span>
-        <span className={`occ ${full ? "is-full" : occ > 0 ? "is-part" : ""}`}>{occ}/{cap}</span>
+        {slot.bloqueada
+          ? <span className="occ is-full" title="Turma fechada pela escola">🔒 Fechada</span>
+          : <span className={`occ ${full ? "is-full" : occ > 0 ? "is-part" : ""}`}>{occ}/{cap}</span>}
       </div>
       {showUnit && <div className="n"><b style={{ color: uc }}>{slot.unit}</b></div>}
       {todas.length ? (
@@ -157,7 +160,7 @@ export function SlotCard({ slot, showUnit, todosAlunos = false, somenteLeitura =
           })}
           {!todosAlunos && todas.length > 5 && <div className="sc-more">+{todas.length - 5} mais</div>}
         </div>
-      ) : <div className="n">Livre</div>}
+      ) : <div className="n">{slot.bloqueada ? "Turma fechada" : "Livre"}</div>}
       <div className="occbar"><span style={{ width: pct + "%", background: full ? "var(--danger)" : uc }} /></div>
       {wlc > 0 && <div className="wl-badge">⏰ {wlc} na espera</div>}
     </div>
@@ -413,15 +416,63 @@ export function SlotDetail({ slotId }) {
     close();
   };
 
+  /* LIBERAR TURMA POR COMPLETO — só esta aula. Todas saem com o crédito do que
+     tinham ali e a turma fica trancada para aluna nova (backend/src/regrasAula.js,
+     destinoNaTurmaFechada). Só a ADMIN abre este modal: a instrutora vê TurmaView. */
+  const fechada = !!slot.bloqueada;
+  const passada = slot.date < todayISO();
+  const liberarTudo = async () => {
+    const motivo = await promptModal({
+      title: "Liberar turma por completo",
+      message: `Fechar a turma de ${fmtDateLong(slot.date)} às ${hhmm(slot.time)} em ${slot.unit}?\n\n` +
+        (occ
+          ? `As ${occ} aluna(s) saem desta aula e cada uma recebe de volta o que tinha ali: mensalista ganha crédito de reposição garantido; ` +
+            `reposição, presente e aula extra voltam; avulsa paga ganha uma aula de presente.\n\n`
+          : "A turma está vazia.\n\n") +
+        "A turma fica BLOQUEADA: ninguém entra nela — nem pelo site, portal, WhatsApp ou painel. Só esta data; as outras semanas seguem normais.",
+      label: "Motivo (opcional — vai para a ficha de cada aluna)",
+      placeholder: "Ex.: instrutora doente",
+      confirmLabel: occ ? `Liberar ${occ} aluna(s) e bloquear` : "Bloquear turma",
+      tone: "danger",
+    });
+    if (motivo === null) return;
+    const r = await run(api.liberarTurma(slotId, motivo));
+    if (r?.alunas?.length) open(<TurmaLiberadaResultado slot={slot} alunas={r.alunas} />);
+    else toast("🔒 Turma bloqueada.");
+  };
+  const desbloquear = async () => {
+    const ok = await confirmModal({
+      title: "Desbloquear turma",
+      message: `Reabrir as vagas da turma de ${fmtDate(slot.date)} às ${hhmm(slot.time)}?\n\n` +
+        "Ninguém volta sozinho e os créditos já dados continuam com as alunas.",
+      confirmLabel: "Desbloquear",
+    });
+    if (!ok) return;
+    await run(api.desbloquearTurma(slotId));
+    toast("🔓 Turma reaberta.");
+  };
+
   return (
     <Modal title={`Turma — ${faixaHorario(slot.time, data.meta?.duracaoAulaMin)}`} footer={<>
       <button className="btn ghost" onClick={() => open(<DayModal date={slot.date} unit={slot.unit} />)}>← Voltar ao dia</button>
       <div style={{ flex: 1 }} />
       <button className="btn sec" onClick={saveCap}>Salvar capacidade</button>
-      {full
-        ? <button className="btn terra" onClick={() => open(<WaitlistForm slotId={slotId} />)}>⏰ Lista de espera</button>
-        : <button className="btn" onClick={() => open(<BookingForm slotId={slotId} />)}>＋ Adicionar pessoa</button>}
+      {fechada
+        ? <button className="btn" onClick={desbloquear}>🔓 Desbloquear turma</button>
+        : full
+          ? <button className="btn terra" onClick={() => open(<WaitlistForm slotId={slotId} />)}>⏰ Lista de espera</button>
+          : <button className="btn" onClick={() => open(<BookingForm slotId={slotId} />)}>＋ Adicionar pessoa</button>}
     </>}>
+      {fechada && (
+        <div className="day-feriado">
+          <span>
+            🔒 <b>Turma fechada pela escola</b>
+            {slot.bloqueadaEm && ` em ${fmtDate(slot.bloqueadaEm)}`}
+            {slot.bloqueadaPor && ` por ${slot.bloqueadaPor}`}
+            {slot.bloqueioMotivo && ` — ${slot.bloqueioMotivo}`}. Não recebe novas alunas.
+          </span>
+        </div>
+      )}
       <div className="info-line"><b>Unidade</b><span><span className="chip" style={{ borderColor: uc, color: uc }}>{slot.unit}</span></span></div>
       <div className="info-line"><b>Data / hora</b><span>{fmtDateLong(slot.date)} · {faixaHorario(slot.time, data.meta?.duracaoAulaMin)}</span></div>
       <div className="info-line"><b>Profissional</b><span>{slot.prof || "—"}</span></div>
@@ -429,6 +480,10 @@ export function SlotDetail({ slotId }) {
         <button className="btn sec sm" onClick={() => open(<EditSlotForm slot={slot} />)}>✏️ Editar turma</button>
         <button className="btn sec sm" onClick={() => open(<ReplicateTurmaForm slot={slot} />)}
           title="Replicar turma, dia, semana ou mês">🗓 Replicação</button>
+        {!fechada && !passada && (
+          <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={liberarTudo}
+            title="Tira todas as alunas desta aula (com crédito) e bloqueia a turma">🔒 Liberar turma por completo</button>
+        )}
         <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir horário</button>
       </div>
       <div className="help" style={{ marginTop: ".45rem" }}>
@@ -445,7 +500,8 @@ export function SlotDetail({ slotId }) {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "1rem 0 .3rem" }}>
         <b style={{ color: "var(--brown)" }}>Reservas · {occ}/{cap}</b>
-        {full ? <span className="badge b-danger">Turma lotada</span> : <span className="badge b-ok">{cap - occ} vaga(s) livre(s)</span>}
+        {fechada ? <span className="badge b-muted">🔒 Turma fechada</span>
+          : full ? <span className="badge b-danger">Turma lotada</span> : <span className="badge b-ok">{cap - occ} vaga(s) livre(s)</span>}
       </div>
       {todas.length ? todas.map((b) => {
         const k = bookingKindDe(data, b);
@@ -492,11 +548,44 @@ export function SlotDetail({ slotId }) {
           <div className="roster-row" key={w.id}>
             <div className="rr-info"><b>{w.name}</b><div className="cli-sub">{w.phone || "sem telefone"}</div></div>
             <button className="btn wa sm" onClick={() => openWa(w.phone, `Olá ${w.name}! Abriu uma vaga na turma de ${fmtDate(slot.date)} às ${slot.time} em ${slot.unit}. Quer garantir? 💚`)}>Avisar</button>
-            {!full && <button className="btn sm" onClick={() => run(api.promoteWaitlist(w.id))}>Promover</button>}
+            {!full && !fechada && <button className="btn sm" onClick={() => run(api.promoteWaitlist(w.id))}>Promover</button>}
             <button className="btn ghost sm" onClick={() => run(api.removeWaitlist(w.id))} title="Remover">✕</button>
           </div>
         ))}
       </>}
+    </Modal>
+  );
+}
+
+/* ============ Resultado do "Liberar turma por completo" ============
+   O que cada aluna recebeu, com o botão de avisar no WhatsApp — o sistema não
+   manda mensagem sozinho (fora da janela de 24h a Meta descarta). */
+const ICONE_COMPENSACAO = {
+  credito: "🔄", devolver_credito: "🔄", devolver_presente: "🎁", presente: "🎁",
+  devolver_passe: "⭐", nada: "—", erro: "⚠️",
+};
+function TurmaLiberadaResultado({ slot, alunas }) {
+  const { close } = useModal();
+  const quando = `${fmtDate(slot.date)} às ${hhmm(slot.time)}`;
+  const recado = (a) =>
+    `Olá ${nomeCurto(a.clientName)}! A turma de ${quando} em ${slot.unit} foi cancelada pela escola. ` +
+    (a.tipo === "nada" || a.tipo === "erro" ? "Fala com a gente para combinarmos. 💚" : `Você não perde a aula: ${a.texto}. 💚`);
+  return (
+    <Modal title="🔒 Turma liberada e bloqueada"
+      subheader={<div className="day-sub">📅 {fmtDateLong(slot.date)} · {hhmm(slot.time)} · {slot.unit}</div>}
+      footer={<button className="btn" onClick={close}>Fechar</button>}>
+      <p className="help" style={{ marginTop: 0 }}>
+        {alunas.length} aluna(s) saíram da turma. Cada ficha recebeu uma anotação com o que foi dado.
+      </p>
+      {alunas.map((a) => (
+        <div className="roster-row" key={a.bookingId}>
+          <div className="rr-info">
+            <b>{ICONE_COMPENSACAO[a.tipo] || "•"} {a.clientName}</b>
+            <div className="cli-sub" style={a.tipo === "erro" ? { color: "var(--danger)" } : undefined}>{a.texto}</div>
+          </div>
+          {a.phone && <button className="btn wa sm" onClick={() => openWa(a.phone, recado(a))}>Avisar</button>}
+        </div>
+      ))}
     </Modal>
   );
 }
@@ -2664,7 +2753,7 @@ export function EnrollForm({ client }) {
   const [busy, setBusy] = useState(false);
   const t = todayISO();
   const livres = data.slots
-    .filter((s) => s.date >= t && slotBookings(data, s.id).length < slotCapacity(s))
+    .filter((s) => s.date >= t && !s.bloqueada && slotBookings(data, s.id).length < slotCapacity(s))
     // Sem regra de data no plano (sábado saiu em 30/08, 18h em 26/08), a 1ª aula
     // oficial pode cair em qualquer turma livre da grade.
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
@@ -2767,7 +2856,7 @@ export function MatricularNovaForm({ client, plano: planoInicial, tipo: tipoInic
   const [aberta, setAberta] = useState(null); // resposta do servidor com o Pix
   const t = todayISO();
   const livres = data.slots
-    .filter((s) => s.date >= t && slotBookings(data, s.id).length < slotCapacity(s))
+    .filter((s) => s.date >= t && !s.bloqueada && slotBookings(data, s.id).length < slotCapacity(s))
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const ehEscala = tipo === "escala";
   const nHorarios = ehEscala ? 1 : freq;
@@ -3007,7 +3096,7 @@ function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso, ate = nul
   const t = todayISO();
   // `ate`: última data aceita (a validade da aula de presente)
   const livres = data.slots
-    .filter((s) => s.date >= t && (!ate || s.date <= ate) && slotBookings(data, s.id).length < slotCapacity(s))
+    .filter((s) => s.date >= t && !s.bloqueada && (!ate || s.date <= ate) && slotBookings(data, s.id).length < slotCapacity(s))
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   /* Reposição, aula extra e presente usam uma única turma e nunca criam recorrência. */
   const marcar = async (s) => {

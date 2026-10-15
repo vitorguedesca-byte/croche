@@ -422,6 +422,9 @@
   .occbar{height:4px;border-radius:999px;background:rgba(94,74,56,.12);margin-top:.4rem;overflow:hidden}
   .occbar span{display:block;height:100%;border-radius:999px}
   .slot.full{opacity:.92}
+  /* turma fechada pela escola (Liberar turma por completo) */
+  .slot.fechada{opacity:.75;border-left-style:dashed;border-left-color:var(--muted);background:var(--cream)}
+  .slot.fechada .n{color:var(--muted);font-weight:700}
   .slot.full .n::after{content:' · lotada';color:var(--danger);font-weight:800}
   .m-ev.full{font-weight:800;outline:1px solid var(--danger);outline-offset:-1px}
   .slot-btn .vagas{display:block;font-size:.72rem;font-weight:800;color:var(--green-mid);margin-top:.25rem}

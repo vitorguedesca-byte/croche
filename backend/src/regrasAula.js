@@ -161,6 +161,41 @@ export function presenteParaAula(presentes, date, hoje) {
     .sort((a, b) => a.expiresOn.localeCompare(b.expiresOn) || a.id - b.id)[0] || null;
 }
 
+/* ===================== TURMA FECHADA PELA ESCOLA (Vitor, 14/10/2026) =====================
+   "Liberar turma por completo": só a ADMIN, e só UMA aula (aquela data — as
+   outras semanas da turma seguem normais). Todas as alunas saem, a turma fica
+   trancada para aluna nova, e cada uma recebe de volta o que tinha ali:
+
+   • aula do plano da mensalista     → crédito de reposição GARANTIDO: quem
+     cancelou foi a escola, então não valem antecedência, teto do mês nem
+     atraso — e o crédito não come o teto dela (MakeupCredit.porEscola);
+   • reposição                       → o crédito que ela gastou volta;
+   • aula de presente                → o presente volta;
+   • aula extra (comprada/cortesia)  → o passe volta, e ela escolhe outro horário;
+   • avulsa / 1ª aula já PAGA        → uma aula de presente (mensalista ativa
+     ganha crédito, que é o caminho dela);
+   • reserva ainda NÃO paga          → só sai; o Pix em aberto é fechado.
+   • aula do plano de quem deixou de ser mensalista → só sai.
+
+   Quem tem a inscrição cancelada não ganha nem usa crédito (regra 6 da
+   reposição) — sai sem nada. Esta função só DECIDE; quem grava é
+   liberarTurma() no server, que cai no próximo degrau quando o do topo não
+   existe (crédito já vencido, passe que não está no banco). */
+export function destinoNaTurmaFechada(b, client) {
+  const pm = b?.paymentMethod || "";
+  const cancelada = !client || client.status === "cancelado";
+  const mensalistaAtiva = !cancelada && client.plan === "mensalista";
+  if (cancelada) return { tipo: "nada", motivo: client ? "inscrição cancelada — sem crédito" : "ficha não encontrada" };
+  if (pm === PGTO_REPOSICAO) return { tipo: "devolver_credito" };
+  if (pm === PGTO_PRESENTE) return { tipo: "devolver_presente" };
+  if (pm === PGTO_EXTRA) return { tipo: "devolver_passe" };
+  if (pm === PGTO_PLANO)
+    return mensalistaAtiva ? { tipo: "credito" } : { tipo: "nada", motivo: "aula do plano, mas ela não é mais mensalista" };
+  // reserva de entrada (matrícula, avulsa, 1ª aula) ou marcação solta do painel
+  if (!b.paid) return { tipo: "nada", motivo: "reserva ainda não paga — sem crédito" };
+  return mensalistaAtiva ? { tipo: "credito" } : { tipo: "presente" };
+}
+
 /* ===================== O PRIMEIRO PAGAMENTO DA ALUNA NOVA =====================
    A aluna nova paga a MENSALIDADE mais a TAXA DE MATRÍCULA, uma vez só (Vitor,
    01/09/2026). Da segunda cobrança em diante é só a mensalidade.

@@ -273,7 +273,7 @@ function MonthView({ ref0, agSlots, open, data, unit, somenteLeitura = false }) 
     const slots = agSlots(date);
     const evs = slots.slice(0, 3).map((s) => {
       const uc = unitColor(s.unit), cap = slotCapacity(s), occ = slotOccupancy(data, s.id), full = occ >= cap;
-      const txt = occ ? `${hhmm(s.time)} · ${occ}/${cap}` : `${hhmm(s.time)} Livre`;
+      const txt = s.bloqueada ? `${hhmm(s.time)} 🔒 Fechada` : occ ? `${hhmm(s.time)} · ${occ}/${cap}` : `${hhmm(s.time)} Livre`;
       return <div key={s.id} className={`m-ev ${occ ? "" : "free"} ${full ? "full" : ""}`} style={{ "--uc": uc, ...(occ ? { background: "var(--cream)", color: uc } : {}) }}>{txt}</div>;
     });
     const dots = slots.slice(0, 8).map((s) => <span key={s.id} className="m-dot" style={{ background: slotOccupancy(data, s.id) ? unitColor(s.unit) : "var(--line)", width: 7, height: 7, borderRadius: "50%" }} />);

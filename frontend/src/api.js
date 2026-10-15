@@ -72,6 +72,9 @@ export const api = {
   // futuros equivalentes (mesma unidade/hora/dia da semana), pega-tudo
   deleteSlot: (id, mode) => req("DELETE", `/api/slots/${id}${mode === "match" ? "?match=1" : mode ? "?series=1" : ""}`),
   deleteDay: (data) => req("POST", "/api/slots/delete-day", data),
+  // Só a ADMIN, só esta aula: tira todas as alunas (com crédito) e tranca a turma
+  liberarTurma: (id, motivo) => req("POST", `/api/slots/${id}/liberar-turma`, { motivo }),
+  desbloquearTurma: (id) => req("POST", `/api/slots/${id}/desbloquear`),
 
   createBooking: (data) => req("POST", "/api/bookings", data),
   updateBooking: (id, data) => req("PATCH", `/api/bookings/${id}`, data),
