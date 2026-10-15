@@ -5,6 +5,7 @@ import { useModal, StatusBadge, Select } from "./ui.jsx";
 import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import Agendamentos from "./Agendamentos.jsx";
+import { FiltroUnidade, unidadesDe } from "./Relatorios.jsx";
 import {
   SlotCard, DayModal, ManageBooking, ClientProfile, SlotDetail, TurmaView, AlterarMensalidade, FeriadoAulas,
   baixarMensalidade, AlterarVencimentoModal, BaixarLeadModal, MatricularNovaForm,
@@ -942,8 +943,12 @@ function BarChart({ series, color = "var(--sage-deep)" }) {
   );
 }
 
+/* Filtro de unidade do Financeiro (o mesmo chip do Relatório de vagas): vale
+   para as três abas. Ficha sem unidade cai em "Sem unidade", como em Vendas. */
+const daUnidade = (unit, u) => unit === "Todas" || (u || "Sem unidade") === unit;
+
 /* ----------------- ABA 1: OPERAÇÃO DO MÊS (mensalidades e cobranças) ----------------- */
-function FinanceiroOperacao() {
+function FinanceiroOperacao({ unit }) {
   const { data, run } = useStore();
   const { open } = useModal();
   const [comp, setComp] = useState(compAtual());
@@ -956,11 +961,13 @@ function FinanceiroOperacao() {
 
   // Alunas mensalistas que já estavam matriculadas nessa competência.
   // Inativas entram se tiverem fatura gerada na competência (paga ou cancelada na inativação).
-  const mensalistas = data.clients
+  const todasMensalistas = data.clients
     .filter((c) => c.plan === "mensalista")
     .filter((c) => c.status !== "cancelado" || (data.invoices || []).some((i) => i.clientId === c.id && i.competencia === comp))
     .filter((c) => { const ini = matriculaISO(c); return !ini || ini.slice(0, 7) <= comp; })
     .sort((a, b) => a.name.localeCompare(b.name));
+  // Os números e a lista seguem a unidade escolhida; "Gerar boletos" é sempre de todas
+  const mensalistas = todasMensalistas.filter((c) => daUnidade(unit, c.unit));
 
   const invOf = (c) => faturaDaComp(data.invoices, c.id, comp);
   const valorDe = (c) => mensalidadeDaComp(c, comp, data.meta, data.precos);
@@ -973,10 +980,10 @@ function FinanceiroOperacao() {
   };
 
   const gerarTodos = async () => {
-    const ativas = mensalistas.filter((c) => c.status !== "cancelado").length;
+    const ativas = todasMensalistas.filter((c) => c.status !== "cancelado").length;
     if (!(await confirmModal({
       title: "Gerar mensalidades",
-      message: `Gerar os boletos de ${compLabel(comp)} para os ${ativas} mensalistas ativos?`,
+      message: `Gerar os boletos de ${compLabel(comp)} para os ${ativas} mensalistas ativos${unit === "Todas" ? "" : " de todas as unidades"}?`,
       confirmLabel: "Gerar",
     }))) return;
     setBusy(true);
@@ -1081,6 +1088,7 @@ function FinanceiroOperacao() {
      e não a encontra aqui. Fica num filtro próprio. No mês atual vale a grade
      daqui para a frente; mês fechado, só as aulas daquele mês. */
   const semPlano = data.clients
+    .filter((c) => daUnidade(unit, c.unit))
     .map((c) => ({ c, aulas: aulasSemPlano(data, c, `${comp}-01`, ehMesAtual ? null : `${comp}-31`) }))
     .filter((x) => x.aulas.length)
     .sort((a, b) => a.c.name.localeCompare(b.c.name));
@@ -1123,7 +1131,7 @@ function FinanceiroOperacao() {
         </div>
         <button
           className="btn"
-          disabled={busy || !mensalistas.length || !ehMesAtual}
+          disabled={busy || !todasMensalistas.length || !ehMesAtual}
           title={ehMesAtual ? "" : "Boletos só são gerados para o mês atual"}
           onClick={gerarTodos}
         >
@@ -1534,7 +1542,7 @@ function FinanceiroOperacao() {
       ) : (
         <div className="empty">
           <div className="ic">📅</div>
-          <p>{search || filtroStatus !== "todos" ? "Nenhum mensalista encontrado para este filtro." : "Nenhum mensalista nessa competência."}</p>
+          <p>{search || filtroStatus !== "todos" || unit !== "Todas" ? "Nenhum mensalista encontrado para este filtro." : "Nenhum mensalista nessa competência."}</p>
           {cleanSearch && semPlanoFiltrados.length > 0 && (
             <p>
               {semPlanoFiltrados.map((x) => x.c.name).join(", ")} tem aula na agenda, mas está sem plano de mensalista.
@@ -1548,14 +1556,14 @@ function FinanceiroOperacao() {
 }
 
 /* ----------------- ABA 2: MÉTRICAS & FLUXO (gráficos e histórico) ----------------- */
-function FinanceiroMetricas() {
+function FinanceiroMetricas({ unit }) {
   const { data } = useStore();
   const { open } = useModal();
   const [histSearch, setHistSearch] = useState("");
   const month = compAtual();
 
   const cliOf = (i) => data.clients.find((c) => c.id === i.clientId);
-  const invs = (data.invoices || []).filter((i) => i.status !== "cancelado");
+  const invs = (data.invoices || []).filter((i) => i.status !== "cancelado" && daUnidade(unit, cliOf(i)?.unit));
   const valorHoje = (i) => (i.encargos ? i.encargos.total : i.amountCents / 100);
   const diaPgto = (i) => String(i.paidAt || "").slice(0, 10);
 
@@ -1735,7 +1743,7 @@ const TIPOS_TOTAL = [
 ];
 const fimDoMes = (comp) => { const [y, m] = comp.split("-").map(Number); return `${comp}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`; };
 
-function FinanceiroTotal({ go }) {
+function FinanceiroTotal({ go, unit }) {
   const { data } = useStore();
   const [comp, setComp] = useState(compAtual());
   const [itens, setItens] = useState(null); // 6 meses até `comp`
@@ -1753,7 +1761,7 @@ function FinanceiroTotal({ go }) {
   }, [comp]);
 
   const soma = (l) => l.reduce((s, i) => s + (Number(i.valor) || 0), 0);
-  const doMes = (m) => (itens || []).filter((i) => String(i.data).slice(0, 7) === m);
+  const doMes = (m) => (itens || []).filter((i) => String(i.data).slice(0, 7) === m && daUnidade(unit, i.unidade));
   const noMes = doMes(comp);
   const total = soma(noMes);
   const porTipo = (l, k) => l.filter((i) => i.tipo === k);
@@ -1761,9 +1769,10 @@ function FinanceiroTotal({ go }) {
 
   /* A receber: o que já foi cobrado e ainda não entrou. Fica FORA do total
      recebido — é o que falta, não o que veio. */
-  const pendMens = (data.invoices || []).filter((i) => i.status === "pendente" && i.competencia === comp);
+  const unitDoCliente = (id) => data.clients.find((c) => c.id === id)?.unit;
+  const pendMens = (data.invoices || []).filter((i) => i.status === "pendente" && i.competencia === comp && daUnidade(unit, unitDoCliente(i.clientId)));
   const aReceberMens = pendMens.reduce((s, i) => s + (i.encargos ? i.encargos.total : i.amountCents / 100), 0);
-  const matAbertas = (data.bookings || []).filter((b) => ehPagamentoDeMatricula(b.paymentMethod) && b.status === "aguardando" && !b.paid && Number(b.value) > 0);
+  const matAbertas = (data.bookings || []).filter((b) => ehPagamentoDeMatricula(b.paymentMethod) && b.status === "aguardando" && !b.paid && Number(b.value) > 0 && daUnidade(unit, b.unit));
   const aReceberMat = matAbertas.reduce((s, b) => s + Number(b.value || 0), 0);
 
   return (
@@ -1856,7 +1865,10 @@ function FinanceiroTotal({ go }) {
 
 /* ----------------- COMPONENTE PRINCIPAL FINANCEIRO ----------------- */
 export function Financeiro({ go, params }) {
+  const { data } = useStore();
   const [tab, setTab] = useState(params?.tab || "operacao");
+  const [unit, setUnit] = useState("Todas");
+  const unidades = unidadesDe(data.meta, data.clients.filter((c) => c.plan === "mensalista").map((c) => c.unit || "Sem unidade"));
 
   useEffect(() => {
     if (params?.tab) setTab(params.tab);
@@ -1864,19 +1876,22 @@ export function Financeiro({ go, params }) {
 
   return (
     <>
-      <div className="seg seg-tabs" style={{ marginBottom: "1.2rem" }}>
-        <button className={tab === "operacao" ? "on" : ""} onClick={() => setTab("operacao")}>
-          📋 Operação do Mês
-        </button>
-        <button className={tab === "metricas" ? "on" : ""} onClick={() => setTab("metricas")}>
-          📊 Métricas & Fluxo
-        </button>
-        <button className={tab === "total" ? "on" : ""} onClick={() => setTab("total")}>
-          💰 Total financeiro
-        </button>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: ".8rem", flexWrap: "wrap", marginBottom: "1.2rem" }}>
+        <div className="seg seg-tabs">
+          <button className={tab === "operacao" ? "on" : ""} onClick={() => setTab("operacao")}>
+            📋 Operação do Mês
+          </button>
+          <button className={tab === "metricas" ? "on" : ""} onClick={() => setTab("metricas")}>
+            📊 Métricas & Fluxo
+          </button>
+          <button className={tab === "total" ? "on" : ""} onClick={() => setTab("total")}>
+            💰 Total financeiro
+          </button>
+        </div>
+        {unidades.length > 1 && <FiltroUnidade unidades={unidades} unit={unit} setUnit={setUnit} />}
       </div>
 
-      {tab === "operacao" ? <FinanceiroOperacao /> : tab === "total" ? <FinanceiroTotal go={go} /> : <FinanceiroMetricas />}
+      {tab === "operacao" ? <FinanceiroOperacao unit={unit} /> : tab === "total" ? <FinanceiroTotal go={go} unit={unit} /> : <FinanceiroMetricas unit={unit} />}
     </>
   );
 }

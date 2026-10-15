@@ -22,8 +22,9 @@ import {
      unidade e no total. Sai do estado do painel (horários +
      marcações), sem chamada extra.
 
-   Em ambas, o resumo por unidade não muda com o filtro de unidade:
-   o filtro só estreita a lista detalhada lá embaixo.
+   Em ambas, os cartões do topo mostram sempre todas as unidades e
+   servem de filtro: escolhida uma unidade, tudo abaixo deles segue a
+   escolha. O mesmo filtro (FiltroUnidade) é usado no Financeiro.
    ============================================================ */
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -76,12 +77,12 @@ export function Periodo({ tipos, tipo, setTipo, refDia, setRefDia, children }) {
 }
 
 // Unidades do cadastro + qualquer outra que aparecer nos dados (ex.: "Sem unidade")
-function unidadesDe(meta, extras) {
+export function unidadesDe(meta, extras) {
   const base = meta?.units || [];
   return [...base, ...[...new Set(extras)].filter((u) => u && !base.includes(u)).sort()];
 }
 
-function FiltroUnidade({ unidades, unit, setUnit }) {
+export function FiltroUnidade({ unidades, unit, setUnit }) {
   return (
     <div className="ag-units">
       <span style={{ fontSize: ".76rem", color: "var(--muted)", fontWeight: 700, marginRight: ".2rem" }}>Unidade:</span>
@@ -135,11 +136,16 @@ export function RelatorioVendas() {
   const total = soma(itens);
   const matriculas = (lista) => lista.filter((i) => i.tipo === "matricula").length;
 
-  // planos vendidos nas matrículas do período
-  const planos = [...new Set(itens.filter((i) => i.tipo === "matricula").map((i) => i.detalhe || "sem plano"))].sort();
+  /* Como em Vagas: os cartões do topo trocam a unidade e tudo abaixo segue.
+     Com "Todas", uma coluna por unidade e o total por último. */
+  const doFiltro = unit === "Todas" ? itens : deUnidade(unit);
+  const colunas = unit === "Todas" ? unidades : [unit];
+  const comTotal = unit === "Todas";
 
-  const lista = itens
-    .filter((i) => unit === "Todas" || i.unidade === unit)
+  // planos vendidos nas matrículas do período
+  const planos = [...new Set(doFiltro.filter((i) => i.tipo === "matricula").map((i) => i.detalhe || "sem plano"))].sort();
+
+  const lista = doFiltro
     .filter((i) => contemBusca([i.aluna, i.unidade, TIPO_VENDA[i.tipo]?.csv, i.detalhe], busca));
   const cliOf = (i) => data.clients.find((c) => c.id === i.clientId);
 
@@ -162,14 +168,15 @@ export function RelatorioVendas() {
                 const v = soma(deUnidade(u));
                 return (
                   <div key={u} className="card stat click" onClick={() => setUnit(unit === u ? "Todas" : u)}
-                    style={unit === u ? { outline: `2px solid ${unitColor(u)}` } : undefined} title="Clique para ver só os lançamentos desta unidade">
+                    style={unit === u ? { outline: `2px solid ${unitColor(u)}` } : undefined} title="Clique para ver só esta unidade">
                     <div className="lbl"><span style={{ background: unitColor(u), width: 10, height: 10, borderRadius: "50%", display: "inline-block" }} /> {u}</div>
                     <div className="val">{money(v)}</div>
                     <div className="foot">{deUnidade(u).length} venda(s) · {matriculas(deUnidade(u))} matrícula(s) · {pct(v, total)}% do total</div>
                   </div>
                 );
               })}
-              <div className="card stat">
+              <div className="card stat click" onClick={() => setUnit("Todas")}
+                style={unit === "Todas" && unidades.length > 1 ? { outline: "2px solid var(--terracota)" } : undefined} title="Clique para ver todas as unidades">
                 <div className="lbl">💰 Total</div>
                 <div className="val terra">{money(total)}</div>
                 <div className="foot">{itens.length} venda(s) · {matriculas(itens)} matrícula(s)</div>
@@ -184,7 +191,7 @@ export function RelatorioVendas() {
 
             <table>
               <thead>
-                <tr><th>Tipo</th>{unidades.map((u) => <th key={u}>{u}</th>)}<th>Total</th></tr>
+                <tr><th>Tipo</th>{colunas.map((u) => <th key={u}>{u}</th>)}{comTotal && <th>Total</th>}</tr>
               </thead>
               <tbody>
                 {TIPOS_VENDA.map((t) => {
@@ -192,18 +199,18 @@ export function RelatorioVendas() {
                   return (
                     <tr key={t.k}>
                       <td className="c-main"><b>{t.l}</b></td>
-                      {unidades.map((u) => {
+                      {colunas.map((u) => {
                         const x = doTipo.filter((i) => i.unidade === u);
                         return <td key={u} data-l={u}>{money(soma(x))}<div className="cli-sub">{x.length} lançamento(s)</div></td>;
                       })}
-                      <td data-l="Total"><b>{money(soma(doTipo))}</b><div className="cli-sub">{doTipo.length} lançamento(s)</div></td>
+                      {comTotal && <td data-l="Total"><b>{money(soma(doTipo))}</b><div className="cli-sub">{doTipo.length} lançamento(s)</div></td>}
                     </tr>
                   );
                 })}
                 <tr>
                   <td className="c-main"><b>Total</b></td>
-                  {unidades.map((u) => <td key={u} data-l={u}><b>{money(soma(deUnidade(u)))}</b><div className="cli-sub">{pct(soma(deUnidade(u)), total)}% do total</div></td>)}
-                  <td data-l="Total"><b style={{ color: "var(--terracota)" }}>{money(total)}</b></td>
+                  {colunas.map((u) => <td key={u} data-l={u}><b>{money(soma(deUnidade(u)))}</b><div className="cli-sub">{pct(soma(deUnidade(u)), total)}% do total</div></td>)}
+                  {comTotal && <td data-l="Total"><b style={{ color: "var(--terracota)" }}>{money(total)}</b></td>}
                 </tr>
               </tbody>
             </table>
@@ -215,15 +222,15 @@ export function RelatorioVendas() {
         <div className="panel">
           <div className="panel-h"><h2>🎟️ Matrículas novas <span className="muted-note">· plano escolhido</span></h2></div>
           <table>
-            <thead><tr><th>Plano</th>{unidades.map((u) => <th key={u}>{u}</th>)}<th>Total</th></tr></thead>
+            <thead><tr><th>Plano</th>{colunas.map((u) => <th key={u}>{u}</th>)}{comTotal && <th>Total</th>}</tr></thead>
             <tbody>
               {planos.map((p) => {
-                const doPlano = itens.filter((i) => i.tipo === "matricula" && (i.detalhe || "sem plano") === p);
+                const doPlano = doFiltro.filter((i) => i.tipo === "matricula" && (i.detalhe || "sem plano") === p);
                 return (
                   <tr key={p}>
                     <td className="c-main"><b>{capitalize(p)}</b></td>
-                    {unidades.map((u) => <td key={u} data-l={u}>{doPlano.filter((i) => i.unidade === u).length}</td>)}
-                    <td data-l="Total"><b>{doPlano.length}</b></td>
+                    {colunas.map((u) => <td key={u} data-l={u}>{doPlano.filter((i) => i.unidade === u).length}</td>)}
+                    {comTotal && <td data-l="Total"><b>{doPlano.length}</b></td>}
                   </tr>
                 );
               })}
