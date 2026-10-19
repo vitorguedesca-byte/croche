@@ -64,6 +64,8 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  // Ex-aluna (ficha inativada): o portal não abre, mas oferece a volta (backend/src/volta.js)
+  const [exAluna, setExAluna] = useState(false);
   const [authStep, setAuthStep] = useState("phone"); // phone | create | enter
   const [pin, setPin] = useState("");
   const [pinConfirm, setPinConfirm] = useState("");
@@ -110,13 +112,17 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
     const raw = typeof cpfExplicit === "string" ? cpfExplicit : input;
     const cpf = raw.replace(/\D/g, "");
     if (cpf.length !== 11) { setErr("Digite o seu CPF (11 números)."); return; }
-    setLoading(true); setErr("");
+    setLoading(true); setErr(""); setExAluna(false);
     try {
       const r = await api.auth.check(cpf);
       if (!r.exists) { setErr("CPF não cadastrado. Toque em “Agendar aula” na página inicial para fazer a sua primeira aula. 💚"); setLoading(false); return; }
       if (!kiosk) { try { localStorage.setItem(CPF_KEY, cpf); } catch {} }
       setAuthStep(r.hasPin ? "enter" : "create"); setLoading(false);
-    } catch (e) { setErr(e.message); setLoading(false); }
+    } catch (e) {
+      // o CPF fica guardado para a tela da volta já abrir com ele
+      if (e.data?.exAluna) { setExAluna(true); if (!kiosk) { try { localStorage.setItem(CPF_KEY, cpf); } catch {} } }
+      setErr(e.message); setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -175,8 +181,25 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
             <p className="pt-sub">Digite o seu CPF para acessar as suas aulas.</p>
             <label className="pt-label">Seu CPF</label>
             <input className="pt-input" inputMode="numeric" placeholder="000.000.000-00" value={input}
-              onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && checkCpf()} />
-            {err && (
+              onChange={(e) => { setInput(e.target.value); if (exAluna) { setExAluna(false); setErr(""); } }} onKeyDown={(e) => e.key === "Enter" && checkCpf()} />
+            {/* Ex-aluna: em vez do erro, o convite para voltar. A volta é a tela de
+                matrícula em modo volta (só planos, sem taxa) — a ficha volta a ficar
+                ativa quando o Pix cai. No tablet da sala a tela não sai do portal. */}
+            {err && exAluna && (
+              <div className="pt-fc-resume" style={{ textAlign: "left", lineHeight: 1.5, marginBottom: 0 }}>
+                {err}
+                {kiosk ? (
+                  <p className="pt-hint" style={{ marginBottom: 0 }}>
+                    Para voltar, abra o portal no seu celular (<b>fiosquecuram.com.br/portal</b>) ou fale com a equipe aqui da sala. 💚
+                  </p>
+                ) : (
+                  <button className="pt-btn" style={{ marginTop: ".9rem" }} onClick={() => { window.location.href = "/agendar?volta=1"; }}>
+                    💚 Quero voltar às aulas
+                  </button>
+                )}
+              </div>
+            )}
+            {err && !exAluna && (
               <div className="pt-err" style={{ textAlign: "left", lineHeight: 1.45 }}>
                 {err}
                 <div style={{ marginTop: ".65rem" }}>
@@ -192,7 +215,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
                 </div>
               </div>
             )}
-            <button className="pt-btn" onClick={checkCpf} disabled={loading}>{loading ? "Verificando…" : "Continuar"}</button>
+            {!exAluna && <button className="pt-btn" onClick={checkCpf} disabled={loading}>{loading ? "Verificando…" : "Continuar"}</button>}
             <p className="pt-hint">É a sua primeira vez? Toque em <b>Agendar aula</b> na página inicial. 💚</p>
           </>)}
           {authStep === "create" && (<>

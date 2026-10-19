@@ -81,6 +81,8 @@ import {
   textoConfirmarAvulsa,
   textoValores,
   textoAluna,
+  textoExAluna,
+  textoPlanoVolta,
   textoMidiaNaoLida,
   textoDuvidaRegistrada,
   textoHoldExpirado,
@@ -97,6 +99,7 @@ import {
 import { sicrediConfigured, sicrediMissing, createCharge, getCharge, cancelCharge, isPaidStatus, extractPix } from "./sicredi.js";
 import { txidBooking, txidMensalidade, parseTxid, viasDaMensalidade, destinoDoPixNaMensalidade, reservasComPixAberto } from "./pixRegras.js";
 import { enviarEventoMeta, contextoDoNavegador, guardarContexto, contextoGuardado } from "./metaCapi.js";
+import { ehExAluna, ehPagamentoDaVolta, intencaoDaVolta, fichaDaVoltaPaga, SEM_VOLTA } from "./volta.js";
 import {
   ETAPA_TEXTO,
   MOTIVOS_PERDA,
@@ -2221,7 +2224,11 @@ async function ensureClient(nomeBruto, phone, unit, tags, cpf, email, firstClass
    têm `trialDate` vazio e `matriculaStatus` "nao_aplica". Sem esta linha, a
    Camila Marcelina (2x, ativa) entrou pelo robô para marcar uma aula a mais, foi
    tratada como aluna nova — cobrança de R$ 140 de matrícula — e a ficha dela
-   caiu para "lead". Ex-aluna (cancelado) continua podendo se matricular de novo. */
+   caiu para "lead". */
+/* EX-ALUNA (cancelado) refaz a entrada: é a VOLTA pelo autoatendimento
+   (Vitor, 19/10/2026 — ver volta.js). Antes ela ficava trancada do lado de
+   fora como o lead que voltava: o site e o robô diziam "você já é nossa
+   aluna, use o portal", e o portal recusava a ficha inativa. */
 /* LEAD QUE VOLTA (Vitor, 05/10/2026). Lead é quem começou a matrícula ou a
    aula avulsa pelo site ou pelo WhatsApp e não pagou. A ficha dela fica com
    `trialDate` preenchido e `matriculaStatus` "pendente" — justamente as duas
@@ -2235,7 +2242,7 @@ async function ensureClient(nomeBruto, phone, unit, tags, cpf, email, firstClass
 const ehLead = (c) => !!c && c.status === "lead" && c.plan !== "mensalista" &&
   (c.matriculaStatus === "pendente" || c.matriculaStatus === "nao_aplica");
 
-const jaFezMatricula = (c) => !!c && !ehLead(c) && (
+const jaFezMatricula = (c) => !!c && !ehLead(c) && !ehExAluna(c) && (
   !!c.trialDate || c.matriculaStatus !== "nao_aplica" ||
   (c.plan === "mensalista" && c.status !== "cancelado"));
 
@@ -2336,9 +2343,13 @@ app.post(
        bloqueio é do fluxo público; a Inêz continua podendo marcar o que
        precisar pelo painel (que não manda firstClass). O lead que não pagou
        passa (ver ehLead), depois de acertar o que sobrou da tentativa anterior. */
+    // Ex-aluna voltando (ver volta.js): só plano, sem taxa e sem código de promoção.
+    let volta = false;
+    const inicioDaVolta = new Date();
     if (entradaPublica) {
       let existente = client;
-      if (ehLead(existente)) {
+      // a ex-aluna que volta também pode ter deixado uma reserva da tentativa anterior
+      if (ehLead(existente) || ehExAluna(existente)) {
         const sobra = await sobrasDoLead(existente);
         if (sobra.viva)
           return res.status(409).json({
@@ -2352,6 +2363,17 @@ app.post(
           error: "Você já tem a sua matrícula registrada — ela é uma só. " +
             "Para marcar uma aula, entre na área do aluno com o seu CPF. Qualquer dúvida, chame a gente no WhatsApp. 💚",
         });
+      volta = ehExAluna(existente);
+      if (volta) {
+        if (b.plan === "avulso" || b.modalidade === "avulso" || b.weeklyFreq === "avulso")
+          return res.status(400).json({
+            error: "Que bom ter você de volta! 💚 Para voltar às aulas, escolha um dos planos mensais — a aula avulsa é para quem está conhecendo a escola.",
+          });
+        if (normalizarCodigo(b.voucher))
+          return res.status(400).json({ error: "Os códigos de promoção valem para a primeira matrícula. Na sua volta não há taxa de matrícula: você paga só a mensalidade. 💚" });
+        try { intencaoDaVolta(existente, { freq: b.weeklyFreq, tipo: b.mensalistaTipo }); }
+        catch (e) { return res.status(e.code || 400).json({ error: e.message }); }
+      }
     }
 
     /* Código de promoção (voucher): só na matrícula / aula avulsa pela tela
@@ -2412,7 +2434,8 @@ app.post(
       const isAvulso = b.plan === "avulso" || b.modalidade === "avulso" || b.weeklyFreq === "avulso";
       const ehMatricula = !isAvulso && !!b.firstClass && i === 0;
       const freqEscolhida = freqDoPlano(b.weeklyFreq);
-      const taxa = ehMatricula ? taxaMatriculaAtual() : 0;
+      // a ex-aluna que volta não paga a matrícula de novo (ela é uma só na vida)
+      const taxa = ehMatricula && !volta ? taxaMatriculaAtual() : 0;
       // 3x e 4x só no fixo — recusa antes de segurar vaga e emitir cobrança
       if (ehMatricula) {
         const erroEscala = erroEscalaSoAte2x(freqEscolhida, b.mensalistaTipo === "fixo" ? "fixo" : "escala");
@@ -2482,7 +2505,7 @@ app.post(
       const valorBooking = pagamentoVoucher && i === 0
         ? pagamentoVoucher.total
         : ehMatricula
-        ? valorPrimeiroPagamento(freqEscolhida)
+        ? (volta ? valorDoPlano(freqEscolhida) : valorPrimeiroPagamento(freqEscolhida))
         : isAvulso
         ? (Number(b.value) || Number(SETTINGS.valorAvulsa) || 40)
         : (Number(b.value) || 0);
@@ -2516,7 +2539,8 @@ app.post(
          depois de pagar — e volta a ser "aluna nova" (firstClass), que a
          expiração da tentativa anterior tinha desligado. */
       if (!client) client = await ensureClient(b.clientName, b.phone, unit, [], b.cpf, b.email, b.firstClass, { birthday: b.birthday });
-      else if (entradaPublica) client = await completarFicha(client, { cpf: b.cpf, email: b.email, birthday: b.birthday, firstClass: b.firstClass });
+      // a ex-aluna não é "aluna nova": a ficha só completa o que faltava
+      else if (entradaPublica) client = await completarFicha(client, { cpf: b.cpf, email: b.email, birthday: b.birthday, firstClass: b.firstClass && !volta });
       if (usoVoucher && i === 0) {
         await prisma.voucherUso.update({ where: { id: usoVoucher.id }, data: { bookingId: booking.id, clientId: client?.id || null } });
       }
@@ -2545,12 +2569,17 @@ app.post(
         const tipoEntrada = b.mensalistaTipo === "fixo" ? "fixo" : "escala";
         await prisma.client.update({
           where: { id: client.id },
-          data: {
-            status: "lead",
-            matriculaStatus: "pendente",
-            trialDate: slot.date,
-            ...(freq ? { weeklyFreq: freq, mensalistaTipo: tipoEntrada } : {}),
-          },
+          /* Ex-aluna voltando: continua ex-aluna até o Pix cair, e o plano
+             escolhido fica em voltaFreq/voltaTipo (ver volta.js). Plano,
+             1ª aula e matrícula antigos não se mexem. */
+          data: volta
+            ? intencaoDaVolta(client, { freq, tipo: tipoEntrada, agora: inicioDaVolta })
+            : {
+                status: "lead",
+                matriculaStatus: "pendente",
+                trialDate: slot.date,
+                ...(freq ? { weeklyFreq: freq, mensalistaTipo: tipoEntrada } : {}),
+              },
         });
 
         /* Demais horários da semana (2x a 4x): `extraSlotIds`, ou o campo antigo
@@ -2577,7 +2606,10 @@ app.post(
 
     /* Anúncios: a 1ª aula marcada pelo site é o "Lead" da campanha. O mesmo
        event_id sai do navegador (Pixel) em FirstClassBooking.jsx. */
-    if (!painel && b.firstClass && criadas[0]) {
+    /* A volta da ex-aluna não é lead de anúncio nem entra no funil (ver
+       volta.js): só o contexto fica guardado, para o Purchase do pagamento. */
+    if (!painel && b.firstClass && criadas[0] && volta) guardarContexto(criadas[0].id, contextoDoNavegador(req));
+    if (!painel && b.firstClass && criadas[0] && !volta) {
       const ctx = contextoDoNavegador(req);
       guardarContexto(criadas[0].id, ctx);
       enviarEventoMeta({
@@ -2595,7 +2627,8 @@ app.post(
     // compatibilidade: sem replicação, devolve a marcação criada (como antes)
     if (!replicando) {
       if (usoVoucher && pagamentoVoucher?.total === 0) return res.json({ ...criadas[0], pago: true, matricula: matriculaGratis });
-      return res.json(criadas[0]);
+      // `volta`: a tela tira a taxa da conta (a ex-aluna pode ter chegado pelo site comum)
+      return res.json(volta ? { ...criadas[0], volta: true } : criadas[0]);
     }
     res.json({ created: criadas, pulos, feriados: feriadosPulados });
   })
@@ -2722,7 +2755,13 @@ async function registrarMatriculaPaga(booking) {
      atendimento, que abriu a reserva pelo tablet ou pelo painel sem deixar de
      ser "ativa" (abrirReservaDeMatricula): ainda não é mensalista nem pagou. */
   const semMatricula = c.matriculaStatus === "nao_aplica" && c.plan !== "mensalista";
-  if (c.matriculaStatus !== "pendente" && c.status !== "lead" && !semMatricula) return null;
+  /* Ex-aluna voltando pelo autoatendimento (volta.js): o Pix DESTA volta
+     reativa a ficha. Reserva de matrícula antiga dela não reativa ninguém. */
+  const criadaEm = booking.createdAt || (booking.id
+    ? (await prisma.booking.findUnique({ where: { id: booking.id }, select: { createdAt: true } }))?.createdAt
+    : null);
+  const volta = ehPagamentoDaVolta(c, { createdAt: criadaEm });
+  if (!volta && c.matriculaStatus !== "pendente" && c.status !== "lead" && !semMatricula) return null;
   const pagoEm = booking.paymentDate || todayISO();
 
   // Se houver uma 2ª reserva de matrícula (ex.: plano 2x por semana) aguardando hold, confirma-a também:
@@ -2749,8 +2788,9 @@ async function registrarMatriculaPaga(booking) {
 
   const atualizado = await prisma.client.update({
     where: { id: c.id },
-    data: { matriculaStatus: "paga", matriculaAt: pagoEm, status: "ativo" },
+    data: volta ? fichaDaVoltaPaga(c, pagoEm) : { matriculaStatus: "paga", matriculaAt: pagoEm, status: "ativo" },
   });
+  if (volta) console.log(`[volta] ${c.name} (ficha ${c.id}) voltou pelo autoatendimento — Pix pago em ${pagoEm}, plano ${atualizado.weeklyFreq}x (${atualizado.mensalistaTipo}).`);
   /* Código de promoção usado nesta matrícula: confirma o uso e grava o preço da
      campanha nos meses SEGUINTES — antes de converterEmMensalista, que gera a
      próxima mensalidade logo abaixo e já precisa nascer com o desconto. Falha
@@ -2790,6 +2830,8 @@ async function registrarMatriculaPaga(booking) {
         // (sem ela, o "gerar mês" do painel cobraria este mês de novo)
         registrarZerada: !!usoVoucher,
       },
+      // ex-aluna: o plano antigo dela não conta como "já é mensalista"
+      retorno: volta,
     });
     console.log(`[matricula] ${atualizado.name} matriculada no plano ${atualizado.weeklyFreq}x (${atualizado.mensalistaTipo}). Aulas criadas na grade: ${r?.grade?.total || 0}.`);
     /* Plano de N aulas com menos de N horários na grade (ela tocou em "definir
@@ -2806,11 +2848,22 @@ async function registrarMatriculaPaga(booking) {
       });
       console.log(`[matricula] ${atualizado.name}: ${aviso}`);
     }
+    // A Inêz fica sabendo pela ficha que a ex-aluna voltou sozinha.
+    if (volta) {
+      await anotarNaFicha(atualizado.id,
+        `💚 ${fmtDiaBR(pagoEm)}: voltou às aulas pelo autoatendimento — plano ${atualizado.weeklyFreq}x ` +
+        `(${atualizado.mensalistaTipo}), 1ª mensalidade de ${moedaBR(mensalidadeDaReserva(booking))} paga por Pix, sem taxa de matrícula.`);
+    }
     return r;
   } catch (e) {
     // A mensalidade já está paga e registrada; se a matrícula falhar (Sicredi fora
     // do ar, por exemplo), a Inêz conclui pelo painel em vez de a aluna perder o pago.
     console.warn(`[matricula] ${atualizado.name}: 1ª mensalidade paga mas a matrícula falhou — ${e.message}`);
+    if (volta) {
+      await anotarNaFicha(atualizado.id,
+        `⚠️ ${fmtDiaBR(pagoEm)}: voltou às aulas pelo autoatendimento e pagou a 1ª mensalidade por Pix, mas o plano não foi montado ` +
+        `(${e.message}). Concluir pelo painel.`).catch(() => {});
+    }
     return null;
   }
 }
@@ -2956,6 +3009,8 @@ async function avisarMatriculaConfirmada(booking) {
     const client = await prisma.client.findFirst({ where: { name: booking.clientName } });
     const portalUrl = client?.cpf ? `${WA_PORTAL_URL}?cpf=${client.cpf}` : WA_PORTAL_URL;
     const quando = fmtSlotBR({ date: booking.date, time: booking.time });
+    // ex-aluna que acabou de voltar (registrarMatriculaPaga grava voltaAt antes daqui)
+    const voltou = isMatricula && !!client?.voltaAt && client.voltaAt === (booking.paymentDate || todayISO());
     /* Plano 2x a 4x: a matrícula tem mais de um horário na semana, e a
        confirmação cita todos. Roda depois de registrarMatriculaPaga, que já
        confirmou os demais horários (marcados como aula do plano). Na 1ª semana
@@ -2994,6 +3049,7 @@ async function avisarMatriculaConfirmada(booking) {
         isAvulso,
         // código de promoção zerou o pagamento: não houve Pix a receber
         gratis: Number(booking.value) === 0 && !!(await usoDeVoucherDaReserva(booking.id)),
+        volta: voltou,
       }), { kind: "matricula" });
     } else {
       const nome = isAvulso ? "pagamento_aula_avulsa" : "matricula_confirmada";
@@ -3011,8 +3067,8 @@ async function avisarMatriculaConfirmada(booking) {
        toque — qualquer mensagem depois dele empurra o código para cima.
 
        Vale para a avulsa também: ela também tem uma primeira aula para a qual
-       precisa levar material. */
-    await enviarMaterialPrimeiraAula(booking.phone, booking.unit);
+       precisa levar material. A ex-aluna que volta já conhece o material. */
+    if (!voltou) await enviarMaterialPrimeiraAula(booking.phone, booking.unit);
   } catch (e) {
     console.warn(`[wa] confirmação da matrícula/aula de ${booking.clientName} não saiu: ${e.message}`);
   }
@@ -4654,7 +4710,7 @@ app.get("/api/relatorios/vendas", wrap(async (req, res) => {
   const dia = (v) => String(v || "").slice(0, 10);
 
   const [clients, reservas, faturas, passes] = await Promise.all([
-    prisma.client.findMany({ select: { id: true, name: true, phone: true, unit: true, plan: true, matriculaStatus: true, matriculaAt: true, matriculaPainelAt: true, trialDate: true, weeklyFreq: true } }),
+    prisma.client.findMany({ select: { id: true, name: true, phone: true, unit: true, plan: true, matriculaStatus: true, matriculaAt: true, matriculaPainelAt: true, trialDate: true, weeklyFreq: true, voltaAt: true } }),
     prisma.booking.findMany({
       where: { paid: true, value: { gt: 0 }, paymentMethod: { notIn: [PGTO_PLANO, PGTO_REPOSICAO, PGTO_EXTRA] } },
       select: { id: true, clientName: true, phone: true, unit: true, value: true, taxaMatricula: true, paymentMethod: true, paymentDate: true, txid: true, date: true },
@@ -4700,7 +4756,11 @@ app.get("/api/relatorios/vendas", wrap(async (req, res) => {
     if (ehPagamentoDeMatricula(b.paymentMethod)) {
       const taxa = Number(b.taxaMatricula) || 0;
       if (c?.matriculaStatus === "devolvida") devolvidas++;
-      else itens.push({ ...base, tipo: "matricula", valor: mensalidadeDaReserva(b), detalhe: plano(c) });
+      else itens.push({
+        ...base, tipo: "matricula", valor: mensalidadeDaReserva(b),
+        // a ex-aluna que voltou sozinha (volta.js): conta como matrícula, dita como volta
+        detalhe: [plano(c), c?.voltaAt && c.voltaAt === pagoEm ? "volta de ex-aluna" : ""].filter(Boolean).join(" · "),
+      });
       if (taxa > 0) itens.push({ ...base, tipo: "taxa", valor: taxa, detalhe: "" });
     } else {
       itens.push({ ...base, tipo: "avulsa", valor: Number(b.value) || 0, detalhe: b.paymentMethod || "" });
@@ -5687,8 +5747,10 @@ async function criarGradeInicial12Meses(client, slotsBase) {
 // `novata` = aluna nova entrando pelo painel (atendimento) ou pelo portal da
 // sala, sem reserva de matrícula: grava matriculaPainelAt, que é o que a faz
 // contar como matrícula no relatório de Vendas.
-async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, billingDay, mensalistaTipo, mensalidadePaga, exigirGrade = false, monthlyValue, novata = false }) {
-  const jaMensalista = client.plan === "mensalista" && !!client.weeklyFreq;
+// `retorno` = ex-aluna voltando pelo autoatendimento (volta.js): a ficha ainda
+// diz "mensalista" do plano antigo, mas o plano que vale é o da volta.
+async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, billingDay, mensalistaTipo, mensalidadePaga, exigirGrade = false, monthlyValue, novata = false, retorno = false }) {
+  const jaMensalista = !retorno && client.plan === "mensalista" && !!client.weeklyFreq;
   const freq = freqDoPlano(jaMensalista ? client.weeklyFreq : weeklyFreq);
   const tipo = mensalistaTipo === "escala" ? "escala" : "fixo";
   const tipoEfetivo = jaMensalista ? (client.mensalistaTipo === "escala" ? "escala" : "fixo") : tipo;
@@ -5796,7 +5858,19 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
     const jaExiste = await prisma.invoice.findFirst({
       where: { clientId: atualizado.id, competencia: compAtualStr },
     });
-    mensalidadeDoMes = jaExiste || await prisma.invoice.create({
+    /* Ex-aluna que volta no mesmo mês em que foi inativada: a mensalidade do
+       mês foi cancelada na inativação (encerrarAluna). É ELA que o Pix da volta
+       paga — deixá-la cancelada sumiria com o dinheiro do Financeiro. */
+    if (retorno && jaExiste?.status === "cancelado") {
+      mensalidadeDoMes = await prisma.invoice.update({
+        where: { id: jaExiste.id },
+        data: {
+          amountCents: Math.round(Number(mensalidadePaga.valor) * 100),
+          dueDate: mensalidadePaga.pagoEm, status: "pago", paidAt: mensalidadePaga.pagoEm,
+          pixCode: null, pixExpiresOn: null, encargosAte: null, baixaManual: false, semPix: false,
+        },
+      });
+    } else mensalidadeDoMes = jaExiste || await prisma.invoice.create({
       data: {
         clientId: atualizado.id,
         competencia: compAtualStr,
@@ -5817,6 +5891,28 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
      Matriculou em 19/08 → a próxima vence 19/09, e daí todo dia 19. */
   let invoice = null;
   const proximaComp = somarComp(competenciaAtual(), 1);
+  /* Ex-aluna: mensalidade de mês FUTURO que já tinha nascido quando ela saiu
+     foi cancelada na inativação. gerarMensalidade reaproveita a que existe —
+     cancelada, ela nunca mais seria cobrada. Reabre no plano e no dia novos,
+     sem QR (o antigo foi fechado no banco; o portal emite uma via nova). As de
+     meses passados ficam canceladas: a volta não cobra o que ficou para trás. */
+  if (retorno) {
+    const futuras = await prisma.invoice.findMany({
+      where: { clientId: atualizado.id, status: "cancelado", competencia: { gt: competenciaAtual() } },
+    });
+    for (const inv of futuras) {
+      const valor = await valorDaCompetencia(atualizado, inv.competencia);
+      await prisma.invoice.update({
+        where: { id: inv.id },
+        data: {
+          status: "pendente", amountCents: Math.round(Number(valor || 0) * 100), dueDate: vencimentoDe(atualizado, inv.competencia),
+          pixCode: null, pixExpiresOn: null, encargosAte: null, baixaManual: false, semPix: false,
+          avisoAVencerAt: null, avisoAtrasoAt: null, avisoAtraso2At: null,
+        },
+      });
+      console.log(`[volta] ${atualizado.name}: mensalidade ${inv.competencia} reaberta (tinha sido cancelada na inativação).`);
+    }
+  }
   try { invoice = await gerarMensalidade(atualizado.id, proximaComp); }
   catch (e) { console.warn(`[conversao] ${atualizado.name}: ${e.message}`); }
 
@@ -7063,7 +7159,8 @@ async function upsertClienteWa({ nome, phone, cpf, email, birthday, unit }) {
     if (email && !existente.email) patch.email = email;
     if (birthday && !existente.birthday) patch.birthday = birthday;
     if (unit && !existente.unit) patch.unit = unit;
-    if (!existente.origem) patch.origem = "whatsapp";
+    // a ex-aluna que volta pelo robô não teve o cadastro feito aqui (volta.js)
+    if (!existente.origem && !ehExAluna(existente)) patch.origem = "whatsapp";
     if (!Object.keys(patch).length) return existente;
     return prisma.client.update({ where: { id: existente.id }, data: patch });
   }
@@ -7129,6 +7226,11 @@ async function createWaBooking(client, slot, { weeklyFreq, extraSlotIds = [], pa
   const isAvulso = weeklyFreq === "avulso";
   // A aluna do WhatsApp entra como FIXO, então os quatro planos valem aqui
   const freq = freqDoPlano(weeklyFreq);
+  /* Ex-aluna voltando (volta.js): só a mensalidade, sem taxa, e a ficha
+     continua ex-aluna até o Pix cair. A intenção é conferida ANTES da reserva
+     (plano 1x a 4x), e o começo da volta é marcado antes de ela nascer. */
+  const volta = ehExAluna(client) && !isAvulso;
+  const intencao = volta ? intencaoDaVolta(client, { freq, tipo: "fixo", agora: new Date() }) : null;
   const booking = await prisma.booking.create({
     data: {
       clientName: client.name, phone: client.phone || "", unit: slot.unit,
@@ -7136,8 +7238,8 @@ async function createWaBooking(client, slot, { weeklyFreq, extraSlotIds = [], pa
       status: "aguardando",
       // Se avulso, cobra apenas o valor da aula avulsa sem taxa de matrícula
       value: pagamento ? pagamento.total
-        : isAvulso ? (Number(SETTINGS.valorAvulsa) || 40) : valorPrimeiroPagamento(freq),
-      taxaMatricula: isAvulso ? null : ((pagamento ? pagamento.taxa : taxaMatriculaAtual()) || null),
+        : isAvulso ? (Number(SETTINGS.valorAvulsa) || 40) : volta ? valorDoPlano(freq) : valorPrimeiroPagamento(freq),
+      taxaMatricula: isAvulso || volta ? null : ((pagamento ? pagamento.taxa : taxaMatriculaAtual()) || null),
       paymentMethod: isAvulso ? "Aula Avulsa" : MARCA_MATRICULA,
       holdUntil: new Date(Date.now() + HOLD_MIN * 60_000),
     },
@@ -7149,7 +7251,7 @@ async function createWaBooking(client, slot, { weeklyFreq, extraSlotIds = [], pa
 
   const atualizado = await prisma.client.update({
     where: { id: client.id },
-    data: isAvulso ? {
+    data: intencao || (isAvulso ? {
       status: "lead",
       matriculaStatus: "nao_aplica",
       trialDate: slot.date,
@@ -7163,7 +7265,7 @@ async function createWaBooking(client, slot, { weeklyFreq, extraSlotIds = [], pa
       weeklyFreq: freq,
       mensalistaTipo: "fixo",
       unit: client.unit || slot.unit,
-    },
+    }),
   });
   return { booking, extras, extraSlots, client: atualizado };
 }
@@ -7190,7 +7292,8 @@ async function expirarReservaWa(booking) {
   });
   // Se a reserva expirou sem pagamento concluído, garante status como lead
   const cli = await prisma.client.findFirst({ where: { name: booking.clientName } });
-  if (cli && cli.matriculaStatus !== "paga" && cli.matriculaStatus !== "convertida" && cli.plan !== "mensalista") {
+  // A ex-aluna que tentou voltar e não pagou continua ex-aluna (volta.js), não vira lead.
+  if (cli && !ehExAluna(cli) && cli.matriculaStatus !== "paga" && cli.matriculaStatus !== "convertida" && cli.plan !== "mensalista") {
     await prisma.client.update({
       where: { id: cli.id },
       data: { status: "lead", firstClass: false },
@@ -7440,6 +7543,24 @@ async function handleWaMessage(msg) {
     ]);
   };
 
+  /* Ex-aluna (todas as fichas deste telefone inativadas): em vez de mandar
+     para o portal, que não abre para ela, oferece a volta aqui mesmo
+     (volta.js). "Quero voltar" segue o caminho da matrícula — unidade,
+     horário, CPF — e o CPF é que a reconhece. */
+  const telaExAluna = async (alunas) => {
+    const nomes = alunas.map((c) => c.name).join(" / ").slice(0, 200);
+    await setConv({ ...CONVERSA_ZERADA, step: "exaluna", clientId: alunas[0].id });
+    await registrarRecebida("aluna", { clientId: alunas[0].id, clientName: nomes });
+    return waButtons(msg.from, textoExAluna({ nome: alunas[0].name, midia }), [
+      { id: "volta", title: "💚 Quero voltar" },
+      { id: "humano", title: "Falar com atendente" },
+    ]);
+  };
+  const telaVolta = async () => {
+    await setConv({ ...CONVERSA_ZERADA, step: "unit" });
+    return sendUnitMenu(msg.from, "Que bom! 💚 Vamos lá: escolha a unidade em que você quer voltar a fazer aula 👇");
+  };
+
   const telaUnidade = async (prefix = "") => {
     /* Recomeçar limpa tudo o que a conversa carregava — inclusive o plano, o CPF
        e a reserva anterior. A reserva em si continua segurada até o prazo dela;
@@ -7585,6 +7706,17 @@ async function handleWaMessage(msg) {
     await setConv({ step: "plano", extraSlots: "[]", voucher: null, ...(nome ? { pendingName: padronizarNome(nome) } : {}) });
     conv = { ...conv, voucher: null };
     const primeiro = String(nome || "").split(" ")[0];
+    /* Ex-aluna voltando (volta.js): só os planos, sem taxa de matrícula. */
+    if (ehExAluna(await fichaDaConversa())) {
+      return waList(msg.from,
+        textoPlanoVolta({ nome, prefixo: prefix, planos: FREQS_WA.map((f) => ({ freq: f, valor: moedaBR(valorDoPlano(f)) })) }),
+        "Escolher plano",
+        FREQS_WA.map((f) => ({
+          id: `plano:${f}`,
+          title: `${f}x por semana`,
+          description: `${moedaBR(valorDoPlano(f))}/mês · ${f * 4} aulas no mês`,
+        })));
+    }
     const taxa = taxaMatriculaAtual();
     const vAvulsa = Number(SETTINGS.valorAvulsa) || 40;
     const linhaPlano = (f) => taxa
@@ -7650,13 +7782,16 @@ async function handleWaMessage(msg) {
     /* Código de promoção: só pergunta quando há campanha aberta que sirva para
        ela (unidade, plano, prazo, vaga). Sem nenhuma, nada muda na conversa. */
     const isAvulsoAqui = freq === "avulso";
+    // ex-aluna voltando (volta.js): só plano, e sem código de promoção
+    const voltaAqui = ehExAluna(await fichaDaConversa());
+    if (voltaAqui && isAvulsoAqui) return telaPlano(nome, "Para voltar às aulas, escolha um dos planos 💚\n\n");
     const regraCupom = { contexto: isAvulsoAqui ? "avulsa" : "matricula", freq: isAvulsoAqui ? null : freq, unidade: slot.unit };
-    if (conv.voucher == null && (await campanhaAbertaParaNova(regraCupom))) {
+    if (!voltaAqui && conv.voucher == null && (await campanhaAbertaParaNova(regraCupom))) {
       // avulso fica guardado como 0 enquanto ela responde (null já quer dizer "sem plano")
       await setConv({ step: "cupom", weeklyFreq: isAvulsoAqui ? 0 : freq, extraSlots: JSON.stringify(extraSlotIds) });
       return telaCupom();
     }
-    const codigoCupom = conv.voucher && conv.voucher !== "-" && !conv.voucher.startsWith("?") ? conv.voucher : null;
+    const codigoCupom = !voltaAqui && conv.voucher && conv.voucher !== "-" && !conv.voucher.startsWith("?") ? conv.voucher : null;
 
     // A ficha entra ANTES da reserva: é o CPF dela que vai no Pix.
     const client = await upsertClienteWa({
@@ -7839,15 +7974,20 @@ Toque abaixo para escolher 👇`,
      "escolha a unidade". Agora, no começo da conversa (ou depois de ela ter
      terminado), o telefone é procurado nas fichas. Os botões do lembrete
      (faltarei/presença), o Pix e "Matrícula nova" seguem o caminho de sempre. */
-  const ridDoFluxo = rid === "new" || rid === "duvida:pix" || rid === "retomar" ||
+  const ridDoFluxo = rid === "new" || rid === "volta" || rid === "duvida:pix" || rid === "retomar" ||
     rid.startsWith("faltarei:") || rid.startsWith("presenca:");
-  if (!ridDoFluxo && (primeiroContato || expirou || ["start", "done", "aluna"].includes(conv.step))) {
+  if (!ridDoFluxo && (primeiroContato || expirou || ["start", "done", "aluna", "exaluna"].includes(conv.step))) {
     const alunas = await alunasPeloTelefone(phone);
     if (alunas.length) {
-      if (conv.step !== "aluna" || expirou) return telaAluna(alunas);
+      // só ex-alunas neste telefone (a ativa vem primeiro na lista): oferece a volta
+      const soExAlunas = alunas.every(ehExAluna);
+      const passoDela = soExAlunas ? "exaluna" : "aluna";
+      if (conv.step !== passoDela || expirou) return soExAlunas ? telaExAluna(alunas) : telaAluna(alunas);
       /* Continua escrevendo: registra tudo, mas não repete o texto a cada
          mensagem — só confirma de novo depois de 2h de silêncio, ou quando ela
          pede gente ou manda o que o robô não abre. */
+      // ex-aluna que escreveu "quero voltar" em vez de tocar no botão
+      if (soExAlunas && !midia && /\b(voltar|volta|retornar|retorno|rematr[ií]cul|matr[ií]cul)/.test(low)) return telaVolta();
       await registrarRecebida("aluna", { clientId: alunas[0].id, clientName: alunas.map((c) => c.name).join(" / ").slice(0, 200) });
       const pediuGente = /\b(atendente|humano|pessoa|alguem|alguém)\b/.test(low);
       if (midia) return waSend(msg.from, `Por aqui eu só consigo ler texto — não consigo abrir ${midia}. Se puder, escreva em uma mensagem. 💚`);
@@ -7962,6 +8102,7 @@ Toque abaixo para escolher 👇`,
     return telaBoasVindas();
 
   /* ----- navegação por botão: vale em qualquer passo ----- */
+  if (rid === "volta") return telaVolta();
   if (rid === "new" || ["menu", "agendar", "começar", "comecar", "início", "inicio"].includes(low))
     return telaUnidade();
   if (rid === "back:unit") return telaUnidade();
@@ -8040,8 +8181,9 @@ Toque abaixo para escolher 👇`,
 
     /* Lead que voltou (ver ehLead): segue para o plano como qualquer ficha sem
        matrícula. Só não abre reserva nova enquanto a anterior ainda está com o
-       Pix valendo — aí a conversa volta para ela, com o Pix à mão. */
-    if (ehLead(existente)) {
+       Pix valendo — aí a conversa volta para ela, com o Pix à mão. A ex-aluna
+       que volta (volta.js) passa pela mesma conferência. */
+    if (ehLead(existente) || ehExAluna(existente)) {
       const sobra = await sobrasDoLead(existente);
       if (sobra.viva) {
         await setConv({ step: "cobranca", bookingId: sobra.viva.id, slotId: null });
@@ -8069,8 +8211,8 @@ Toque abaixo para escolher 👇`,
         `Suas aulas você marca pelo *portal da aluna*, que já conhece o seu plano e o seu saldo de reposição:\n${WA_PORTAL_URL}\n\n` +
         `Se tiver qualquer dificuldade, me chama neste número:\n📞 ${WA_ATENDENTE}`);
     }
-    // Tem ficha mas ainda não se matriculou: só falta escolher o plano.
-    return telaPlano(existente.name, `Achei o seu cadastro, ${existente.name.split(" ")[0]}! 💚 `);
+    // Tem ficha mas ainda não se matriculou (ou é ex-aluna voltando): só falta escolher o plano.
+    return telaPlano(existente.name, ehExAluna(existente) ? "" : `Achei o seu cadastro, ${existente.name.split(" ")[0]}! 💚 `);
   }
 
   if (conv.step === "name") {
@@ -8141,6 +8283,9 @@ Toque abaixo para escolher 👇`,
   if (conv.step === "plano") {
     // aceita a linha da lista ("plano:3") ou o número digitado — ver waFluxo.js
     const escolha = planoEscolhido(rid, body);
+    // na volta da ex-aluna não há avulsa (volta.js)
+    if (escolha === "avulso" && ehExAluna(await fichaDaConversa()))
+      return telaPlano(conv.pendingName || "", "Para voltar às aulas, escolha um dos planos 💚\n\n");
     if (escolha === "avulso") return telaConfirmarAvulsa();
     if (!escolha) return telaPlano(conv.pendingName || "", "Não entendi 🤔. ");
     return seguirComPlano(escolha);
@@ -8148,6 +8293,8 @@ Toque abaixo para escolher 👇`,
 
   if (conv.step === "avulsaok") {
     const r = respostaAvulsaOk(rid, body);
+    if (r === "avulsa" && ehExAluna(await fichaDaConversa()))
+      return telaPlano(conv.pendingName || "", "Para voltar às aulas, escolha um dos planos 💚\n\n");
     if (r === "avulsa") return cadastrarECobrar("avulso");
     if (r === "planos") return telaPlano(conv.pendingName || "");
     // tocou num plano da lista anterior ou digitou o número ("1", "2x"): segue com ele
@@ -8323,6 +8470,8 @@ app.patch(
     if (mensalistaTipo !== undefined) data.mensalistaTipo = mensalistaTipo === "escala" ? "escala" : "fixo";
     // "cancelado" = rompeu com o curso; perde o direito a reposição
     if (status !== undefined) data.status = status === "cancelado" ? "cancelado" : "ativo";
+    // reativada pela ficha: a volta pelo autoatendimento pela metade é descartada (volta.js)
+    if (data.status === "ativo") Object.assign(data, SEM_VOLTA);
     if (monthlyValue !== undefined) data.monthlyValue = monthlyValue === "" || monthlyValue == null ? null : Number(monthlyValue);
     if (billingDay !== undefined) data.billingDay = billingDay === "" || billingDay == null ? null : Math.min(28, Math.max(1, parseInt(billingDay, 10) || 0)) || null;
 
@@ -8451,10 +8600,11 @@ async function reativarAlunaComManutencao(clientId) {
   const client = await prisma.client.findUnique({ where: { id: clientId } });
   if (!client) throw new Error("Aluna não encontrada");
 
-  // 1. Atualiza status de volta para ativo
+  // 1. Atualiza status de volta para ativo (e descarta a volta pelo
+  //    autoatendimento que estivesse pela metade — volta.js)
   const atualizada = await prisma.client.update({
     where: { id: clientId },
-    data: { status: "ativo" },
+    data: { status: "ativo", ...SEM_VOLTA },
   });
 
   // 2. Busca o backup de aulas salvas
@@ -9203,10 +9353,16 @@ app.get("/api/admin/users", wrap(async (_req, res) => {
 /* Só pode acessar o portal da aluna quem já é cadastrado e que já fez o pagamento. */
 function clientPodeAcessarPortal(client) {
   if (!client) return { ok: false, motivo: "Cadastro não encontrado." };
+  /* Ex-aluna: o portal não abre, mas a porta de volta está ali mesmo — a tela
+     mostra "Quero voltar às aulas" (volta.js). Antes ela só ouvia "fale com a
+     escola", e reativar era trabalho da Inêz. */
   if (client.status === "cancelado") {
     return {
       ok: false,
-      motivo: "Seu cadastro está inativo ou cancelado. Entre em contato com a escola pelo WhatsApp para reativar seu acesso. 💚",
+      exAluna: true,
+      motivo: "Que bom te ver de novo! 💚 A sua matrícula está encerrada, mas você pode voltar quando quiser: " +
+        "escolha a unidade, o horário e o plano, e o seu cadastro volta a ficar ativo assim que o Pix da 1ª mensalidade for confirmado. " +
+        "Na volta não há taxa de matrícula.",
     };
   }
   if (client.status === "lead" || client.matriculaStatus === "pendente") {
@@ -9259,9 +9415,21 @@ app.post("/api/auth/check", wrap(async (req, res) => {
     }
   }
 
+  /* Ex-aluna com a volta em curso: se o Pix dela já caiu e o aviso do banco
+     ainda não chegou, pergunta ao Sicredi antes de dizer que a ficha está
+     inativa. Só as reservas desta volta (createdAt depois de voltaDesde). */
+  if (ehExAluna(client) && client.voltaDesde) {
+    const daVolta = (await prisma.booking.findMany({
+      where: { clientName: client.name, status: "aguardando", paid: false, paymentMethod: MARCA_MATRICULA, txid: { not: null } },
+    })).filter((b) => ehPagamentoDaVolta(client, b));
+    for (const b of daVolta) await confirmarPagamentoPorTxid(b.txid).catch(() => false);
+    if (daVolta.length) client = (await prisma.client.findUnique({ where: { id: client.id } })) || client;
+  }
+
   const pode = clientPodeAcessarPortal(client);
   if (!pode.ok) {
     return res.status(403).json({
+      exAluna: !!pode.exAluna,
       error: pode.motivo,
       leadPendente: pode.leadPendente || false,
       exists: true,
@@ -9994,6 +10162,11 @@ const COLUNAS_ESPERADAS = [
   ["Booking", "taxaMatricula", "DOUBLE NULL"],
   // matrícula de aluna nova pelo painel/portal (08/10/2026)
   ["Client", "matriculaPainelAt", "VARCHAR(10) NULL"],
+  // volta da ex-aluna pelo autoatendimento (19/10/2026) — ver volta.js
+  ["Client", "voltaDesde", "DATETIME(3) NULL"],
+  ["Client", "voltaFreq", "INT NULL"],
+  ["Client", "voltaTipo", "VARCHAR(10) NULL"],
+  ["Client", "voltaAt", "VARCHAR(10) NULL"],
 ];
 
 /* Tabelas inteiras que o código novo espera. Mesmo espírito das colunas acima:

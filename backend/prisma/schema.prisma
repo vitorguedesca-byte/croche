@@ -53,6 +53,14 @@ model Client {
      matrícula no relatório de Vendas (Vitor, 08/10/2026). */
   matriculaPainelAt String? @db.VarChar(10)
   trialDate       String? @db.VarChar(10) // data da 1ª aula (nome herdado do fluxo antigo)
+  /* Volta da ex-aluna pelo autoatendimento (portal, site, robô) — ver volta.js.
+     Enquanto o Pix não cai ela continua "cancelado"; o plano escolhido fica
+     aqui como intenção, e voltaDesde marca a tentativa (é o que diz que o Pix
+     pago é desta volta, e não uma reserva antiga dela). */
+  voltaDesde DateTime?
+  voltaFreq  Int?
+  voltaTipo  String?  @db.VarChar(10) // fixo | escala
+  voltaAt    String?  @db.VarChar(10) // dia em que a última volta foi paga
   /* De onde veio a ficha. Interessa na tela: o cadastro feito pela conversa do
      WhatsApp é digitado pela própria aluna, sem ninguém conferindo do outro
      lado, então o painel mostra "Cadastro via WhatsApp" para a Inêz saber que

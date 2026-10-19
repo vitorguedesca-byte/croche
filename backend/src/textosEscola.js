@@ -58,7 +58,7 @@ Agradecemos pela compreensão e parceria. Essas regras nos ajudam a manter um am
    `repetem`: aluna de horário fixo — os horários valem toda semana. */
 /* `gratis`: o código de promoção zerou o pagamento — não houve Pix, então
    "recebemos o seu pagamento" seria mentira. */
-export const textoMatriculaConfirmada = ({ nome, unidade, quando, aulas = [], repetem = false, taxa, portalUrl, isAvulso, gratis = false }) => {
+export const textoMatriculaConfirmada = ({ nome, unidade, quando, aulas = [], repetem = false, taxa, portalUrl, isAvulso, gratis = false, volta = false }) => {
   const urlPortal = portalUrl || WA_PORTAL_URL;
   const primeiro = String(nome || "").split(" ")[0];
   const abertura = gratis
@@ -80,6 +80,27 @@ Sua vaga está garantida! 💚
 ${gratis ? "_Se não puder vir, avise por aqui para liberarmos a vaga para outra aluna._" : "_OBS: não devolveremos o valor da aula avulsa em caso de falta._"}
 
 Seja muito bem-vinda ao ateliê! Se você amar a aula e quiser continuar conosco como mensalista, converse com a professora ou nos avise por aqui! 🧶`;
+  }
+  /* Ex-aluna que voltou sozinha (volta.js): ela já conhece a escola e já tem
+     cadastro — o texto da aluna nova (criar PIN, devolução depois da 1ª aula,
+     taxa de matrícula) não vale para ela. As regras vão de novo: a volta é o
+     melhor momento para relembrar. */
+  if (volta) {
+    return `Que bom ter você de volta, ${primeiro}! 💚 Recebemos o seu pagamento e o seu cadastro está *ativo de novo*.
+
+*Confirmação de agendamento*
+📍 ${unidade}
+${linhaQuando}
+
+Sua vaga está garantida!
+
+📱 No *Portal da Aluna* você acompanha as suas aulas e pagamentos: ${urlPortal}
+Entre com o seu CPF e o seu PIN de 4 dígitos (se ainda não tiver um, você cria na hora).
+
+---
+Para relembrar as regras 👇
+
+${REGRAS_REPOSICAO}`;
   }
   return `${abertura || `Obrigada, ${primeiro}! 🙏 Recebemos o seu pagamento.`}
 
@@ -199,6 +220,34 @@ Ela ficou registrada para a Inêz e a equipe, que te respondem pelo WhatsApp da 
 
 📱 No *Portal da Aluna* você resolve na hora: marcar e remarcar aulas, avisar falta, ver a mensalidade e pegar o Pix:
 ${portalUrl || WA_PORTAL_URL}`;
+};
+
+/* EX-ALUNA (ficha inativada) escreve no robô (19/10/2026 — ver volta.js).
+   Antes ela recebia o texto de aluna, que manda para o portal — e o portal
+   recusava a ficha inativa. Agora ela pode voltar ali mesmo, com um botão.
+   A mensagem fica registrada para a equipe do mesmo jeito. */
+export const textoExAluna = ({ nome, midia }) => {
+  const primeiro = String(nome || "").split(" ")[0];
+  return `Oi${primeiro ? ", " + primeiro : ""}! 💚 Que bom te ver por aqui de novo.
+${midia ? `\nPor aqui eu só consigo ler texto — não consigo abrir ${midia}. Se puder, escreva em uma mensagem.\n` : ""}
+A sua matrícula está encerrada, mas você pode *voltar quando quiser* — e dá para fazer tudo por aqui mesmo: escolher a unidade, o horário e o plano.
+
+Assim que o Pix da 1ª mensalidade cair, o seu cadastro volta a ficar ativo, com o seu histórico. Na volta *não há taxa de matrícula*. 🧶
+
+Se a sua mensagem era outro assunto, ela ficou registrada para a equipe, que responde pelo WhatsApp da escola (📞 ${WA_ATENDENTE}) em horário comercial.`;
+};
+
+/* A tela do plano na volta da ex-aluna: só os planos (a avulsa é a porta de
+   quem está conhecendo a escola) e sem taxa — o 1º Pix é só a mensalidade.
+   `planos`: [{ freq, valor }] com o valor já formatado. */
+export const textoPlanoVolta = ({ nome, planos, prefixo = "" }) => {
+  const primeiro = String(nome || "").split(" ")[0];
+  const emoji = { 1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣" };
+  return `${prefixo}${prefixo ? "" : `Que bom ter você de volta${primeiro ? ", " + primeiro : ""}! 💚 `}Escolha o seu plano:
+
+${planos.map((p) => `${emoji[p.freq] || "•"} *${p.freq}x por semana* — ${p.valor} por mês`).join("\n")}
+
+O 1º Pix é só a mensalidade deste mês — *sem taxa de matrícula*. A próxima vence no mês que vem, no mesmo dia, e os seus horários ficam reservados toda semana.`;
 };
 
 /* Lead mandou áudio/foto/figurinha. */

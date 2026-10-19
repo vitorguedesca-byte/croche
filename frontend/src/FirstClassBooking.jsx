@@ -94,6 +94,7 @@ function EscolhaDePlano({
   valorDoPlano,
   taxa = 0,
   duracaoMin = 120,
+  semAvulsa = false, // volta da ex-aluna: só os planos
 }) {
   /* "Só a avulsa mesmo?" (Inêz, 08/10/2026): tocar em AVULSO abre a conta do
      preço por aula na escala (1x e 2x) antes de trocar. Mesma mensagem do
@@ -138,14 +139,14 @@ function EscolhaDePlano({
       <label className="pt-label">Como você quer fazer as suas aulas?</label>
       
       {/* 1. AVULSO */}
-      <Opcao
+      {!semAvulsa && <Opcao
         on={modalidade === "avulso"}
         onClick={() => { if (modalidade !== "avulso") setPerguntaAvulsa(true); }}
         titulo="🧺 AVULSO"
         linhas="Aula avulsa única, sem mensalidade nem taxa de matrícula."
         preco={money(valorAvulsa)}
         alerta="OBS: não devolveremos o valor da aula avulsa em caso de falta."
-      />
+      />}
 
       {/* 2. MENSAIS — 1x a 4x (3x e 4x desde 23/09/2026, só no fixo) */}
       {PLANOS_MENSALISTA.map((p) => {
@@ -319,9 +320,20 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const [slot, setSlot] = useState(null); // horário da primeira aula
   const [extras, setExtras] = useState([]); // demais horários da semana, no plano 2x a 4x
 
+  /* VOLTA DA EX-ALUNA (backend/src/volta.js): o portal manda para cá com
+     ?volta=1 e o CPF guardado. Na volta é só plano (sem avulsa), sem taxa de
+     matrícula e sem código de promoção; a ficha dela volta a ficar ativa quando
+     o Pix cai. Quem chega pelo /agendar comum também é reconhecida — pelo CPF,
+     no servidor, que devolve `volta` na reserva. */
+  const [volta, setVolta] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("volta") === "1"; } catch { return false; }
+  });
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const [cpf, setCpf] = useState("");
+  const [cpf, setCpf] = useState(() => {
+    if (!volta) return "";
+    try { return formatarCPF(localStorage.getItem("fqc_portal_cpf") || ""); } catch { return ""; }
+  });
   const [email, setEmail] = useState("");
   const [birthday, setBirthday] = useState("");
   /* Modalidade escolhida: "avulso" | "mensal1" … "mensal4".
@@ -344,7 +356,8 @@ export default function FirstClassBooking({ onBack, fromSite }) {
     } catch { return novo(); }
   });
   const marcarPasso = (passo, u) => {
-    if (!fromSite) return;
+    // a volta da ex-aluna não é visita de quem está conhecendo a escola
+    if (!fromSite || volta) return;
     api.agendar.passo({ sessao, passo, unit: u || undefined, utm: window.fqcVisita?.() || undefined }).catch(() => {});
   };
   useEffect(() => { marcarPasso("inicio"); }, []);
@@ -372,7 +385,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const valorPlano = (f) => valorPlanoMeta(meta, f);
   const valorAvulsa = meta.valorAvulsa ?? 40;
   const mensalidade = isAvulso ? valorAvulsa : valorPlano(freq);
-  const taxa = isAvulso ? 0 : Math.max(0, Number(meta.taxaMatricula) || 0);
+  const taxa = isAvulso || volta ? 0 : Math.max(0, Number(meta.taxaMatricula) || 0);
   const pv = voucher?.pagamento || null; // 1º pagamento com o código, pelo servidor
   const mensalidadeHoje = pv && !isAvulso ? pv.mensalidade : mensalidade;
   const taxaHoje = pv && !isAvulso ? pv.taxa : taxa;
@@ -414,7 +427,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
 
   // Se o código veio pela URL, valida assim que entrar no passo de pagamento
   useEffect(() => {
-    if (codigo && !voucher && !booking && step === "pay") {
+    if (codigo && !voucher && !booking && step === "pay" && !volta) {
       validarCodigo(codigo, modalidade, true);
     }
   }, [step, codigo]);
@@ -433,7 +446,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
   const continuarDados = () => {
     if (name.trim().length < 2) return flash("Escreva o seu nome. 💚");
     if (phone.replace(/\D/g, "").length < 10) return flash("Escreva o seu WhatsApp com DDD. 💚");
-    if (fromSite) {
+    if (fromSite && !volta) {
       api.agendar.contato({
         sessao, nome: name.trim(), phone: phone.trim(), slotId: slot?.id, unit: slot?.unit,
         utm: window.fqcVisita?.() || undefined,
@@ -472,13 +485,15 @@ export default function FirstClassBooking({ onBack, fromSite }) {
         value: isAvulso ? valorAvulsa : undefined,
         weeklyFreq: isAvulso ? null : freq,
         mensalistaTipo: isAvulso ? null : tipo,
-        voucher: voucher?.codigo || undefined,
+        voucher: (!volta && voucher?.codigo) || undefined,
         // de onde ela veio (link do anúncio, Instagram…) — vira a origem da lead no funil (public/visita.js)
         utm: window.fqcVisita?.() || undefined,
         // a visita deste passo a passo: liga a reserva à lead do "Seus dados", mesmo com outro WhatsApp
         sessao: fromSite ? sessao : undefined,
       });
-      if (!booking) window.metaTrack?.("Lead", { content_name: isAvulso ? "aula avulsa" : "matricula", value: total, currency: "BRL" }, `lead-${b.id}`);
+      // ex-aluna que chegou pelo /agendar comum: o servidor cobrou sem taxa, a tela acompanha
+      if (b.volta && !volta) { setVolta(true); setVoucher(null); }
+      if (!booking && !b.volta && !volta) window.metaTrack?.("Lead", { content_name: isAvulso ? "aula avulsa" : "matricula", value: total, currency: "BRL" }, `lead-${b.id}`);
       if (!booking) marcarPasso("pix", slot.unit);
       setBooking(b);
       /* O código zerou o pagamento: o servidor já confirmou a vaga (não existe
@@ -565,7 +580,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
         {toast && <div className="pt-toast">{toast}</div>}
         <div className="pt-fc-head">
           <img src="/logo-1.PNG" className="pt-logo" alt="Fios que Curam" />
-          <h1>{isAvulso ? "Sua aula avulsa" : "Sua matrícula"}</h1>
+          <h1>{volta ? "Sua volta às aulas" : isAvulso ? "Sua aula avulsa" : "Sua matrícula"}</h1>
           {step !== "done" && (
             <div className="pt-steps">
               <span className={`pt-step ${stepNum >= 1 ? "on" : ""}`}>1 · Unidade</span>
@@ -636,7 +651,21 @@ export default function FirstClassBooking({ onBack, fromSite }) {
             </div>
 
             <div className="pt-matricula" style={{ lineHeight: 1.55 }}>
-              {!isAvulso ? (<>
+              {volta ? (<>
+                <p style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--green-deep)" }}>
+                  Que bom ter você de volta{name ? `, ${name.split(" ")[0]}` : ""}! 💚 Agora escolha o seu plano:
+                </p>
+                <p style={{ margin: ".35rem 0" }}>
+                  {PLANOS_MENSALISTA.map((p) => (
+                    <span key={p.freq}>
+                      {["", "1️⃣", "2️⃣", "3️⃣", "4️⃣"][p.freq]} <b>{p.freq}x por semana</b> — {money(valorPlano(p.freq))}/mês<br />
+                    </span>
+                  ))}
+                </p>
+                <p style={{ margin: ".35rem 0" }}>
+                  Na volta <b>não há taxa de matrícula</b>: o Pix é só a mensalidade deste mês. O seu cadastro volta a ficar ativo assim que o pagamento for confirmado.
+                </p>
+              </>) : !isAvulso ? (<>
                 <p style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--green-deep)" }}>
                   Prontinho{name ? `, ${name.split(" ")[0]}` : ""}! 💚 Agora escolha a sua mensalidade:
                 </p>
@@ -699,6 +728,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 // com código que isenta a matrícula, os textos do plano já saem sem a taxa
                 taxa={taxaHoje}
                 duracaoMin={meta.duracaoAulaMin}
+                semAvulsa={volta}
               />
 
               {!isAvulso && freq > 1 && (
@@ -712,8 +742,9 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 />
               )}
 
-              {/* Cupom ou código de desconto: sempre visível para a aluna encontrar facilmente */}
-              <div style={{ marginTop: "1.2rem" }}>
+              {/* Cupom ou código de desconto: sempre visível para a aluna encontrar facilmente
+                  (menos na volta da ex-aluna: os códigos são da primeira matrícula) */}
+              {!volta && <div style={{ marginTop: "1.2rem" }}>
                 {voucher ? (
                   <div style={{ padding: ".85rem 1rem", borderRadius: 12, border: "2px solid var(--green-deep)", background: "rgba(28,94,51,.06)" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: ".5rem", alignItems: "baseline" }}>
@@ -758,7 +789,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                     {erroVoucher && <div className="pt-err" style={{ marginTop: ".5rem" }}>{erroVoucher}</div>}
                   </div>
                 )}
-              </div>
+              </div>}
 
               {/* O resumo do que vai ser cobrado fica ANTES do botão */}
               {!isAvulso && (taxa > 0 || pv) ? (
@@ -815,7 +846,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
               <a
                 className="pt-btn pt-btn-wa"
                 style={{ marginTop: pix.code ? ".6rem" : undefined }}
-                href={waLink("31984966403", `Olá! Fiz o Pix da ${isAvulso ? "minha aula avulsa" : "matrícula da minha primeira aula"} de ${fmtDate(slot?.date || "")} às ${slot?.time || ""} (${slot?.unit || ""}), no valor de ${money(total)}. Segue o comprovante 👇`)}
+                href={waLink("31984966403", `Olá! Fiz o Pix da ${volta ? "minha volta às aulas" : isAvulso ? "minha aula avulsa" : "matrícula da minha primeira aula"} de ${fmtDate(slot?.date || "")} às ${slot?.time || ""} (${slot?.unit || ""}), no valor de ${money(total)}. Segue o comprovante 👇`)}
                 target="_blank"
                 rel="noreferrer"
               >
@@ -838,7 +869,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                     setBooking(null);
                   }}
                 >
-                  ← Esqueci de colocar o cupom / Alterar plano ou dados
+                  {volta ? "← Alterar plano ou dados" : "← Esqueci de colocar o cupom / Alterar plano ou dados"}
                 </button>
               </div>
             </>)}
@@ -849,7 +880,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
         {step === "done" && slot && (
           <div className="pt-card" style={{ textAlign: "center" }}>
             <div style={{ fontSize: "2.6rem" }}>🎉</div>
-            <h2 className="pt-h2" style={{ textAlign: "center" }}>Tudo certo, {name.split(" ")[0]}!</h2>
+            <h2 className="pt-h2" style={{ textAlign: "center" }}>{volta ? `Que bom ter você de volta, ${name.split(" ")[0]}!` : `Tudo certo, ${name.split(" ")[0]}!`}</h2>
             <div className="pt-fc-resume" style={{ textAlign: "left" }}>
               <div>📍 <b>{slot.unit}</b></div>
               <div style={{ marginTop: ".25rem" }}>
@@ -861,7 +892,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 </div>
               ))}
             </div>
-            <p className="pt-hint">{isAvulso ? "Sua vaga para a aula avulsa está garantida! 💚" : "Sua vaga está garantida e sua matrícula confirmada! 💚"}</p>
+            <p className="pt-hint">{volta ? "Sua vaga está garantida e o seu cadastro está ativo de novo! 💚" : isAvulso ? "Sua vaga para a aula avulsa está garantida! 💚" : "Sua vaga está garantida e sua matrícula confirmada! 💚"}</p>
 
             {/* Chamada para o Portal da Aluna */}
             <div style={{
@@ -877,7 +908,9 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                 <b style={{ color: "var(--green-deep, #1c5e33)", fontSize: "1.05rem" }}>Seu próximo passo: Acesse o Portal da Aluna</b>
               </div>
               <p style={{ margin: "0 0 .8rem 0", fontSize: ".93rem", color: "var(--ink)", lineHeight: 1.5 }}>
-                Acesse o <b>Portal da Aluna</b> informando seu CPF e <b>cadastre seu PIN de 4 dígitos</b> (sua senha de acesso exclusiva). Pelo portal você visualiza suas aulas e informações! 💚
+                {volta
+                  ? <>O <b>Portal da Aluna</b> já está aberto de novo para você: entre com o seu CPF e o seu <b>PIN de 4 dígitos</b> (se ainda não tiver um, você cria na hora). 💚</>
+                  : <>Acesse o <b>Portal da Aluna</b> informando seu CPF e <b>cadastre seu PIN de 4 dígitos</b> (sua senha de acesso exclusiva). Pelo portal você visualiza suas aulas e informações! 💚</>}
               </p>
               <button
                 type="button"
@@ -904,7 +937,7 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                   }
                 }}
               >
-                🔐 Acessar Portal da Aluna e cadastrar PIN →
+                {volta ? "🔐 Entrar no Portal da Aluna →" : "🔐 Acessar Portal da Aluna e cadastrar PIN →"}
               </button>
               <div style={{ marginTop: ".6rem", fontSize: ".82rem", color: "var(--muted)", textAlign: "center" }}>
                 Link direto: <a href="/portal" style={{ color: "var(--green-deep)", fontWeight: 600, textDecoration: "underline" }}>fiosquecuram.com.br/portal</a>
@@ -932,7 +965,8 @@ export default function FirstClassBooking({ onBack, fromSite }) {
                     MENSALIDADE volta inteira; a taxa de matrícula não. O texto
                     antigo dizia o contrário do topo desta mesma página. */}
                 {voucher && <p>🎟️ Código <b>{voucher.codigo}</b>: {voucher.beneficios.join(" · ")}.</p>}
-                {taxaHoje > 0
+                {/* a devolução depois da 1ª aula é da aluna nova; quem volta já conhece a escola */}
+                {volta ? null : taxaHoje > 0
                   ? <p>💬 Se decidir não continuar depois da primeira aula, é só avisar: devolvemos a mensalidade de {money(mensalidadeHoje)} e cancelamos as próximas cobranças. Só a taxa de matrícula ({money(taxaHoje)}) não é devolvida.</p>
                   : <p>💬 Se decidir não continuar depois da primeira aula, é só avisar: devolvemos a mensalidade e cancelamos as próximas cobranças.</p>}
               </>)}
