@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import { toast } from "./toast.jsx";
-import { api } from "./api.js";
+import { api, setSession, getToken } from "./api.js";
 import { setUnitOrder } from "./helpers.js";
 
 const StoreContext = createContext(null);
@@ -21,11 +21,13 @@ export function StoreProvider({ children }) {
     setRefreshing(true);
     try {
       const state = await api.getState();
+      if (state.access) setSession(state.access);
       if (state.meta && state.meta.units) setUnitOrder(state.meta.units);
       setData(state);
       setError(null);
       setLastUpdated(Date.now());
     } catch (e) {
+      if (e.status === 401) setData(null);
       setError(e.message);
     } finally {
       inFlight.current = false;
@@ -34,15 +36,15 @@ export function StoreProvider({ children }) {
   }, []);
 
   // Carga inicial
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => { if (getToken()) reload(); }, [reload]);
 
   // Polling automático — pausa quando a aba está em segundo plano e busca
   // na hora quando ela volta ao foco (economiza requisições e bateria).
   useEffect(() => {
     let timer = null;
-    const start = () => { stop(); timer = setInterval(() => { if (!document.hidden) reload(); }, REFRESH_MS); };
+    const start = () => { stop(); timer = setInterval(() => { if (!document.hidden && getToken()) reload(); }, REFRESH_MS); };
     const stop = () => { if (timer) clearInterval(timer); timer = null; };
-    const onVisible = () => { if (!document.hidden) { reload(); start(); } else stop(); };
+    const onVisible = () => { if (!document.hidden) { if (getToken()) reload(); start(); } else stop(); };
     start();
     document.addEventListener("visibilitychange", onVisible);
     return () => { stop(); document.removeEventListener("visibilitychange", onVisible); };

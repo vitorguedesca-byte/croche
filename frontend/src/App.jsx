@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
-import { api, getToken, setToken, isInstrutora, getNome } from "./api.js";
+import { api, getToken, setToken, isInstrutora, getNome, canAccess, getSession } from "./api.js";
+import Usuarios from "./Usuarios.jsx";
+import { canView, canEditView } from "./access.js";
 import AdminLogin from "./AdminLogin.jsx";
 import { useStore } from "./store.jsx";
 import { useModal } from "./ui.jsx";
@@ -54,13 +56,8 @@ const NAV = [
   { sep: "Site" },
   { view: "depoimentos", ic: "⭐", label: "Depoimentos" },
   { sep: "Sistema" },
+  { view: "acessos", ic: "🔐", label: "Usuários e acessos" },
   { view: "config", ic: "⚙️", label: "Configurações" },
-];
-/* Menu da INSTRUTORA: só a Agenda. Não é o mesmo menu com itens escondidos —
-   é um menu curto de propósito, para não sugerir portas que não abrem. */
-const NAV_INSTRUTORA = [
-  { sep: "Operação" },
-  { view: "agenda", ic: "📅", label: "Agenda" },
 ];
 const TITLES = {
   dashboard:    ["Painel",        "Visão geral da operação"],
@@ -78,13 +75,22 @@ const TITLES = {
   "rel-presentes": ["Relatório de presentes", "Aulas de presente dadas e o que aconteceu com elas — não é valor a receber"],
   campanhas:    ["Campanhas e códigos", "Vouchers de promoção: isenção, desconto, aula experimental e prêmios"],
   depoimentos:  ["Depoimentos",   "Gerencie os depoimentos exibidos no site"],
+  acessos:      ["Usuários e acessos", "Usuários, perfis, permissões e histórico"],
   config:       ["Configurações", "Padrões do sistema, unidades e profissionais"],
 };
 
 export default function App() {
   const { data, error, reload } = useStore();
   const { open } = useModal();
+  const [, accessChanged] = useState(0);
   const instrutora = isInstrutora();
+  useEffect(() => {
+    const update = () => accessChanged(n => n + 1);
+    const sync = e => { if (e.key?.startsWith("fqc_admin_")) window.location.reload(); };
+    window.addEventListener("fqc-access", update);
+    window.addEventListener("storage", sync);
+    return () => { window.removeEventListener("fqc-access", update); window.removeEventListener("storage", sync); };
+  }, []);
   const [view, setView] = useState(instrutora ? "agenda" : "dashboard");
   const [viewParams, setViewParams] = useState({});
   // Modo tablet (quiosque da sala): fica gravado para sobreviver a recarga do
@@ -112,7 +118,7 @@ export default function App() {
 
   // Atalho global Ctrl+Z / Cmd+Z para desfazer inativação ou exclusão acidental no painel
   useEffect(() => {
-    if (mode !== "admin") return;
+    if (mode !== "admin" || getSession()?.role !== "admin") return;
     const handleKeyDown = async (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
         const active = document.activeElement;
@@ -152,20 +158,23 @@ export default function App() {
   if (!data) return <div className="empty" style={{ padding: "4rem" }}><div className="ic">🧶</div><p>Carregando…</p></div>;
 
   const go = (v, params = {}) => {
-    // A instrutora só tem a Agenda: qualquer atalho de outra tela cai nela.
-    if (instrutora && v !== "agenda") v = "agenda";
+
     if (v === "mensalistas") { v = "financeiro"; params = { tab: "operacao", ...params }; }
     if (v === "recebimentos") { v = "financeiro"; params = { tab: "metricas", ...params }; }
+    if (!canView(v)) { toast("Seu perfil não tem acesso a esta tela.", "info"); return; }
     setView(v); setViewParams(params); setSidebarOpen(false);
   };
-  const actions = instrutora ? {} : {
+  const currentView = canView(view) ? view : NAV.find(n => n.view && canView(n.view))?.view;
+  const somenteLeitura = !canEditView(currentView);
+  const actions = {
     agenda: <button className="btn" onClick={() => open(<SlotForm />)}>＋ Novo horário</button>,
     marcacoes: <button className="btn" onClick={() => open(<BookingForm />)}>＋ Nova marcação</button>,
     clientes: <button className="btn" onClick={() => open(<ClientForm />)}>＋ Novo aluno</button>,
     funil: <button className="btn" onClick={() => open(<LeadForm />)}>＋ Nova lead</button>,
     campanhas: <button className="btn" onClick={() => open(<CampanhaForm />)}>＋ Nova campanha</button>,
   };
-  const Body = instrutora ? Agenda : {
+  const Body = {
+    acessos: Usuarios,
     dashboard: Dashboard,
     agenda: Agenda,
     marcacoes: Marcacoes,
@@ -182,10 +191,9 @@ export default function App() {
     campanhas: Campanhas,
     depoimentos: Depoimentos,
     config: Config,
-  }[view] || Dashboard;
-  const [tituloAtual, subtituloAtual] = instrutora
-    ? ["Agenda", `Consulta de horários${getNome() ? " · " + getNome() : ""}`]
-    : (TITLES[view] || TITLES.dashboard);
+  }[currentView];
+  const [tituloAtual, subtituloAtual] = TITLES[currentView] || ["Acesso ao painel", "Nenhum módulo liberado. Solicite um perfil à Admin."];
+  const nav = NAV.filter((n, i) => n.view ? canView(n.view) : NAV.slice(i + 1, NAV.findIndex((m, j) => j > i && m.sep) < 0 ? undefined : NAV.findIndex((m, j) => j > i && m.sep)).some(m => m.view && canView(m.view)));
 
   return (
     <div className="app">
@@ -195,14 +203,14 @@ export default function App() {
           <img src="/logo-1.PNG" alt="Fios que Curam" />
           <div><b>Fios que Curam</b><span>{instrutora ? "Instrutoras · consulta" : "Gestão · Fios que Curam"}</span></div>
         </div>
-        {(instrutora ? NAV_INSTRUTORA : NAV).map((n, i) => n.sep
+        {nav.map((n, i) => n.sep
           ? <div key={i} className="nav-sep">{n.sep}</div>
-          : <button key={i} className={`nav-item ${view === n.view ? "active" : ""}`} onClick={() => go(n.view)}><span className="ic">{n.ic}</span> {n.label}</button>)}
+          : <button key={i} className={`nav-item ${currentView === n.view ? "active" : ""}`} onClick={() => go(n.view)}><span className="ic">{n.ic}</span> {n.label}</button>)}
         <div className="spacer" />
         <div className="side-foot">
           {instrutora ? "Acesso de consulta · somente leitura" : "Backend MySQL + Prisma · React"}
-          {!instrutora && <button onClick={() => setMode("cliente")}>👁 Ver como aluno</button>}
-          {!instrutora && <button onClick={() => exportBookingsCsv(data)}>⬇ Exportar marcações (CSV)</button>}
+          {getSession()?.role === "admin" && <button onClick={() => setMode("cliente")}>👁 Ver como aluno</button>}
+          {canAccess("relatorios") && <button onClick={() => exportBookingsCsv(data)}>⬇ Exportar marcações (CSV)</button>}
           <button onClick={async () => { try { await api.admin.logout(); } catch {} setToken(null); window.location.reload(); }}>🚪 Sair</button>
         </div>
       </aside>
@@ -213,10 +221,11 @@ export default function App() {
             <button className="menu-btn" onClick={() => setSidebarOpen((o) => !o)}>☰</button>
             <div><h1>{tituloAtual}</h1><div className="sub">{subtituloAtual}</div></div>
           </div>
-          <div className="topbar-right">{actions[view]}{!instrutora && <Notifications go={go} />}</div>
+          <div className="topbar-right">{canEditView(currentView) && actions[currentView]}{getSession()?.role === "admin" && <Notifications go={go} />}</div>
         </div>
         <div className="content">
-          <Body go={go} params={viewParams} somenteLeitura={instrutora} />
+          {somenteLeitura && currentView && !["dashboard", "rel-vendas", "rel-vagas", "rel-presentes"].includes(currentView) && <p className="access-readonly-banner">Seu perfil permite somente consulta neste módulo.</p>}
+          {Body ? <fieldset className="access-fieldset" disabled={currentView === "config" && somenteLeitura}><Body key={currentView} go={go} params={viewParams} somenteLeitura={somenteLeitura} /></fieldset> : <p>Nenhum módulo liberado. Solicite a revisão do seu perfil à Admin.</p>}
         </div>
       </div>
     </div>

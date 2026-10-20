@@ -7,15 +7,18 @@ let TOKEN = null;
 // qualquer rota fora da lista da instrutora mesmo sem passar por botão nenhum.
 let ROLE = "admin";
 let NOME = "";
+let SESSION = null;
 try {
   TOKEN = localStorage.getItem("fqc_admin_token");
   ROLE = localStorage.getItem("fqc_admin_role") || "admin";
   NOME = localStorage.getItem("fqc_admin_nome") || "";
+  SESSION = JSON.parse(localStorage.getItem("fqc_admin_access") || "null");
 } catch {}
 export function setToken(t, role, nome) {
   TOKEN = t || null;
   ROLE = t ? (role || "admin") : "admin";
   NOME = t ? (nome || "") : "";
+  if (!t) SESSION = null;
   try {
     if (t) {
       localStorage.setItem("fqc_admin_token", t);
@@ -25,6 +28,7 @@ export function setToken(t, role, nome) {
       localStorage.removeItem("fqc_admin_token");
       localStorage.removeItem("fqc_admin_role");
       localStorage.removeItem("fqc_admin_nome");
+      localStorage.removeItem("fqc_admin_access");
     }
   } catch {}
 }
@@ -32,6 +36,24 @@ export function getToken() { return TOKEN; }
 export function getRole() { return TOKEN ? ROLE : "admin"; }
 export function getNome() { return NOME; }
 export function isInstrutora() { return getRole() === "instrutora"; }
+export function getSession() { return SESSION; }
+export function setSession(session) {
+  if (session) { const { token, ok, ...identity } = session; session = identity; }
+  const changed = JSON.stringify(SESSION) !== JSON.stringify(session);
+  SESSION = session;
+  const modules = ["dashboard", "agenda", "alunos", "funil", "whatsapp", "financeiro", "relatorios", "campanhas", "depoimentos", "configuracoes"];
+  document.documentElement.setAttribute("data-fqc-denied", modules.flatMap(m => [1, 2].filter(level => !canAccess(m, level)).map(level => `${m}:${level}`)).join(" "));
+  if (session) { ROLE = session.role; NOME = session.nome || session.username; }
+  try {
+    localStorage.setItem("fqc_admin_access", JSON.stringify(session));
+    localStorage.setItem("fqc_admin_role", ROLE);
+    localStorage.setItem("fqc_admin_nome", NOME);
+  } catch {}
+  if (changed) window.dispatchEvent(new Event("fqc-access"));
+}
+export function canAccess(module, level = 1) {
+  return !!TOKEN && (SESSION?.role === "admin" || (SESSION?.permissions?.[module] || 0) >= level);
+}
 
 async function req(method, url, body) {
   const headers = { "Content-Type": "application/json" };
@@ -49,6 +71,10 @@ async function req(method, url, body) {
     let corpo = null;
     try { corpo = await res.json(); msg = corpo.error || msg; } catch {}
     const err = new Error(msg);
+    if (res.status === 401 && TOKEN && !url.startsWith("/api/admin/login")) {
+      setToken(null);
+      window.dispatchEvent(new Event("fqc-access"));
+    }
     err.status = res.status;
     err.data = corpo; // ex.: o funil devolve o `leadId` de quem já está lá
     throw err;
@@ -223,7 +249,7 @@ export const api = {
     uploadPhoto: async (id, file) => {
       const fd = new FormData();
       fd.append("photo", file);
-      const res = await fetch(`/api/testimonials/${id}/photo`, { method: "POST", body: fd });
+      const res = await fetch(`/api/testimonials/${id}/photo`, { method: "POST", body: fd, headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {} });
       if (!res.ok) { let msg = "Erro"; try { msg = (await res.json()).error || msg; } catch {} throw new Error(msg); }
       return res.json();
     },
@@ -243,7 +269,16 @@ export const api = {
     login:   (username, password) => req("POST", "/api/admin/login", { username, password }),
     logout:  ()                   => req("POST", "/api/admin/logout"),
     users:   ()                   => req("GET",  "/api/admin/users"),
-    addUser: (username, password) => req("POST", "/api/admin/users", { username, password }),
+    me: () => req("GET", "/api/admin/me"),
+    addUser: (data) => req("POST", "/api/admin/users", data),
+    updateUser: (id, data) => req("PATCH", `/api/admin/users/${id}`, data),
+    revoke: (id) => req("POST", `/api/admin/users/${id}/revoke`),
+    catalog: () => req("GET", "/api/admin/access-catalog"),
+    profiles: () => req("GET", "/api/admin/profiles"),
+    createProfile: (data) => req("POST", "/api/admin/profiles", data),
+    updateProfile: (id, data) => req("PATCH", `/api/admin/profiles/${id}`, data),
+    deleteProfile: (id) => req("DELETE", `/api/admin/profiles/${id}`),
+    audit: () => req("GET", "/api/admin/access-audit"),
   },
 
   portal: {

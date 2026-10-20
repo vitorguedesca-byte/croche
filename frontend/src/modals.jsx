@@ -4,7 +4,7 @@ import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
 import Agendamentos from "./Agendamentos.jsx";
 import { useStore } from "./store.jsx";
-import { api } from "./api.js";
+import { api, canAccess } from "./api.js";
 import { toast, confirmModal, promptModal } from "./toast.jsx";
 import {
   UNITS, PROFS, TAG_OPTIONS, VALOR_PADRAO, CAPACITY_PADRAO, STATUS, BOOKING_KINDS,
@@ -248,9 +248,9 @@ export function DayModal({ date, unit = "Todas", somenteLeitura = false }) {
         </button>
       )}
       {!somenteLeitura && slots.length > 0 && (
-        <button className="btn sec" onClick={() => open(<ReplicateTurmaForm date={date} unit={unit} />)}>🗓 Replicação</button>
+        <button data-access="agenda:2" className="btn sec" onClick={() => open(<ReplicateTurmaForm date={date} unit={unit} />)}>🗓 Replicação</button>
       )}
-      {!somenteLeitura && !fer && <button className="btn" onClick={() => open(<SlotForm presetDate={date} presetUnit={unit} />)}>＋ Novo horário</button>}
+      {!somenteLeitura && !fer && <button data-access="agenda:2" className="btn" onClick={() => open(<SlotForm presetDate={date} presetUnit={unit} />)}>＋ Novo horário</button>}
     </>}>
       {slots.length
         ? <div className="day-view" style={{ maxWidth: "none" }}>{slots.map((s) => <SlotCard key={s.id} slot={s} showUnit={todas} somenteLeitura={somenteLeitura} />)}</div>
@@ -454,14 +454,14 @@ export function SlotDetail({ slotId }) {
 
   return (
     <Modal title={`Turma — ${faixaHorario(slot.time, data.meta?.duracaoAulaMin)}`} footer={<>
-      <button className="btn ghost" onClick={() => open(<DayModal date={slot.date} unit={slot.unit} />)}>← Voltar ao dia</button>
+      <button data-access="agenda:2" className="btn ghost" onClick={() => open(<DayModal date={slot.date} unit={slot.unit} />)}>← Voltar ao dia</button>
       <div style={{ flex: 1 }} />
-      <button className="btn sec" onClick={saveCap}>Salvar capacidade</button>
+      <button data-access="agenda:2" className="btn sec" onClick={saveCap}>Salvar capacidade</button>
       {fechada
-        ? <button className="btn" onClick={desbloquear}>🔓 Desbloquear turma</button>
+        ? <button data-access="agenda:2" className="btn" onClick={desbloquear}>🔓 Desbloquear turma</button>
         : full
-          ? <button className="btn terra" onClick={() => open(<WaitlistForm slotId={slotId} />)}>⏰ Lista de espera</button>
-          : <button className="btn" onClick={() => open(<BookingForm slotId={slotId} />)}>＋ Adicionar pessoa</button>}
+          ? <button data-access="agenda:2" className="btn terra" onClick={() => open(<WaitlistForm slotId={slotId} />)}>⏰ Lista de espera</button>
+          : <button data-access="agenda:2" className="btn" onClick={() => open(<BookingForm slotId={slotId} />)}>＋ Adicionar pessoa</button>}
     </>}>
       {fechada && (
         <div className="day-feriado">
@@ -477,14 +477,14 @@ export function SlotDetail({ slotId }) {
       <div className="info-line"><b>Data / hora</b><span>{fmtDateLong(slot.date)} · {faixaHorario(slot.time, data.meta?.duracaoAulaMin)}</span></div>
       <div className="info-line"><b>Profissional</b><span>{slot.prof || "—"}</span></div>
       <div style={{ display: "flex", gap: ".5rem", marginTop: ".8rem", flexWrap: "wrap" }}>
-        <button className="btn sec sm" onClick={() => open(<EditSlotForm slot={slot} />)}>✏️ Editar turma</button>
-        <button className="btn sec sm" onClick={() => open(<ReplicateTurmaForm slot={slot} />)}
+        <button data-access="agenda:2" className="btn sec sm" onClick={() => open(<EditSlotForm slot={slot} />)}>✏️ Editar turma</button>
+        <button data-access="agenda:2" className="btn sec sm" onClick={() => open(<ReplicateTurmaForm slot={slot} />)}
           title="Replicar turma, dia, semana ou mês">🗓 Replicação</button>
         {!fechada && !passada && (
-          <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={liberarTudo}
+          <button data-access="agenda:2" className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={liberarTudo}
             title="Tira todas as alunas desta aula (com crédito) e bloqueia a turma">🔒 Liberar turma por completo</button>
         )}
-        <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir horário</button>
+        <button data-access="agenda:2" className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir horário</button>
       </div>
       <div className="help" style={{ marginTop: ".45rem" }}>
         Replicar repete a turma <b>com as {occ} aluna(s)</b> no mesmo dia da semana e horário. As aulas copiadas
@@ -531,11 +531,11 @@ export function SlotDetail({ slotId }) {
           </div>
           {!isCanc && (
             <div className="att" title="Marcar presença">
-              <button className={`att-btn ${b.attendance === "presente" ? "on-pres" : ""}`} onClick={() => mark(b, "presente")} title="Presente">✓</button>
-              <button className={`att-btn ${b.attendance === "falta" ? "on-falt" : ""}`} onClick={() => mark(b, "falta")} title="Faltou">✕</button>
+              <button data-access="agenda:2" className={`att-btn ${b.attendance === "presente" ? "on-pres" : ""}`} onClick={() => mark(b, "presente")} title="Presente">✓</button>
+              <button data-access="agenda:2" className={`att-btn ${b.attendance === "falta" ? "on-falt" : ""}`} onClick={() => mark(b, "falta")} title="Faltou">✕</button>
             </div>
           )}
-          <button className="btn sec sm" onClick={() => open(<ManageBooking booking={b} />)}>Gerir</button>
+          <button data-access="agenda:2" className="btn sec sm" onClick={() => open(<ManageBooking booking={b} />)}>Gerir</button>
         </div>
         );
       }) : <div className="empty" style={{ padding: "1.2rem" }}><div className="ic">🪑</div><p>Nenhuma reserva nesta turma ainda.</p></div>}
@@ -547,9 +547,9 @@ export function SlotDetail({ slotId }) {
         {wl.map((w) => (
           <div className="roster-row" key={w.id}>
             <div className="rr-info"><b>{w.name}</b><div className="cli-sub">{w.phone || "sem telefone"}</div></div>
-            <button className="btn wa sm" onClick={() => openWa(w.phone, `Olá ${w.name}! Abriu uma vaga na turma de ${fmtDate(slot.date)} às ${slot.time} em ${slot.unit}. Quer garantir? 💚`)}>Avisar</button>
-            {!full && !fechada && <button className="btn sm" onClick={() => run(api.promoteWaitlist(w.id))}>Promover</button>}
-            <button className="btn ghost sm" onClick={() => run(api.removeWaitlist(w.id))} title="Remover">✕</button>
+            <button data-access="agenda:2" className="btn wa sm" onClick={() => openWa(w.phone, `Olá ${w.name}! Abriu uma vaga na turma de ${fmtDate(slot.date)} às ${slot.time} em ${slot.unit}. Quer garantir? 💚`)}>Avisar</button>
+            {!full && !fechada && <button data-access="agenda:2" className="btn sm" onClick={() => run(api.promoteWaitlist(w.id))}>Promover</button>}
+            <button data-access="agenda:2" className="btn ghost sm" onClick={() => run(api.removeWaitlist(w.id))} title="Remover">✕</button>
           </div>
         ))}
       </>}
@@ -604,9 +604,9 @@ export function WaitlistForm({ slotId }) {
   };
   return (
     <Modal title="Entrar na lista de espera" footer={<>
-      <button className="btn ghost" onClick={() => open(<SlotDetail slotId={slotId} />)}>← Voltar</button>
+      <button data-access="agenda:2" className="btn ghost" onClick={() => open(<SlotDetail slotId={slotId} />)}>← Voltar</button>
       <div style={{ flex: 1 }} />
-      <button className="btn" onClick={save}>Adicionar à fila</button>
+      <button data-access="agenda:2" className="btn" onClick={save}>Adicionar à fila</button>
     </>}>
       <div className="help" style={{ marginBottom: "1rem" }}>A turma de <b>{slot && fmtDate(slot.date)} às {slot && slot.time}</b> ({slot && slot.unit}) está lotada. A pessoa entra na fila e você é avisada quando abrir vaga.</div>
       <div className="field"><label>Nome</label><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome da pessoa" /></div>
@@ -712,14 +712,14 @@ export function ManageBooking({ booking, onBack }) {
       {onBack
         ? <button className="btn ghost" onClick={onBack}>← Voltar ao perfil</button>
         : slotExists
-          ? <button className="btn ghost" onClick={() => open(<SlotDetail slotId={booking.slotId} />)}>← Voltar à turma</button>
+          ? <button data-access="agenda:2" className="btn ghost" onClick={() => open(<SlotDetail slotId={booking.slotId} />)}>← Voltar à turma</button>
           : <button className="btn ghost" onClick={close}>Fechar</button>}
       <div style={{ flex: 1 }} />
-      <button className="btn wa" onClick={() => openWa(booking.phone, `Olá ${booking.clientName}! 💚`)}><WaIcon /> WhatsApp</button>
+      <button data-access="agenda:2" className="btn wa" onClick={() => openWa(booking.phone, `Olá ${booking.clientName}! 💚`)}><WaIcon /> WhatsApp</button>
       {/* Confirmar pagamento só existe quando a reserva TEM dinheiro próprio:
           a de matrícula (1ª mensalidade) e a aula extra. Nas demais, quem se
           paga é a mensalidade do mês — não a aula. */}
-      {cobraNaReserva && !booking.paid && <button className="btn terra" onClick={() => open(<ConfirmPayment booking={booking} />)}>Confirmar pagamento</button>}
+      {cobraNaReserva && !booking.paid && <button data-access="financeiro:2" className="btn terra" onClick={() => open(<ConfirmPayment booking={booking} />)}>Confirmar pagamento</button>}
     </>}>
       <div className="info-line"><b>Aluno</b><span>{booking.clientName}</span></div>
       <div className="info-line"><b>Telefone</b><span>{booking.phone || "—"}</span></div>
@@ -766,22 +766,22 @@ export function ManageBooking({ booking, onBack }) {
               <label>Pix da reserva (copia-e-cola)</label>
               <textarea readOnly value={pix} rows={3} style={{ resize: "vertical", fontSize: ".8rem" }} onFocus={(e) => e.target.select()} />
               <div style={{ display: "flex", gap: ".5rem", marginTop: ".5rem", flexWrap: "wrap" }}>
-                <button className="btn sec sm" onClick={() => navigator.clipboard?.writeText(pix)}>📋 Copiar Pix</button>
-                <button className="btn wa sm" onClick={() => openWa(booking.phone, `Olá ${booking.clientName}! 💚 Para confirmar sua reserva de ${fmtDate(booking.date)} às ${booking.time}, é só pagar o Pix abaixo:\n\n${pix}`)}><WaIcon /> Enviar no WhatsApp</button>
+                <button data-access="agenda:2" className="btn sec sm" onClick={() => navigator.clipboard?.writeText(pix)}>📋 Copiar Pix</button>
+                <button data-access="agenda:2" className="btn wa sm" onClick={() => openWa(booking.phone, `Olá ${booking.clientName}! 💚 Para confirmar sua reserva de ${fmtDate(booking.date)} às ${booking.time}, é só pagar o Pix abaixo:\n\n${pix}`)}><WaIcon /> Enviar no WhatsApp</button>
               </div>
               <div className="help" style={{ marginTop: ".4rem" }}>Assim que o Pix cair no Sicredi, a reserva vira <b>Confirmada</b> automaticamente.</div>
             </>
           ) : (
-            <button className="btn terra sm" onClick={genInvoice} disabled={genBusy}>{genBusy ? "Gerando…" : "💠 Gerar cobrança Pix"}</button>
+            <button data-access="financeiro:2" className="btn terra sm" onClick={genInvoice} disabled={genBusy}>{genBusy ? "Gerando…" : "💠 Gerar cobrança Pix"}</button>
           )}
         </div>
       )}
 
       <div style={{ marginTop: "1rem", display: "flex", gap: ".5rem", flexWrap: "wrap" }}>
         {booking.status !== "cancelada" && (
-          <button className="btn sec sm" onClick={liberar}>🔓 Liberar vaga (a aluna avisou)</button>
+          <button data-access="agenda:2" className="btn sec sm" onClick={liberar}>🔓 Liberar vaga (a aluna avisou)</button>
         )}
-        <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir aluno(a)</button>
+        <button data-access="agenda:2" className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={del}>🗑 Excluir aluno(a)</button>
       </div>
       <div className="help" style={{ marginTop: ".5rem" }}>
         <b>Liberar</b> cancela a aula e aplica as regras de reposição — vira crédito só se o aviso vier
@@ -807,7 +807,7 @@ export function ConfirmPayment({ booking }) {
   return (
     <Modal title="Confirmar pagamento" footer={<>
       <button className="btn ghost" onClick={close}>Cancelar</button>
-      <button className="btn" onClick={save}>✓ Confirmar</button>
+      <button data-access="financeiro:2" className="btn" onClick={save}>✓ Confirmar</button>
     </>}>
       <div className="help">Ao confirmar o pagamento, a aula passa a <b>Confirmada</b> e aparece reservada na agenda.</div>
       <div className="field" style={{ marginTop: "1rem" }}><label>Forma de pagamento</label>
@@ -837,7 +837,7 @@ export function PaymentRegister() {
   return (
     <Modal title="Registrar recebimento" footer={<>
       <button className="btn ghost" onClick={close}>Cancelar</button>
-      <button className="btn" onClick={save}>Registrar</button>
+      <button data-access="financeiro:2" className="btn" onClick={save}>Registrar</button>
     </>}>
       <div className="field"><label>Marcação aguardando pagamento</label>
         <Select
@@ -910,7 +910,7 @@ export function BaixarLeadModal({ client, onComplete }) {
       footer={
         <>
           <button className="btn ghost" disabled={busy} onClick={close}>Cancelar</button>
-          <button className="btn" disabled={busy} onClick={confirmar}>✓ Confirmar baixa</button>
+          <button data-access="alunos:2" className="btn" disabled={busy} onClick={confirmar}>✓ Confirmar baixa</button>
         </>
       }
     >
@@ -1161,7 +1161,7 @@ export function BookingForm({ slotId }) {
     /* Marcações administrativas podem ser unitárias ou em lote. A frequência
        contratada monta a grade inicial, mas não bloqueia ajustes posteriores. */
     // value 0: a aula não tem preço próprio — quem se paga é a mensalidade do mês.
-    const payload = { clientName: name.trim(), phone: phone.trim(), unit, value: 0, date, time, slotId: slot && !repetindo ? slot.id : undefined };
+    const payload = { clientName: name.trim(), phone: phone.trim(), unit, ...(canAccess("financeiro", 2) ? { value: 0 } : {}), date, time, slotId: slot && !repetindo ? slot.id : undefined };
     if (repetindo) payload.dates = dates;
     const r = await run(api.createBooking(payload));
     close();
@@ -1183,7 +1183,7 @@ export function BookingForm({ slotId }) {
   return (
     <Modal title="Nova marcação" footer={<>
       <button className="btn ghost" onClick={close}>Cancelar</button>
-      <button className="btn" onClick={save} disabled={!dates.length}>
+      <button data-access="agenda:2" className="btn" onClick={save} disabled={!dates.length}>
         Salvar marcação{repetindo ? ` (${dates.length})` : ""}
       </button>
     </>}>
@@ -1336,7 +1336,7 @@ export function SlotForm({ presetDate, presetUnit }) {
   return (
     <Modal title="Novo horário na agenda" footer={<>
       <button className="btn ghost" onClick={close}>Cancelar</button>
-      <button className="btn" onClick={save} disabled={!dates.length}>Adicionar{dates.length > 1 ? ` (${dates.length})` : ""}</button>
+      <button data-access="agenda:2" className="btn" onClick={save} disabled={!dates.length}>Adicionar{dates.length > 1 ? ` (${dates.length})` : ""}</button>
     </>}>
       <div className="row2">
         <div className="field"><label>Unidade</label><Select value={unit} onChange={setUnit} options={unitOptions(meta)} /></div>
@@ -1429,8 +1429,8 @@ export function EditSlotForm({ slot }) {
 
   return (
     <Modal title="Editar turma" footer={<>
-      <button className="btn ghost" onClick={() => open(<SlotDetail slotId={slot.id} />)}>← Voltar</button>
-      <button className="btn" onClick={save} disabled={!mudou}>Salvar alterações</button>
+      <button data-access="agenda:2" className="btn ghost" onClick={() => open(<SlotDetail slotId={slot.id} />)}>← Voltar</button>
+      <button data-access="agenda:2" className="btn" onClick={save} disabled={!mudou}>Salvar alterações</button>
     </>}>
       <div className="cfg-preview" style={{ marginTop: 0, marginBottom: "1rem" }}>
         Editando <b>{fmtDateLong(slot.date)}</b> · {faixaHorario(slot.time, meta.duracaoAulaMin)} · {slot.unit}
@@ -1546,9 +1546,9 @@ export function ReplicateTurmaForm({ slot = null, date: presetDate, unit: preset
   const atalhos = scope === "month" ? [1, 3, 6, MESES_PADRAO] : [1, 4, 12, 26, SEMANAS_PADRAO];
   return (
     <Modal title="Replicação" footer={<>
-      <button className="btn ghost" onClick={() => slot ? open(<SlotDetail slotId={slot.id} />) : close()}>← Voltar</button>
+      <button data-access="agenda:2" className="btn ghost" onClick={() => slot ? open(<SlotDetail slotId={slot.id} />) : close()}>← Voltar</button>
       <div style={{ flex: 1 }} />
-      <button className="btn" onClick={save} disabled={busy}>
+      <button data-access="agenda:2" className="btn" onClick={save} disabled={busy}>
         {busy ? "Replicando…" : `Replicar ${periodo}`}
       </button>
     </>}>
@@ -1561,7 +1561,7 @@ export function ReplicateTurmaForm({ slot = null, date: presetDate, unit: preset
         <label>O que será replicado</label>
         <div className="wd-chips">
           {escopos.map(([value, label, hint]) => (
-            <button key={value} type="button" disabled={value === "class" && !slot}
+            <button data-access="agenda:2" key={value} type="button" disabled={value === "class" && !slot}
               className={`wd-chip ${scope === value ? "on" : ""}`}
               title={hint} onClick={() => { setScope(value); setRepetitions(value === "month" ? MESES_PADRAO : SEMANAS_PADRAO); }}>
               {label}
@@ -1577,7 +1577,7 @@ export function ReplicateTurmaForm({ slot = null, date: presetDate, unit: preset
         <label>{scope === "month" ? "Por quantos meses" : "Por quantas semanas"}</label>
         <div className="wd-chips" style={{ marginBottom: ".6rem" }}>
           {atalhos.map((n) => (
-            <button key={n} type="button" className={`wd-chip ${repetitions === n ? "on" : ""}`} onClick={() => setRepetitions(n)}>
+            <button data-access="agenda:2" key={n} type="button" className={`wd-chip ${repetitions === n ? "on" : ""}`} onClick={() => setRepetitions(n)}>
               {n === 1 ? "Próximo" : `${n} ${scope === "month" ? "meses" : "sem"}`}
             </button>
           ))}
@@ -1635,8 +1635,8 @@ export function ReplicateSlotForm({ slot }) {
   const modes = [["weekly", "Semanal"], ["daily", "Diária"], ["weekdays", "Dias específicos"]];
   return (
     <Modal title="Replicar horário" footer={<>
-      <button className="btn ghost" onClick={() => open(<SlotDetail slotId={slot.id} />)}>← Voltar</button>
-      <button className="btn" onClick={save} disabled={!dates.length}>Criar {dates.length} horário(s)</button>
+      <button data-access="agenda:2" className="btn ghost" onClick={() => open(<SlotDetail slotId={slot.id} />)}>← Voltar</button>
+      <button data-access="agenda:2" className="btn" onClick={save} disabled={!dates.length}>Criar {dates.length} horário(s)</button>
     </>}>
       <div className="cfg-preview" style={{ marginTop: 0, marginBottom: "1rem" }}>
         Replicando <b>{slot.unit}</b> · {fmtDateLong(slot.date)} · <b>{slot.time}</b> (capacidade {slot.capacity})
@@ -1645,7 +1645,7 @@ export function ReplicateSlotForm({ slot }) {
         <label>Tipo de repetição</label>
         <div className="wd-chips">
           {modes.map(([m, lbl]) => (
-            <button key={m} type="button" className={`wd-chip ${mode === m ? "on" : ""}`} onClick={() => setMode(m)}>{lbl}</button>
+            <button data-access="agenda:2" key={m} type="button" className={`wd-chip ${mode === m ? "on" : ""}`} onClick={() => setMode(m)}>{lbl}</button>
           ))}
         </div>
       </div>
@@ -1810,7 +1810,7 @@ export function AlterarMensalidade({ client, compInicial }) {
       footer={<>
         <div style={{ flex: 1 }} />
         <button className="btn ghost" onClick={close}>Cancelar</button>
-        <button className="btn" onClick={salvar} disabled={busy || !valido}>{busy ? "Salvando…" : "Alterar"}</button>
+        <button data-access="financeiro:2" className="btn" onClick={salvar} disabled={busy || !valido}>{busy ? "Salvando…" : "Alterar"}</button>
       </>}
     >
       <div className="row2">
@@ -1833,7 +1833,7 @@ export function AlterarMensalidade({ client, compInicial }) {
 
       {escopo === "recorrente" && (
         <div className="field">
-          <button
+          <button data-access="financeiro:2"
             type="button"
             onClick={() => setAplicarNoMesAtual(!aplicarNoMesAtual)}
             style={{
@@ -1892,7 +1892,7 @@ export function AlterarMensalidade({ client, compInicial }) {
               const pago = inv?.status === "pago";
               const on = marcados.includes(comp);
               return (
-                <button
+                <button data-access="financeiro:2"
                   key={comp}
                   type="button"
                   disabled={pago}
@@ -1965,7 +1965,7 @@ export function AlterarMensalidade({ client, compInicial }) {
               <span className="hist-comp">{compLabel(p.competencia)}</span>
               <span className="hist-val"><b>{money(p.amountCents / 100)}</b>{p.motivo ? <span className="cli-sub"> · {p.motivo}</span> : null}</span>
               <span className="hist-st">
-                <button className="btn ghost sm" onClick={() => limpar(p.competencia)}>Remover</button>
+                <button data-access="financeiro:2" className="btn ghost sm" onClick={() => limpar(p.competencia)}>Remover</button>
               </span>
             </div>
           ))}
@@ -2042,7 +2042,7 @@ export function ReajusteGeral() {
       footer={<>
         <div style={{ flex: 1 }} />
         <button className="btn ghost" onClick={close}>Cancelar</button>
-        <button className="btn" onClick={salvar} disabled={busy || !valido}>{busy ? "Aplicando…" : "Aplicar reajuste"}</button>
+        <button data-access="financeiro:2" className="btn" onClick={salvar} disabled={busy || !valido}>{busy ? "Aplicando…" : "Aplicar reajuste"}</button>
       </>}
     >
       <div className="row2">
@@ -2065,7 +2065,7 @@ export function ReajusteGeral() {
       </div>
 
       <div className="field">
-        <button
+        <button data-access="financeiro:2"
           type="button"
           onClick={() => setAtualizarTabela(!atualizarTabela)}
           style={{
@@ -2095,7 +2095,7 @@ export function ReajusteGeral() {
           <label style={{ display: "flex", alignItems: "center", gap: ".5rem" }}>
             Alunas com valor individual <span className="cfg-count">{marcados.length}/{individuais.length}</span>
             <div style={{ flex: 1 }} />
-            <button className="btn ghost sm" type="button" onClick={todos}>
+            <button data-access="financeiro:2" className="btn ghost sm" type="button" onClick={todos}>
               {marcados.length === individuais.length ? "Desmarcar todas" : "Marcar todas"}
             </button>
           </label>
@@ -2106,7 +2106,7 @@ export function ReajusteGeral() {
             {individuais.map((c) => {
               const on = marcados.includes(c.id);
               return (
-                <button
+                <button data-access="financeiro:2"
                   key={c.id}
                   type="button"
                   onClick={() => toggle(c.id)}
@@ -2223,7 +2223,7 @@ export function AlterarVencimentoModal({ invoice, clientName }) {
       subheader={clientName ? <div className="cli-sub">Aluno(a): <b>{clientName}</b></div> : null}
       footer={<>
         <button className="btn ghost" onClick={close} disabled={busy}>Cancelar</button>
-        <button className="btn sec" onClick={save} disabled={busy}>{busy ? "Salvando…" : "Salvar vencimento"}</button>
+        <button data-access="financeiro:2" className="btn sec" onClick={save} disabled={busy}>{busy ? "Salvando…" : "Salvar vencimento"}</button>
       </>}
     >
       <div className="field">
@@ -2291,7 +2291,7 @@ function MensalidadesPanel({ client }) {
           {" · "}mensalidade <b style={{ color: "var(--terracota)" }}>{money(valorPadrao)}</b>
         </span>
         <div style={{ flex: 1 }} />
-        <button className="btn sec sm" onClick={() => open(<AlterarMensalidade client={client} />)}>
+        <button data-access="financeiro:2" className="btn sec sm" onClick={() => open(<AlterarMensalidade client={client} />)}>
           💰 Alterar valor
         </button>
       </div>
@@ -2324,13 +2324,13 @@ function MensalidadesPanel({ client }) {
               </span>
               {inv && inv.status === "pendente" && (
                 <span className="hist-act">
-                  <button className="btn ghost sm" disabled={busy} title="Corrigir ou alterar a data de vencimento deste boleto" onClick={() => open(<AlterarVencimentoModal invoice={inv} clientName={client.name} />)}>
+                  <button data-access="financeiro:2" className="btn ghost sm" disabled={busy} title="Corrigir ou alterar a data de vencimento deste boleto" onClick={() => open(<AlterarVencimentoModal invoice={inv} clientName={client.name} />)}>
                     ✏️ Vencimento
                   </button>
                   {!inv.pixCode && (
                     <button className="btn sec sm" disabled={busy} onClick={() => gerarPix(inv)}>💠 Gerar Pix</button>
                   )}
-                  <button className="btn sm" disabled={busy} onClick={() => baixar(inv)}>✓ Baixar</button>
+                  <button data-access="financeiro:2" className="btn sm" disabled={busy} onClick={() => baixar(inv)}>✓ Baixar</button>
                 </span>
               )}
             </div>
@@ -2388,7 +2388,7 @@ export function ClientProfile({ client, initialTab }) {
   const ehMensalista = c.plan === "mensalista";
   const temMatricula = c.matriculaStatus && c.matriculaStatus !== "nao_aplica";
   const pendentes = (data.invoices || []).filter((i) => i.clientId === c.id && i.status === "pendente").length;
-  const [tab, setTab] = useState(initialTab || "principal");
+  const [tab, setTab] = useState(initialTab === "editar" && !canAccess("alunos", 2) ? "principal" : initialTab || "principal");
   const form = useClientForm(c, () => setTab("principal"));
   const atividades = atividadesDoAluno(data, c);
   const presentesDisp = (data.presentes || []).filter((p) => p.clientId === c.id && p.situacao === "disponivel").length;
@@ -2396,10 +2396,10 @@ export function ClientProfile({ client, initialTab }) {
   const abas = [
     { k: "principal", ic: "⭐", label: "Principal", n: null },
     { k: "aulas", ic: "📋", label: "Aulas", n: hist.length },
-    ...(ehMensalista ? [{ k: "mens", ic: "🧾", label: "Mensalidades", n: pendentes || null }] : []),
+    ...(ehMensalista && (canAccess("financeiro") || canAccess("relatorios")) ? [{ k: "mens", ic: "🧾", label: "Mensalidades", n: pendentes || null }] : []),
     ...(ehMensalista || temMatricula ? [{ k: "repo", ic: "🔁", label: "Reposição", n: null }] : []),
     { k: "presentes", ic: "🎁", label: "Presentes", n: presentesDisp || null },
-    { k: "editar", ic: "✏️", label: "Editar", n: null },
+    ...(canAccess("alunos", 2) ? [{ k: "editar", ic: "✏️", label: "Editar", n: null }] : []),
   ];
 
   const resetPin = async () => {
@@ -2416,20 +2416,20 @@ export function ClientProfile({ client, initialTab }) {
 
   const rodape = tab === "editar" ? (
     <>
-      <button className="btn danger" onClick={del}>🗑 Excluir</button>
+      <button data-access="alunos:2" className="btn danger" onClick={del}>🗑 Excluir</button>
       <div style={{ flex: 1 }} />
       <button className="btn ghost" onClick={() => setTab("principal")}>Cancelar</button>
-      <button className="btn" onClick={form.save}>Salvar alterações</button>
+      <button data-access="alunos:2" className="btn" onClick={form.save}>Salvar alterações</button>
     </>
   ) : (
     <>
       <button className="btn wa" onClick={() => openWa(c.phone, `Olá ${c.name}! 💚`)}><WaIcon /> WhatsApp</button>
-      {c.status !== "cancelado" && <button className="btn sec" onClick={() => open(<PresentearForm client={c} />)}>🎁 Presentear</button>}
-      {ehMensalista && <button className="btn" onClick={() => open(<BatchBookForm client={c} />)}>📅 Agendar em lote</button>}
-      {ehMensalista && temAulaFutura && <button className="btn sec" onClick={() => open(<BatchUnbookForm client={c} />)}>🗑 Tirar em lote</button>}
-      {c.hasPin && <button className="btn ghost" onClick={resetPin}>🔑 Redefinir PIN</button>}
+      {c.status !== "cancelado" && <button data-access="alunos:2" className="btn sec" onClick={() => open(<PresentearForm client={c} />)}>🎁 Presentear</button>}
+      {ehMensalista && <button data-access="agenda:2" className="btn" onClick={() => open(<BatchBookForm client={c} />)}>📅 Agendar em lote</button>}
+      {ehMensalista && temAulaFutura && <button data-access="agenda:2" className="btn sec" onClick={() => open(<BatchUnbookForm client={c} />)}>🗑 Tirar em lote</button>}
+      {c.hasPin && <button data-access="alunos:2" className="btn ghost" onClick={resetPin}>🔑 Redefinir PIN</button>}
       <div style={{ flex: 1 }} />
-      <button className="btn sec" onClick={() => setTab("editar")}>✏️ Editar cadastro</button>
+      <button data-access="alunos:2" className="btn sec" onClick={() => setTab("editar")}>✏️ Editar cadastro</button>
     </>
   );
 
@@ -2485,7 +2485,7 @@ export function ClientProfile({ client, initialTab }) {
               <span className="k">Mensalidade</span>
               <span className="v" style={{ display: "flex", alignItems: "center", gap: ".4rem", justifyContent: "flex-end" }}>
                 <b style={{ color: "var(--terracota)" }}>{money(mensalidadeDe(c, data.meta))}</b>
-                <button className="btn ghost sm" onClick={() => open(<AlterarMensalidade client={c} />)}>Alterar</button>
+                <button data-access="financeiro:2" className="btn ghost sm" onClick={() => open(<AlterarMensalidade client={c} />)}>Alterar</button>
               </span>
             </div>
           )}
@@ -2511,7 +2511,7 @@ export function ClientProfile({ client, initialTab }) {
                   <span style={{ fontSize: ".84rem" }}>A aluna iniciou o agendamento mas o pagamento não foi confirmado. O acesso ao portal da aluna está bloqueado.</span>
                 </div>
                 <div style={{ display: "flex", gap: ".5rem", flexShrink: 0 }}>
-                  <button className="btn sm" onClick={() => open(<BaixarLeadModal client={c} />)}>
+                  <button data-access="alunos:2" className="btn sm" onClick={() => open(<BaixarLeadModal client={c} />)}>
                     ✓ Dar baixa
                   </button>
                   <button className="btn wa sm" style={{ whiteSpace: "nowrap" }} onClick={() => openWa(c.phone, `Olá ${c.name}! Tudo bem? 💚 Vi que você iniciou o agendamento da sua aula de crochê na Fios que Curam mas ainda não recebemos a confirmação do pagamento. Posso te ajudar a garantir sua vaga?`)}>
@@ -2527,7 +2527,7 @@ export function ClientProfile({ client, initialTab }) {
                   <span style={{ fontSize: ".84rem" }}>A aula/matrícula desta aluna foi paga! O cadastro pode ser concluído como aluna ativa.</span>
                 </div>
                 <div style={{ display: "flex", gap: ".5rem", flexShrink: 0 }}>
-                  <button className="btn sm ok" onClick={() => open(<BaixarLeadModal client={c} />)}>
+                  <button data-access="alunos:2" className="btn sm ok" onClick={() => open(<BaixarLeadModal client={c} />)}>
                     ✓ Concluir ativação
                   </button>
                 </div>
@@ -2660,8 +2660,8 @@ function MatriculaBlock({ client }) {
             : <>Para entrar no plano: 1ª mensalidade + taxa de matrícula (a aula avulsa não abate).</>}
         </div>
         <div style={{ display: "flex", gap: ".5rem", marginTop: ".6rem", flexWrap: "wrap" }}>
-          {aberta && <button className="btn sm" onClick={() => open(<ConfirmPayment booking={aberta} />)}>✓ Registrar pagamento</button>}
-          <button className={`btn sm ${aberta ? "ghost" : ""}`} onClick={() => open(<MatricularNovaForm client={client} />)}>
+          {aberta && <button data-access="financeiro:2" className="btn sm" onClick={() => open(<ConfirmPayment booking={aberta} />)}>✓ Registrar pagamento</button>}
+          <button data-access="financeiro:2" className={`btn sm ${aberta ? "ghost" : ""}`} onClick={() => open(<MatricularNovaForm client={client} />)}>
             🧵 {aberta ? "Refazer a matrícula" : "Matricular no plano"}
           </button>
         </div>
@@ -2735,7 +2735,7 @@ function MatriculaBlock({ client }) {
         {client.matriculaRefundAt ? <>Devolvida em {fmtDate(client.matriculaRefundAt)}.</> : null}
       </div>
       <div style={{ display: "flex", gap: ".5rem", marginTop: ".6rem", flexWrap: "wrap" }}>
-        {podeConverter && <button className="btn sm" onClick={() => open(<EnrollForm client={client} />)}>🧵 Matricular como mensalista</button>}
+        {podeConverter && <button data-access="financeiro:2" className="btn sm" onClick={() => open(<EnrollForm client={client} />)}>🧵 Matricular como mensalista</button>}
         {podeDevolver && <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={devolver}>↩️ Registrar devolução</button>}
       </div>
     </div>
@@ -2785,9 +2785,9 @@ export function EnrollForm({ client }) {
 
   return (
     <Modal title="Matricular como mensalista" footer={<>
-      <button className="btn ghost" onClick={() => open(<ClientProfile client={client} />)}>← Voltar ao perfil</button>
+      <button data-access="financeiro:2" className="btn ghost" onClick={() => open(<ClientProfile client={client} />)}>← Voltar ao perfil</button>
       <div style={{ flex: 1 }} />
-      <button className="btn" onClick={salvar} disabled={busy}>{busy ? "Matriculando…" : "Matricular"}</button>
+      <button data-access="financeiro:2" className="btn" onClick={salvar} disabled={busy}>{busy ? "Matriculando…" : "Matricular"}</button>
     </>}>
       <div className="help">
         Matricular gera a mensalidade e passa a emitir o Pix todo mês, com vencimento no dia {meta.vencimentoDia || 10}.
@@ -2916,7 +2916,7 @@ export function MatricularNovaForm({ client, plano: planoInicial, tipo: tipoInic
       `plano de ${freq}x por semana: ${money(aberta.valor)} (1ª mensalidade${aberta.taxa ? " + taxa de matrícula" : ""}).\n\n${aberta.pixCode || ""}`;
     return (
       <Modal title="Pix da matrícula" footer={<>
-        <button className="btn ghost" onClick={voltar}>← Voltar ao perfil</button>
+        <button data-access="financeiro:2" className="btn ghost" onClick={voltar}>← Voltar ao perfil</button>
       </>}>
         <div className="info-line"><b>Total</b><span><b style={{ color: "var(--terracota)" }}>{money(aberta.valor)}</b></span></div>
         <div className="cli-sub" style={{ marginBottom: ".8rem" }}>
@@ -2925,8 +2925,8 @@ export function MatricularNovaForm({ client, plano: planoInicial, tipo: tipoInic
         {aberta.pixCode ? (<>
           <PixQR code={aberta.pixCode} size={220} legenda="A aluna aponta a câmera do celular para pagar" />
           <div style={{ display: "flex", gap: ".5rem", flexWrap: "wrap", marginTop: ".8rem" }}>
-            <button className="btn sec sm" onClick={() => { navigator.clipboard?.writeText(aberta.pixCode); toast("Código Pix copiado! 📋", "success"); }}>📋 Copiar código</button>
-            {client.phone && <button className="btn wa sm" onClick={() => openWa(client.phone, msg)}><WaIcon /> Enviar no WhatsApp</button>}
+            <button data-access="financeiro:2" className="btn sec sm" onClick={() => { navigator.clipboard?.writeText(aberta.pixCode); toast("Código Pix copiado! 📋", "success"); }}>📋 Copiar código</button>
+            {client.phone && <button data-access="financeiro:2" className="btn wa sm" onClick={() => openWa(client.phone, msg)}><WaIcon /> Enviar no WhatsApp</button>}
           </div>
           <div className="help" style={{ marginTop: ".8rem" }}>Quando o Pix cair, ela vira mensalista sozinha. Se ela pagar de outro jeito, use "Registrar pagamento" na ficha.</div>
         </>) : (
@@ -2956,10 +2956,10 @@ export function MatricularNovaForm({ client, plano: planoInicial, tipo: tipoInic
 
   return (
     <Modal title="Matricular — taxa + 1ª mensalidade" confirmClose={sairSemMatricular} footer={<>
-      <button className="btn ghost" onClick={voltar}>← Voltar ao perfil</button>
+      <button data-access="financeiro:2" className="btn ghost" onClick={voltar}>← Voltar ao perfil</button>
       <div style={{ flex: 1 }} />
-      <button className="btn sec" onClick={recebiPorFora} disabled={busy}>✓ Recebi por fora</button>
-      <button className="btn" onClick={gerarPix} disabled={busy}>{busy ? "Aguarde…" : "💠 Gerar Pix"}</button>
+      <button data-access="financeiro:2" className="btn sec" onClick={recebiPorFora} disabled={busy}>✓ Recebi por fora</button>
+      <button data-access="financeiro:2" className="btn" onClick={gerarPix} disabled={busy}>{busy ? "Aguarde…" : "💠 Gerar Pix"}</button>
     </>}>
       <div className="help">
         Entrar no plano é o valor cheio: <b>1ª mensalidade + taxa de matrícula</b> — a aula avulsa não abate nada.
@@ -3057,10 +3057,10 @@ function MakeupBlock({ client }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: ".5rem" }}>
         <b style={{ color: "var(--brown)" }}>🔁 Reposição · {saldo} crédito(s)</b>
         <div style={{ display: "flex", gap: ".4rem", flexWrap: "wrap" }}>
-          <button className="btn ghost sm" onClick={() => open(<ExtraBookForm client={client} />)}>
+          <button data-access="agenda:2" className="btn ghost sm" onClick={() => open(<ExtraBookForm client={client} />)}>
             ➕ Aula extra
           </button>
-          <button className="btn sec sm" disabled={!saldo || !!bloqueio} onClick={() => open(<MakeupBookForm client={client} />)}>
+          <button data-access="agenda:2" className="btn sec sm" disabled={!saldo || !!bloqueio} onClick={() => open(<MakeupBookForm client={client} />)}>
             Marcar reposição
           </button>
         </div>
@@ -3201,10 +3201,10 @@ function PresentesBlock({ client }) {
         <b>🎁 Aulas de presente · {disponiveis.length} disponível(is)</b>
         <div style={{ display: "flex", gap: ".4rem", flexWrap: "wrap" }}>
           {disponiveis.length > 0 && (
-            <button className="btn ghost sm" onClick={() => open(<PresenteBookForm client={client} />)}>📅 Marcar horário</button>
+            <button data-access="agenda:2" className="btn ghost sm" onClick={() => open(<PresenteBookForm client={client} />)}>📅 Marcar horário</button>
           )}
           {client.status !== "cancelado" && (
-            <button className="btn sec sm" onClick={() => open(<PresentearForm client={client} />)}>🎁 Presentear</button>
+            <button data-access="alunos:2" className="btn sec sm" onClick={() => open(<PresentearForm client={client} />)}>🎁 Presentear</button>
           )}
         </div>
       </div>
@@ -3282,9 +3282,9 @@ export function PresentearForm({ client }) {
 
   return (
     <Modal title={`🎁 Presentear ${client.name.split(" ")[0]}`} footer={<>
-      <button className="btn ghost" onClick={voltar}>← Voltar ao perfil</button>
+      <button data-access="alunos:2" className="btn ghost" onClick={voltar}>← Voltar ao perfil</button>
       <div style={{ flex: 1 }} />
-      <button className="btn" onClick={salvar} disabled={busy || !!bloqueio}>{busy ? "Presenteando…" : "Presentear"}</button>
+      <button data-access="alunos:2" className="btn" onClick={salvar} disabled={busy || !!bloqueio}>{busy ? "Presenteando…" : "Presentear"}</button>
     </>}>
       <div className="help">
         A aula cai no portal de <b>{client.name}</b> como <b>presente</b> e ela escolhe o dia e o horário.
@@ -3432,8 +3432,8 @@ export function BatchBookForm({ client }) {
 
   return (
     <Modal title={`Agendar em lote — ${client.name}`} footer={<>
-      <button className="btn ghost" onClick={() => open(<ClientProfile client={client} />)}>← Voltar</button>
-      <button className="btn" onClick={save} disabled={busy || !totalAgendar}>Agendar {totalAgendar} aula(s)</button>
+      <button data-access="agenda:2" className="btn ghost" onClick={() => open(<ClientProfile client={client} />)}>← Voltar</button>
+      <button data-access="agenda:2" className="btn" onClick={save} disabled={busy || !totalAgendar}>Agendar {totalAgendar} aula(s)</button>
     </>}>
       <div className="cfg-preview" style={{ marginTop: 0, marginBottom: "1rem" }}>
         Escolha abaixo as <b>turmas que já existem</b> em que o(a) mensalista <b>{client.name}</b> vai entrar. Não cria turmas novas.
@@ -3470,7 +3470,7 @@ export function BatchBookForm({ client }) {
               const on = picked.has(g.key);
               const lotadaSempre = g.ok === 0;
               return (
-                <button key={g.key} type="button"
+                <button data-access="agenda:2" key={g.key} type="button"
                   className={`bb-card ${on ? "on" : ""} ${lotadaSempre ? "off" : ""}`}
                   style={on ? { "--uc": uc } : undefined}
                   onClick={() => !lotadaSempre && toggle(g.key)}
@@ -3608,8 +3608,8 @@ export function BatchUnbookForm({ client }) {
 
   return (
     <Modal title={`Tirar aulas em lote — ${client.name}`} footer={<>
-      <button className="btn ghost" onClick={() => open(<ClientProfile client={client} />)}>← Voltar</button>
-      <button className="btn danger" onClick={save} disabled={busy || !totalRemover}>🗑 Tirar {totalRemover} aula(s)</button>
+      <button data-access="agenda:2" className="btn ghost" onClick={() => open(<ClientProfile client={client} />)}>← Voltar</button>
+      <button data-access="agenda:2" className="btn danger" onClick={save} disabled={busy || !totalRemover}>🗑 Tirar {totalRemover} aula(s)</button>
     </>}>
       <div className="cfg-preview" style={{ marginTop: 0, marginBottom: "1rem" }}>
         Escolha as turmas de que <b>{client.name}</b> vai sair. Só aparecem as aulas <b>de hoje em diante</b> — o histórico não muda.
@@ -3619,7 +3619,7 @@ export function BatchUnbookForm({ client }) {
         <label>Até quando</label>
         <div className="seg">
           {[["todas", "Todas as futuras"], ["4", "4 semanas"], ["8", "8 semanas"], ["12", "12 semanas"]].map(([v, label]) => (
-            <button key={v} type="button" className={horizonte === v ? "on" : ""}
+            <button data-access="agenda:2" key={v} type="button" className={horizonte === v ? "on" : ""}
               onClick={() => { setHorizonte(v); setPicked(new Set()); }}>{label}</button>
           ))}
         </div>
@@ -3637,7 +3637,7 @@ export function BatchUnbookForm({ client }) {
             {grupos.map((g) => {
               const on = picked.has(g.key);
               return (
-                <button key={g.key} type="button" className={`bb-card rm ${on ? "on" : ""}`}
+                <button data-access="agenda:2" key={g.key} type="button" className={`bb-card rm ${on ? "on" : ""}`}
                   onClick={() => toggle(g.key)}>
                   <div className="bb-top">
                     <span className="bb-dia">{WEEKDAYS_SHORT[g.dow]}</span>
@@ -3736,6 +3736,7 @@ function useClientForm(client, onDone) {
     /* Próxima mensalidade JÁ com o que está sendo salvo: quem muda o dia de
        vencimento na mesma gravação em que inativa/reativa espera ler a data
        nova, não a antiga. */
+    if (!canAccess("financeiro", 2)) { delete payload.billingDay; delete payload.monthlyValue; }
     const proxCobranca = client && proximaCobranca(data, {
       ...client,
       plan: querMensal ? "mensalista" : "avulso",
@@ -3969,6 +3970,7 @@ function ClientFormFields({ f }) {
       <div className="row2">
         <div className="field"><label>Plano</label>
           <Select
+            disabled={!canAccess("financeiro", 2)}
             value={f.plano}
             onChange={f.setPlano}
             options={[
@@ -4020,6 +4022,7 @@ function ClientFormFields({ f }) {
             <div className="field" style={{ margin: 0 }}>
               <label style={{ display: "block", marginBottom: ".3rem" }}>Dia de vencimento (Boleto / PIX)</label>
               <Select
+                disabled={!canAccess("financeiro", 2)}
                 value={f.billingDay}
                 onChange={f.setBillingDay}
                 grid
@@ -4039,7 +4042,7 @@ function ClientFormFields({ f }) {
             <div style={{ display: "flex", gap: ".5rem", marginBottom: ".5rem" }}>
               <button
                 type="button"
-                onClick={() => f.setCustomMonthly("tabela")}
+                disabled={!canAccess("financeiro", 2)} onClick={() => f.setCustomMonthly("tabela")}
                 style={{
                   flex: 1,
                   padding: ".45rem .8rem",
@@ -4056,7 +4059,7 @@ function ClientFormFields({ f }) {
               </button>
               <button
                 type="button"
-                onClick={() => f.setCustomMonthly("individual")}
+                disabled={!canAccess("financeiro", 2)} onClick={() => f.setCustomMonthly("individual")}
                 style={{
                   flex: 1,
                   padding: ".45rem .8rem",
@@ -4082,7 +4085,7 @@ function ClientFormFields({ f }) {
                   step="0.01"
                   min="0"
                   placeholder={String(valorPlanoMeta(meta, f.plano))}
-                  value={f.monthlyValue}
+                  disabled={!canAccess("financeiro", 2)} value={f.monthlyValue}
                   onChange={(e) => f.setMonthlyValue(e.target.value)}
                   style={{ width: "100%", fontWeight: 600 }}
                 />
@@ -4127,10 +4130,10 @@ export function ClientForm({ client }) {
   };
   return (
     <Modal size="md" title={client ? "Editar aluno" : "Novo aluno"} footer={<>
-      {client && <button className="btn danger" onClick={del}>Excluir</button>}
+      {client && <button data-access="alunos:2" className="btn danger" onClick={del}>Excluir</button>}
       <div style={{ flex: 1 }} />
       <button className="btn ghost" onClick={close}>Cancelar</button>
-      <button className="btn" onClick={f.save}>Salvar</button>
+      <button data-access="alunos:2" className="btn" onClick={f.save}>Salvar</button>
     </>}>
       <ClientFormFields f={f} />
     </Modal>
@@ -4176,7 +4179,7 @@ export function FeriadoAulas({ date, unit, nome, aulas = [] }) {
       subheader={<div className="day-sub">🚫 <b>{nome}</b> · {fmtDateLong(date)}{unit ? <> · {unit}</> : null}</div>}
       footer={<>
         <button className="btn ghost" onClick={close}>Deixar como está</button>
-        <button className="btn danger" onClick={cancelarTudo} disabled={busy}>
+        <button data-access="configuracoes:2" className="btn danger" onClick={cancelarTudo} disabled={busy}>
           {busy ? "Cancelando…" : `Cancelar ${aulas.length} aula(s)`}
         </button>
       </>}
@@ -4200,3 +4203,30 @@ export function FeriadoAulas({ date, unit, nome, aulas = [] }) {
     </Modal>
   );
 }
+
+// Metadados estáveis de autorização dos diálogos (preservados no build).
+SlotForm.accessModule = "agenda";
+EditSlotForm.accessModule = "agenda";
+ReplicateTurmaForm.accessModule = "agenda";
+ReplicateSlotForm.accessModule = "agenda";
+SlotDetail.accessModule = "agenda";
+BookingForm.accessModule = "agenda";
+ManageBooking.accessModule = "agenda";
+WaitlistForm.accessModule = "agenda";
+MakeupBookForm.accessModule = "agenda";
+ExtraBookForm.accessModule = "agenda";
+PresenteBookForm.accessModule = "agenda";
+BatchBookForm.accessModule = "agenda";
+BatchUnbookForm.accessModule = "agenda";
+ClientForm.accessModule = "alunos";
+BaixarLeadModal.accessModule = "alunos";
+PresentearForm.accessModule = "alunos";
+ConfirmPayment.accessModule = "financeiro";
+PaymentRegister.accessModule = "financeiro";
+AlterarMensalidade.accessModule = "financeiro";
+AlterarVencimentoModal.accessModule = "financeiro";
+ReajusteGeral.accessModule = "financeiro";
+EnrollForm.accessModule = "financeiro";
+MatricularNovaForm.accessModule = "financeiro";
+FeriadoAulas.accessModule = "configuracoes";
+ClientProfile.accessReadModule = "alunos";

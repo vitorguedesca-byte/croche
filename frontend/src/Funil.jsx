@@ -214,7 +214,7 @@ export function LeadForm({ lead }) {
     <Modal size="md" title={lead ? `Editar lead · ${lead.nome}` : "Nova lead"} footer={<>
       <div style={{ flex: 1 }} />
       <button className="btn ghost" onClick={lead ? () => open(<LeadFicha id={lead.id} />) : close}>{lead ? "Voltar" : "Cancelar"}</button>
-      <button className="btn" onClick={salvar} disabled={busy}>{busy ? "Salvando…" : lead ? "Salvar" : "Anotar lead"}</button>
+      <button data-access="funil:2" className="btn" onClick={salvar} disabled={busy}>{busy ? "Salvando…" : lead ? "Salvar" : "Anotar lead"}</button>
     </>}>
       <div className="cfg-sec" style={{ padding: 0 }}>
         {!lead && <div className="help" style={{ marginTop: 0, marginBottom: "1rem" }}>Para quem chamou no Instagram, ligou ou passou na escola. Quem fala com o robô do WhatsApp ou marca pelo site entra no funil sozinha.</div>}
@@ -279,7 +279,7 @@ function RegistrarContato({ lead, texto: textoInicial = "" }) {
     <Modal size="md" title={`Contato com ${lead.nome}`} footer={<>
       <div style={{ flex: 1 }} />
       <button className="btn ghost" onClick={() => open(<LeadFicha id={lead.id} />)}>Não registrar</button>
-      <button className="btn" onClick={salvar} disabled={busy}>{busy ? "Salvando…" : "Registrar contato"}</button>
+      <button data-access="funil:2" className="btn" onClick={salvar} disabled={busy}>{busy ? "Salvando…" : "Registrar contato"}</button>
     </>}>
       <div className="cfg-sec" style={{ padding: 0 }}>
         <div className="field">
@@ -313,7 +313,7 @@ function Anotacao({ lead }) {
     <Modal size="md" title={`Anotação · ${lead.nome}`} footer={<>
       <div style={{ flex: 1 }} />
       <button className="btn ghost" onClick={() => open(<LeadFicha id={lead.id} />)}>Voltar</button>
-      <button className="btn" onClick={salvar} disabled={busy}>{busy ? "Salvando…" : "Salvar anotação"}</button>
+      <button data-access="funil:2" className="btn" onClick={salvar} disabled={busy}>{busy ? "Salvando…" : "Salvar anotação"}</button>
     </>}>
       <div className="field">
         <label>Anotação</label>
@@ -348,7 +348,7 @@ function DarComoPerdida({ lead }) {
     <Modal size="md" title={`Dar como perdida · ${lead.nome}`} footer={<>
       <div style={{ flex: 1 }} />
       <button className="btn ghost" onClick={() => open(<LeadFicha id={lead.id} />)}>Voltar</button>
-      <button className="btn danger" onClick={salvar} disabled={busy || !motivo}>{busy ? "Salvando…" : "Dar como perdida"}</button>
+      <button data-access="funil:2" className="btn danger" onClick={salvar} disabled={busy || !motivo}>{busy ? "Salvando…" : "Dar como perdida"}</button>
     </>}>
       <div className="cfg-sec" style={{ padding: 0 }}>
         <div className="field">
@@ -439,12 +439,12 @@ export function LeadFicha({ id }) {
       <div className="cfg-sec" style={{ padding: 0 }}>
         <div className="fn-acoes">
           {lead.phone && <button className="btn wa sm" onClick={chamar}><WaIcon /> Mandar mensagem</button>}
-          <button className="btn sec sm" onClick={() => open(<RegistrarContato lead={lead} />)}>📞 Registrar contato</button>
-          <button className="btn ghost sm" onClick={() => open(<Anotacao lead={lead} />)}>📝 Anotação</button>
-          <button className="btn ghost sm" onClick={() => open(<LeadForm lead={lead} />)}>✏️ Editar</button>
+          <button data-access="funil:2" className="btn sec sm" onClick={() => open(<RegistrarContato lead={lead} />)}>📞 Registrar contato</button>
+          <button data-access="funil:2" className="btn ghost sm" onClick={() => open(<Anotacao lead={lead} />)}>📝 Anotação</button>
+          <button data-access="funil:2" className="btn ghost sm" onClick={() => open(<LeadForm lead={lead} />)}>✏️ Editar</button>
           {ficha && <button className="btn ghost sm" onClick={() => open(<ClientProfile client={ficha} />)}>👩 Ficha da aluna</button>}
-          {aberta && <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={() => open(<DarComoPerdida lead={lead} />)}>✖ Perdida</button>}
-          {lead.etapa === "perdida" && lead.perdidaAt && <button className="btn ok sm" onClick={reabrir}>↩️ Reabrir</button>}
+          {aberta && <button data-access="funil:2" className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={() => open(<DarComoPerdida lead={lead} />)}>✖ Perdida</button>}
+          {lead.etapa === "perdida" && lead.perdidaAt && <button data-access="funil:2" className="btn ok sm" onClick={reabrir}>↩️ Reabrir</button>}
         </div>
 
         <div className="row2" style={{ alignItems: "start" }}>
@@ -467,7 +467,7 @@ export function LeadFicha({ id }) {
             <EscolherData value={prox ?? lead.proximoContato ?? ""} onChange={setProx} />
             {prontoParaSalvar && (
               <div style={{ marginTop: ".5rem" }}>
-                <button className="btn sm" onClick={salvarRetorno} disabled={busy}>{busy ? "Salvando…" : prox ? `Salvar retorno para ${fmtDate(prox)}` : "Desmarcar retorno"}</button>
+                <button data-access="funil:2" className="btn sm" onClick={salvarRetorno} disabled={busy}>{busy ? "Salvando…" : prox ? `Salvar retorno para ${fmtDate(prox)}` : "Desmarcar retorno"}</button>
                 <button className="btn ghost sm" style={{ marginLeft: ".4rem" }} onClick={() => setProx(null)}>Cancelar</button>
               </div>
             )}
@@ -901,7 +901,7 @@ export default function Funil({ params }) {
                   <td data-l="Último contato">{l.ultimoContatoAt ? quandoFoi(l.ultimoContatoAt) : <span className="cli-sub">nenhum ainda</span>}</td>
                   <td className="td-actions">
                     {l.phone && <button className="btn wa sm" title="WhatsApp" onClick={() => chamar(l)}><WaIcon /></button>}
-                    <button className="btn sec sm" onClick={() => open(<RegistrarContato lead={l} />)}>📞 Registrar contato</button>
+                    <button data-access="funil:2" className="btn sec sm" onClick={() => open(<RegistrarContato lead={l} />)}>📞 Registrar contato</button>
                   </td>
                 </tr>
               ))}
@@ -940,3 +940,9 @@ export default function Funil({ params }) {
     )}
   </>);
 }
+
+// Metadados estáveis de autorização dos diálogos (preservados no build).
+RegistrarContato.accessModule = "funil";
+Anotacao.accessModule = "funil";
+DarComoPerdida.accessModule = "funil";
+LeadForm.accessModule = "funil";

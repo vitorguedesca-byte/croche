@@ -45,3 +45,6 @@ Desktop.ini
 .idea/
 .claude/
 *.swp
+
+# Evidências de QA local
+.qa/

@@ -1,0 +1,29 @@
+ALTER TABLE `AdminUser`
+  ADD COLUMN `active` BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN `profileId` INTEGER NULL,
+  ADD COLUMN `sessionVersion` INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN `lastLoginAt` DATETIME(3) NULL;
+
+CREATE TABLE `AccessProfile` (
+  `id` INTEGER NOT NULL AUTO_INCREMENT,
+  `name` VARCHAR(80) NOT NULL,
+  `description` VARCHAR(250) NOT NULL DEFAULT '',
+  `permissions` TEXT NOT NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE INDEX `AccessProfile_name_key` (`name`),
+  PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE `AccessAudit` (
+  `id` INTEGER NOT NULL AUTO_INCREMENT,
+  `actor` VARCHAR(60) NOT NULL,
+  `action` VARCHAR(40) NOT NULL,
+  `target` VARCHAR(120) NOT NULL,
+  `detail` TEXT NOT NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+ALTER TABLE `AdminUser` ADD CONSTRAINT `AdminUser_profileId_fkey`
+  FOREIGN KEY (`profileId`) REFERENCES `AccessProfile` (`id`)
+  ON DELETE RESTRICT ON UPDATE CASCADE;

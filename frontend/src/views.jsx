@@ -615,7 +615,7 @@ export function Marcacoes() {
                 </td>
                 <td className="td-actions">
                   <button className="btn wa sm" title="WhatsApp" onClick={() => openWa(b.phone, `Olá ${b.clientName}! 💚`)}><WaIcon /></button>
-                  <button className="btn sec sm" onClick={() => open(<ManageBooking booking={b} />)}>Gerir</button>
+                  <button data-access="agenda:2" className="btn sec sm" onClick={() => open(<ManageBooking booking={b} />)}>Gerir</button>
                 </td>
               </tr>
             );
@@ -877,20 +877,20 @@ export function Clientes({ params, go }) {
                     <button className="btn wa sm" title="WhatsApp" onClick={() => openWa(c.phone, waMsg(c))}><WaIcon /></button>
                     {tab === "ex-aluno" ? (
                       <>
-                        <button className="btn ok sm" title="Restaurar aluna e suas aulas salvas na grade" onClick={() => reativar(c)}>
+                        <button data-access="alunos:2" className="btn ok sm" title="Restaurar aluna e suas aulas salvas na grade" onClick={() => reativar(c)}>
                           🔄 Restaurar
                         </button>
-                        <button className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>
+                        <button data-access="alunos:2" className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>
                           Editar
                         </button>
-                        <button className="btn ghost sm" style={{ color: "var(--danger)" }} title="Excluir cadastro definitivamente" onClick={() => delClientDefinitivo(c)}>
+                        <button data-access="alunos:2" className="btn ghost sm" style={{ color: "var(--danger)" }} title="Excluir cadastro definitivamente" onClick={() => delClientDefinitivo(c)}>
                           🗑
                         </button>
                       </>
                     ) : (
                       <>
                         {(tab === "lead" || (tab === "novato" && !aulaAvulsaDe(data, c).paga)) && (
-                          <button
+                          <button data-access="alunos:2"
                             className="btn sm"
                             title="Dar baixa no pagamento da 1ª aula / matrícula"
                             onClick={() => open(<BaixarLeadModal client={c} />)}
@@ -898,9 +898,9 @@ export function Clientes({ params, go }) {
                             ✓ Baixar
                           </button>
                         )}
-                        {c.hasPin && <button className="btn sec sm" onClick={() => resetPin(c)}>🔒 Resetar PIN</button>}
-                        <button className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>Editar</button>
-                        <button className="btn ghost sm" style={{ color: "var(--danger)" }} title="Inativar aluna (limpar grade e mover para Ex-Alunos)" onClick={() => inativarAluna(c)}>
+                        {c.hasPin && <button data-access="alunos:2" className="btn sec sm" onClick={() => resetPin(c)}>🔒 Resetar PIN</button>}
+                        <button data-access="alunos:2" className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>Editar</button>
+                        <button data-access="alunos:2" className="btn ghost sm" style={{ color: "var(--danger)" }} title="Inativar aluna (limpar grade e mover para Ex-Alunos)" onClick={() => inativarAluna(c)}>
                           🚫 Inativar
                         </button>
                       </>
@@ -1129,7 +1129,7 @@ function FinanceiroOperacao({ unit }) {
           <button className="navbtn" onClick={() => setComp(addComp(comp, 1))} disabled={comp >= atual}>→</button>
           {!ehMesAtual && <button className="btn ghost sm" onClick={() => setComp(atual)}>Mês atual</button>}
         </div>
-        <button
+        <button data-access="financeiro:2"
           className="btn"
           disabled={busy || !todasMensalistas.length || !ehMesAtual}
           title={ehMesAtual ? "" : "Boletos só são gerados para o mês atual"}
@@ -1351,11 +1351,11 @@ function FinanceiroOperacao({ unit }) {
                     </td>
                     <td className="td-actions">
                       {podeMatricular && (
-                        <button className="btn sm" title="Aluna nova: taxa + 1ª mensalidade (Pix ou recebido por fora)" onClick={() => open(<MatricularNovaForm client={c} />)}>
+                        <button data-access="financeiro:2" className="btn sm" title="Aluna nova: taxa + 1ª mensalidade (Pix ou recebido por fora)" onClick={() => open(<MatricularNovaForm client={c} />)}>
                           🧵 Matricular
                         </button>
                       )}
-                      <button
+                      <button data-access="alunos:2"
                         className="btn ghost sm"
                         title="Já era aluna antes do sistema: marque “Primeira aula? Não — já é aluno(a)” e escolha o plano (sem taxa)"
                         onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}
@@ -1477,7 +1477,7 @@ function FinanceiroOperacao({ unit }) {
                   </td>
                   <td className="td-actions">
                     {c.status !== "cancelado" && (
-                      <button
+                      <button data-access="financeiro:2"
                         className="btn ghost sm"
                         title="Alterar o valor da mensalidade"
                         onClick={() => open(<AlterarMensalidade client={c} compInicial={comp} />)}
@@ -1495,7 +1495,7 @@ function FinanceiroOperacao({ unit }) {
                         🚫 Inativa (Ex-Alunos)
                       </span>
                     ) : !inv && ehMesAtual ? (
-                      <button className="btn sm" disabled={busy} onClick={() => gerar(c)}>
+                      <button data-access="financeiro:2" className="btn sm" disabled={busy} onClick={() => gerar(c)}>
                         🧾 Gerar boleto
                       </button>
                     ) : null}
@@ -1519,16 +1519,16 @@ function FinanceiroOperacao({ unit }) {
                             💠 Pix
                           </button>
                         ) : inv.pixCode ? (
-                          <button className="btn sec sm" disabled={busy} onClick={() => reemitir(inv)}
+                          <button data-access="financeiro:2" className="btn sec sm" disabled={busy} onClick={() => reemitir(inv)}
                             title="O código guardado cobra o valor antigo (ou venceu). Gera um novo com o valor de hoje e copia.">
                             💠 Atualizar Pix
                           </button>
                         ) : (
-                          <button className="btn sec sm" disabled={busy} onClick={() => reemitir(inv)} title="Gerar código Pix desta mensalidade">
+                          <button data-access="financeiro:2" className="btn sec sm" disabled={busy} onClick={() => reemitir(inv)} title="Gerar código Pix desta mensalidade">
                             💠 Gerar Pix
                           </button>
                         )}
-                        <button className="btn sm" disabled={busy} onClick={() => marcarPago(c, inv)}>
+                        <button data-access="financeiro:2" className="btn sm" disabled={busy} onClick={() => marcarPago(c, inv)}>
                           ✓ Baixar
                         </button>
                       </>
@@ -2020,7 +2020,7 @@ export function Depoimentos() {
         </div>
       </div>
 
-      <button className="btn" style={{ marginTop: "1.4rem" }} onClick={save} disabled={busy}>
+      <button data-access="depoimentos:2" className="btn" style={{ marginTop: "1.4rem" }} onClick={save} disabled={busy}>
         {busy ? "Salvando…" : "💾 Salvar depoimento"}
       </button>
     </div>
@@ -2031,7 +2031,7 @@ export function Depoimentos() {
     <div className="panel">
       <div className="panel-h">
         <h2>⭐ Depoimentos <span className="muted-note">· {list.length} no total</span></h2>
-        <button className="btn" onClick={openNew}>＋ Novo depoimento</button>
+        <button data-access="depoimentos:2" className="btn" onClick={openNew}>＋ Novo depoimento</button>
       </div>
 
       {loading ? <div className="empty"><div className="ic">⭐</div><p>Carregando…</p></div>
@@ -2063,11 +2063,11 @@ export function Depoimentos() {
                   <p className="dep-text">"{t.text}"</p>
                 </div>
                 <div className="dep-actions">
-                  <button className="btn sec sm" onClick={() => openEdit(t)}>✏️ Editar</button>
-                  <button className="btn ghost sm" onClick={() => toggleActive(t)}>
+                  <button data-access="depoimentos:2" className="btn sec sm" onClick={() => openEdit(t)}>✏️ Editar</button>
+                  <button data-access="depoimentos:2" className="btn ghost sm" onClick={() => toggleActive(t)}>
                     {t.active ? "🙈 Ocultar" : "👁 Mostrar"}
                   </button>
-                  <button className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={() => remove(t)}>🗑 Excluir</button>
+                  <button data-access="depoimentos:2" className="btn ghost sm" style={{ color: "var(--danger)" }} onClick={() => remove(t)}>🗑 Excluir</button>
                 </div>
               </div>
             ))}
@@ -2230,7 +2230,7 @@ export function Aniversariantes() {
               <td className="td-actions">
                 <button className="btn wa sm" title="Perguntar no WhatsApp" disabled={!c.phone}
                   onClick={() => openWa(c.phone, `Oi ${c.name.split(" ")[0]}! 💚 Estamos completando o cadastro aqui na Fios que Curam — qual é a sua data de nascimento? Queremos te parabenizar no seu dia! 🎂`)}><WaIcon /> Perguntar</button>
-                <button className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>Preencher</button>
+                <button data-access="alunos:2" className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>Preencher</button>
               </td>
             </tr>
           ))}

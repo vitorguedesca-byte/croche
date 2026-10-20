@@ -1,0 +1,100 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import express from "express";
+import { readFileSync } from "node:fs";
+import { createAccessControl } from "../src/accessControl.js";
+import { allowed, permissionsFor, validatePermissions, filterState, requirement } from "../src/accessPolicy.js";
+import { memoryPrisma } from "./access-fixture.mjs";
+
+test("Admin tem acesso total; perfis desconhecidos e permissões inválidas são negados", () => {
+  const source = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  for (const [, path] of source.matchAll(/"(\/api\/[^"]+)"/g)) for (const method of ["GET", "POST", "PATCH", "DELETE", "PUT"]) assert.equal(allowed({ role: "admin", active: true }, method, path), true);
+  assert.deepEqual(permissionsFor({ role: "qualquer" }), {});
+  assert.equal(allowed({ role: "equipe" }, "POST", "/api/admin/users"), false);
+  for (const permissions of [{ admin: 2 }, { agenda: "2" }, { agenda: -1 }, { agenda: 3 }, { relatorios: 2 }, [], {}]) assert.throws(() => validatePermissions(permissions));
+  assert.deepEqual(requirement("POST", "/api/invoices/1/pay"), [["financeiro", 2]]);
+  assert.deepEqual(requirement("POST", "/api/futura"), [["admin", 2]]);
+});
+
+test("estado compartilhado não expõe dados financeiros ou contatos à instrutora", () => {
+  const state = { meta: {}, clients: [{ id: 1, name: "Aluna", cpf: "sigiloso", phone: "123", pin: "hash", monthlyValue: 100 }], slots: [{ id: 1, waitlist: [{ phone: "123" }] }], bookings: [{ id: 2, clientName: "Aluna", phone: "123", value: 80, txid: "pix", absenceReason: "pessoal" }], invoices: [{ id: 1 }], precos: [1], makeups: [1], presentes: [1], waRecebidas: [1], pixAlertas: [1], funilAvisos: [1] };
+  const result = filterState(state, { role: "instrutora", active: true });
+  const json = JSON.stringify(result);
+  for (const value of ["sigiloso", "hash", "123", "pix", "pessoal"]) assert.equal(json.includes('"' + value + '"'), false);
+  assert.deepEqual(result.invoices, []); assert.deepEqual(result.waRecebidas, []);
+  assert.strictEqual(filterState(state, { role: "admin" }), state);
+  const marketing = filterState(state, { role: "equipe", active: true, profile: { permissions: JSON.stringify({ whatsapp: 2 }) } });
+  assert.equal(marketing.clients[0].phone, "123", "contatos necessários para o disparo");
+  assert.equal(marketing.clients[0].cpf, undefined);
+  assert.deepEqual(marketing.invoices, []);
+});
+
+test("gestão por HTTP: usuários, perfis, sessões e auditoria", async t => {
+  const prisma = memoryPrisma();
+  let clock = Date.now();
+  const app = express(); app.use(express.json());
+  const publicPath = req => /^\/api\/admin\/(exists|setup|register|login)$/.test(req.path) || ["/api/bookings", "/api/settings", "/api/testimonials"].includes(req.path);
+  const access = createAccessControl({ prisma, isPublicApi: publicPath, now: () => clock });
+  app.use(access.middleware); app.use(access.router);
+  app.get("/api/state", (req, res) => res.json({ access: access.safeUser(req.admin) }));
+  app.all(["/api/slots", "/api/bookings", "/api/clients/1", "/api/invoices/1/pay", "/api/testimonials", "/api/unknown"], (_req, res) => res.json({ ok: true }));
+  app.use((e, _req, res, _next) => res.status(500).json({ error: e.message }));
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise(resolve => server.once("listening", resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const request = async (method, path, token, body) => {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, { method, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    return { status: response.status, data: await response.json() };
+  };
+  assert.equal((await request("GET", "/api/state")).status, 401, "primeiro uso não abre dados sem autenticação");
+  const setup = await request("POST", "/api/admin/setup", null, { username: "admin", password: "TesteAcesso123" });
+  assert.equal(setup.status, 201); const admin = setup.data.token;
+  assert.equal((await request("POST", "/api/admin/register", null, { username: "intruso", password: "TesteAcesso123" })).status, 409);
+  assert.equal((await request("PATCH", "/api/admin/users/1", admin, { active: false })).status, 409, "último Admin não pode ser bloqueado");
+  assert.equal((await request("PATCH", "/api/admin/users/1", admin, { role: "instrutora" })).status, 409);
+  assert.equal((await request("POST", "/api/admin/users", admin, { username: "curta", password: "1234", role: "admin" })).status, 400);
+  assert.equal((await request("POST", "/api/admin/users", admin, { username: "equipe", password: "TesteAcesso123", role: "x" })).status, 400);
+  const p = await request("POST", "/api/admin/profiles", admin, { name: "Atendimento", description: "Equipe", permissions: { agenda: 1, alunos: 2 } });
+  assert.equal(p.status, 201); const profileId = p.data.id;
+  const created = await request("POST", "/api/admin/users", admin, { username: "equipe", nome: "Atendente", password: "TesteAcesso123", role: "equipe", profileId });
+  assert.equal(created.status, 201); assert.equal("pass" in created.data, false); const id = created.data.id;
+  assert.equal((await request("POST", "/api/admin/users", admin, { username: "equipe", password: "TesteAcesso123", role: "admin" })).status, 409);
+  const login = await request("POST", "/api/admin/login", null, { username: "EQUIPE", password: "TesteAcesso123" });
+  assert.equal(login.status, 200); let token = login.data.token;
+  assert.equal((await request("GET", "/api/admin/me", token)).data.profileName, "Atendimento");
+  assert.equal((await request("GET", "/api/state", token)).status, 200);
+  for (const [method, path, body] of [["POST", "/api/slots"], ["POST", "/api/bookings"], ["GET", "/api/admin/users"], ["POST", "/api/admin/users", { role: "admin" }], ["GET", "/api/admin/profiles"], ["POST", "/api/invoices/1/pay"], ["POST", "/api/unknown"]]) assert.equal((await request(method, path, token, body)).status, 403, path);
+  assert.equal((await request("PATCH", "/api/clients/1", token, { name: "Aluna" })).status, 200);
+  assert.equal((await request("PATCH", "/api/clients/1", token, { monthlyValue: 1 })).status, 403);
+  assert.equal((await request("DELETE", `/api/admin/profiles/${profileId}`, admin)).status, 409);
+  await request("PATCH", `/api/admin/profiles/${profileId}`, admin, { name: "Atendimento", permissions: { agenda: 2, alunos: 1 } });
+  assert.equal((await request("POST", "/api/slots", token)).status, 200, "perfil atualizado afeta sessão aberta");
+  assert.equal((await request("PATCH", "/api/clients/1", token, { name: "Aluna" })).status, 403);
+  assert.equal((await request("PATCH", `/api/admin/users/${id}`, admin, { active: false })).status, 200);
+  assert.equal((await request("GET", "/api/state", token)).status, 401);
+  assert.equal((await request("POST", "/api/admin/login", null, { username: "equipe", password: "TesteAcesso123" })).status, 401);
+  await request("PATCH", `/api/admin/users/${id}`, admin, { active: true });
+  token = (await request("POST", "/api/admin/login", null, { username: "equipe", password: "TesteAcesso123" })).data.token;
+  await request("PATCH", `/api/admin/users/${id}`, admin, { password: "NovaSenha123" });
+  assert.equal((await request("GET", "/api/state", token)).status, 401);
+  assert.equal((await request("POST", "/api/admin/login", null, { username: "equipe", password: "TesteAcesso123" })).status, 401);
+  token = (await request("POST", "/api/admin/login", null, { username: "equipe", password: "NovaSenha123" })).data.token;
+  assert.equal((await request("POST", `/api/admin/users/${id}/revoke`, admin)).status, 200);
+  assert.equal((await request("GET", "/api/state", token)).status, 401);
+  const history = await request("GET", "/api/admin/access-audit", admin);
+  assert.ok(history.data.length > 5);
+  assert.equal(JSON.stringify(history.data).includes("NovaSenha123"), false);
+  assert.equal(JSON.stringify(history.data).includes(admin), false);
+  const users = await request("GET", "/api/admin/users", admin);
+  assert.equal(JSON.stringify(users.data).includes("$2"), false);
+  const other = await request("POST", "/api/admin/users", admin, { username: "admin2", password: "TesteAcesso123", role: "admin" });
+  const admin2 = (await request("POST", "/api/admin/login", null, { username: "admin2", password: "TesteAcesso123" })).data.token;
+  const concurrent = await Promise.all([
+    request("PATCH", "/api/admin/users/1", admin, { active: false }),
+    request("PATCH", `/api/admin/users/${other.data.id}`, admin2, { active: false }),
+  ]);
+  assert.ok(concurrent.some(r => r.status === 200));
+  assert.equal(await prisma.adminUser.count({ where: { role: "admin", active: true } }), 1, "edições simultâneas mantêm Admin ativo");
+  clock += 13 * 3600000;
+  assert.equal((await request("GET", "/api/state", admin)).status, 401, "sessão expira");
+});

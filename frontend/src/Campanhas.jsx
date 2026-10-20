@@ -176,7 +176,7 @@ export function CampanhaForm({ campanha }) {
     <Modal size="md" title={campanha ? `Editar campanha · ${campanha.codigo}` : "Nova campanha"} footer={<>
       <div style={{ flex: 1 }} />
       <button className="btn ghost" onClick={close}>Cancelar</button>
-      <button className="btn" onClick={salvar} disabled={busy}>{busy ? "Salvando…" : campanha ? "Salvar" : "Criar campanha"}</button>
+      <button data-access="campanhas:2" className="btn" onClick={salvar} disabled={busy}>{busy ? "Salvando…" : campanha ? "Salvar" : "Criar campanha"}</button>
     </>}>
       {/* .cfg-sec dá aos campos e textos de ajuda o mesmo acabamento das Configurações */}
       <div className="cfg-sec" style={{ padding: 0 }}>
@@ -430,7 +430,7 @@ Cada uma escolhe o horário pelo portal, sem pagar.`,
             <label>Aplicar o código na mensalidade de uma aluna</label>
             <Select value={aluna} onChange={setAluna} options={opcoesAlunas} placeholder="Escolha a aluna" searchable />
           </div>
-          <button className="btn sec sm" onClick={aplicar} disabled={!aluna}>Aplicar código</button>
+          <button data-access="campanhas:2" className="btn sec sm" onClick={aplicar} disabled={!aluna}>Aplicar código</button>
           <div className="help">Para quando ela mandar o código pelo WhatsApp.</div>
         </div>
       )}
@@ -467,15 +467,15 @@ Cada uma escolhe o horário pelo portal, sem pagar.`,
                     <td data-l="">
                       <div style={{ display: "flex", gap: ".35rem", flexWrap: "wrap", justifyContent: "flex-end" }}>
                         {c.premio && u.status === "confirmado" && (
-                          <button className={`btn sm ${u.premioEntregueAt ? "ghost" : "sec"}`} onClick={() => premio(u)}>
+                          <button data-access="campanhas:2" className={`btn sm ${u.premioEntregueAt ? "ghost" : "sec"}`} onClick={() => premio(u)}>
                             {u.premioEntregueAt ? `🎁 Entregue ${fmtDate(u.premioEntregueAt)}` : "🎁 Marcar entregue"}
                           </button>
                         )}
                         {u.status === "confirmado" && u.clientId && (
-                          <button className="btn ghost sm" onClick={() => darAula(u)}>🎁 Dar aula</button>
+                          <button data-access="campanhas:2" className="btn ghost sm" onClick={() => darAula(u)}>🎁 Dar aula</button>
                         )}
                         {u.status !== "cancelado" && u.status !== "expirado" && (
-                          <button className="btn ghost sm" onClick={() => cancelar(u)}>Cancelar uso</button>
+                          <button data-access="campanhas:2" className="btn ghost sm" onClick={() => cancelar(u)}>Cancelar uso</button>
                         )}
                       </div>
                     </td>
@@ -559,7 +559,7 @@ export default function Campanhas() {
           <div className="empty">
             <div className="ic">🎟️</div>
             <p>{todas.length ? "Nenhuma campanha nesta aba." : "Nenhuma campanha ainda."}</p>
-            {!todas.length && <button className="btn" onClick={() => open(<CampanhaForm />)}>＋ Nova campanha</button>}
+            {!todas.length && <button data-access="campanhas:2" className="btn" onClick={() => open(<CampanhaForm />)}>＋ Nova campanha</button>}
           </div>
         ) : (
           <table>
@@ -587,9 +587,9 @@ export default function Campanhas() {
                   <td data-l="">
                     <div style={{ display: "flex", gap: ".35rem", flexWrap: "wrap", justifyContent: "flex-end" }}>
                       <button className="btn sec sm" onClick={() => open(<UsosDaCampanha campanha={c} />)}>Usos</button>
-                      <button className="btn ghost sm" onClick={() => open(<CampanhaForm campanha={c} />)}>Editar</button>
-                      <button className="btn ghost sm" onClick={() => alternarAtivo(c)}>{c.ativo ? "Pausar" : "Reativar"}</button>
-                      {c.usos.total === 0 && <button className="btn ghost sm" onClick={() => excluir(c)}>Excluir</button>}
+                      <button data-access="campanhas:2" className="btn ghost sm" onClick={() => open(<CampanhaForm campanha={c} />)}>Editar</button>
+                      <button data-access="campanhas:2" className="btn ghost sm" onClick={() => alternarAtivo(c)}>{c.ativo ? "Pausar" : "Reativar"}</button>
+                      {c.usos.total === 0 && <button data-access="campanhas:2" className="btn ghost sm" onClick={() => excluir(c)}>Excluir</button>}
                     </div>
                   </td>
                 </tr>
@@ -600,3 +600,6 @@ export default function Campanhas() {
     </div>
   </>);
 }
+
+// Metadados estáveis de autorização dos diálogos (preservados no build).
+CampanhaForm.accessModule = "campanhas";

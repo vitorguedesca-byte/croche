@@ -379,8 +379,32 @@ model AdminUser {
   pass      String   @db.VarChar(255) // hash bcrypt da senha
   // "admin"      = acesso total ao painel (Inêz e equipe administrativa)
   // "instrutora" = só a Agenda, e só para olhar: não cria, não edita, não apaga
+  // "equipe" = permissões do AccessProfile vinculado
   role      String   @default("admin") @db.VarChar(20)
   nome      String?  @db.VarChar(120) // nome de exibição (ex.: "Francielle Vitorino")
+  active    Boolean  @default(true)
+  profileId Int?
+  profile   AccessProfile? @relation(fields: [profileId], references: [id], onDelete: Restrict)
+  sessionVersion Int @default(0)
+  lastLoginAt DateTime?
+  createdAt DateTime @default(now())
+}
+
+model AccessProfile {
+  id          Int @id @default(autoincrement())
+  name        String @unique @db.VarChar(80)
+  description String @default("") @db.VarChar(250)
+  permissions String @db.Text
+  createdAt   DateTime @default(now())
+  users       AdminUser[]
+}
+
+model AccessAudit {
+  id        Int @id @default(autoincrement())
+  actor     String @db.VarChar(60)
+  action    String @db.VarChar(40)
+  target    String @db.VarChar(120)
+  detail    String @db.Text
   createdAt DateTime @default(now())
 }
 

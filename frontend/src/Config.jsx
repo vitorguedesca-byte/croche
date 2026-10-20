@@ -105,7 +105,7 @@ function Feriados() {
         <span className="hf-day">Ao contrário: neste feriado nacional a escola <b>abre</b></span>
       </label>
       <div style={{ marginTop: ".7rem" }}>
-        <button className="btn sec" type="button" onClick={salvar} disabled={busy}>
+        <button data-access="configuracoes:2" className="btn sec" type="button" onClick={salvar} disabled={busy}>
           {busy ? "Salvando…" : abre ? "Liberar este dia" : "Marcar como feriado"}
         </button>
       </div>
@@ -130,7 +130,7 @@ function Feriados() {
                 <span className="fer-nome">{n}</span>
                 <span className="fer-fonte">{man ? "cadastrado" : "nacional"}</span>
                 <button className="btn ghost sm" type="button" onClick={() => verAulas(d, n)}>Ver aulas</button>
-                {man && <button className="btn ghost sm" type="button" onClick={() => remover(man)}>Tirar</button>}
+                {man && <button data-access="configuracoes:2" className="btn ghost sm" type="button" onClick={() => remover(man)}>Tirar</button>}
               </div>
             );
           })}
@@ -139,7 +139,7 @@ function Feriados() {
               <span className="fer-data">{f.date.slice(8, 10)}/{f.date.slice(5, 7)}</span>
               <span className="fer-nome">✅ {f.nome} — a escola abre</span>
               <span className="fer-fonte">cadastrado</span>
-              <button className="btn ghost sm" type="button" onClick={() => remover(f)}>Tirar</button>
+              <button data-access="configuracoes:2" className="btn ghost sm" type="button" onClick={() => remover(f)}>Tirar</button>
             </div>
           ))}
           {!doAno.length && !aberturas.length && <div className="help">Nenhum feriado neste ano.</div>}
@@ -447,7 +447,7 @@ export default function Config() {
               com valor individual. Não mexe em mensalidade já emitida.
             </div>
           </div>
-          <button className="btn sec" type="button" onClick={() => open(<ReajusteGeral />)}>📈 Aplicar reajuste</button>
+          <button data-access="financeiro:2" className="btn sec" type="button" onClick={() => open(<ReajusteGeral />)}>📈 Aplicar reajuste</button>
         </div>
       </div>
 
@@ -521,7 +521,7 @@ export default function Config() {
       </div>
 
       <div className="cfg-save">
-        <button className="btn" onClick={save}>Salvar configurações</button>
+        <button data-access="configuracoes:2" className="btn" onClick={save}>Salvar configurações</button>
         {saved && <span className="badge b-ok"><span className="dot" style={{ background: "var(--ok)" }} /> Salvo</span>}
       </div>
     </div>

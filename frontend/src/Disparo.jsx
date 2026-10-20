@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { toast, confirmModal } from "./toast.jsx";
 import { useStore } from "./store.jsx";
 import { Select, Modal, useModal } from "./ui.jsx";
-import { api } from "./api.js";
+import { api, canAccess } from "./api.js";
 import { contemBusca } from "./helpers.js";
 
 /* ============================================================
@@ -254,6 +254,7 @@ export default function Disparo() {
   if (jobId) return <Andamento id={jobId} onNovo={voltar} />;
   if (erroOpcoes) return <div className="panel empty"><div className="ic">🔌</div><p>Não consegui falar com o WhatsApp.</p><p className="cli-sub">{erroOpcoes}</p><button className="btn" onClick={() => carregar(true)}>Tentar de novo</button></div>;
   if (!opcoes) return <div className="panel empty"><div className="ic">💬</div><p>Sincronizando com o WhatsApp…</p></div>;
+  if (!canAccess("whatsapp", 2)) return <UltimosDisparos lista={opcoes.ultimos || []} onAbrir={setJobId} />;
   return (
     <Composer
       data={data}
@@ -790,7 +791,7 @@ function CriarTemplate({ inicial, opcoes, onCriado }) {
   return (
     <Modal size="lg" title="Criar template do WhatsApp" footer={<>
       <button className="btn ghost" onClick={close}>Cancelar</button>
-      <button className={`btn${erros.length ? " sec" : ""}`} disabled={busy} onClick={enviar}>{busy ? "Enviando…" : "📤 Enviar para aprovação da Meta"}</button>
+      <button data-access="whatsapp:2" className={`btn${erros.length ? " sec" : ""}`} disabled={busy} onClick={enviar}>{busy ? "Enviando…" : "📤 Enviar para aprovação da Meta"}</button>
     </>}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1.2rem" }}>
         <div>
@@ -959,7 +960,7 @@ function Andamento({ id, onNovo }) {
     return () => { vivo = false; clearTimeout(timer); };
   }, [id]);
 
-  if (erro && !d) return <div className="panel empty"><div className="ic">🔌</div><p>{erro}</p><button className="btn" onClick={() => onNovo()}>Voltar</button></div>;
+  if (erro && !d) return <div className="panel empty"><div className="ic">🔌</div><p>{erro}</p><button data-access="whatsapp:2" className="btn" onClick={() => onNovo()}>Voltar</button></div>;
   if (!d) return <div className="panel empty"><div className="ic">📣</div><p>Carregando o disparo…</p></div>;
 
   const recebeu = (i) => i.entrega === "entregue" || i.entrega === "lido";
@@ -1014,7 +1015,7 @@ function Andamento({ id, onNovo }) {
             {d.modo === "template" ? `template ${d.template}` : "texto livre"} · por {d.por} · {dataHoraDe(d.inicioEm)}
           </span>
           <button className="btn ghost sm" onClick={() => pedir.current && pedir.current()}>🔄 Sincronizar</button>
-          <button className="btn sec sm" disabled={!d.fimEm} onClick={() => onNovo()}>＋ Novo disparo</button>
+          <button data-access="whatsapp:2" className="btn sec sm" disabled={!d.fimEm} onClick={() => onNovo()}>＋ Novo disparo</button>
         </div>
       </div>
       <div className="seg-hint">
@@ -1028,7 +1029,7 @@ function Andamento({ id, onNovo }) {
           ))}
         </div>
         {d.fimEm && faltaram.length > 0 && (
-          <button className="btn sec sm" onClick={mandarDeNovo}>📣 Mandar de novo para quem não recebeu ({faltaram.length})</button>
+          <button data-access="whatsapp:2" className="btn sec sm" onClick={mandarDeNovo}>📣 Mandar de novo para quem não recebeu ({faltaram.length})</button>
         )}
       </div>
       {itens.length ? (

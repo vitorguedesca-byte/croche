@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { api, setToken } from "./api.js";
+import { api, setToken, setSession } from "./api.js";
 
 // Tela de acesso ao painel administrativo (usuário + senha).
 // Se ainda não existe nenhum admin, mostra "criar primeiro acesso".
@@ -27,7 +27,8 @@ export default function AdminLogin() {
     const u = username.trim();
     const isCreate = mode === "setup" || mode === "register";
     if (u.length < 3) return setErr("Usuário deve ter ao menos 3 caracteres.");
-    if (password.length < 4) return setErr("Senha deve ter ao menos 4 caracteres.");
+    if (isCreate && password.length < 8) return setErr("Senha deve ter ao menos 8 caracteres.");
+    if (!password) return setErr("Informe a senha.");
     if (isCreate && password !== password2) return setErr("As senhas não conferem.");
     setBusy(true);
     try {
@@ -37,6 +38,7 @@ export default function AdminLogin() {
         ? await api.admin.register(u, password)
         : await api.admin.login(u, password);
       setToken(r.token, r.role, r.nome);
+      setSession(r);
       window.location.reload(); // recarrega já autenticado
     } catch (e2) {
       setErr(e2.message || "Não foi possível entrar.");
@@ -87,17 +89,7 @@ export default function AdminLogin() {
                 : "Entrar"}
             </button>
 
-            {mode !== "setup" && (
-              <button type="button" style={S.linkBtn}
-                onClick={() => {
-                  setErr(""); setPassword(""); setPassword2("");
-                  setMode(mode === "register" ? "login" : "register");
-                }}>
-                {mode === "register"
-                  ? "Já tem acesso? Entrar"
-                  : "Não tem acesso? Cadastrar"}
-              </button>
-            )}
+            {mode === "login" && <p style={S.sub}>Para obter acesso ou redefinir sua senha, procure a Admin.</p>}
           </>
         )}
       </form>

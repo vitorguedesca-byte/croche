@@ -1,4 +1,6 @@
 import express from "express";
+import { createAccessControl } from "./accessControl.js";
+import { filterState } from "./accessPolicy.js";
 import cors from "cors";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
@@ -175,12 +177,6 @@ app.use("/api", (_req, res, next) => { res.setHeader("Content-Type", "applicatio
 /* ===================== AUTENTICAÇÃO DO PAINEL ADMIN =====================
    Protege as rotas do painel. Só quem tem conta (usuário+senha) acessa.
    Rotas públicas (site, portal do aluno, webhook) ficam liberadas. */
-const adminTokens = new Map(); // token -> { username, role } (sessões em memória)
-const genToken = () => crypto.randomBytes(24).toString("hex");
-// Enquanto não houver NENHUM admin cadastrado, o painel fica aberto (primeiro uso),
-// para não travar o sistema antes de você criar o acesso. Depois de criar, passa a exigir login.
-let hasAdmin = false;
-prisma.adminUser.count().then((n) => { hasAdmin = n > 0; }).catch(() => {});
 // rotas que NÃO exigem login (site público, portal do aluno, webhooks)
 const PUBLIC_API = [
   ["GET", /^\/api\/health$/],
@@ -219,8 +215,8 @@ const isPublicApi = (req) => PUBLIC_API.some(([m, re]) => (!m || m === req.metho
    não é o corpo da requisição — que qualquer um monta na mão — é quem está
    assinando a chamada. Operação em LOTE, marcação forçada e criação de horário
    novo são do painel; pelo portal e pelo WhatsApp, uma aula de cada vez.
-   `!hasAdmin` é o primeiro uso do sistema, quando ainda não há login nenhum. */
-const doPainel = (req) => !!req.admin || !hasAdmin;
+   O primeiro uso é concluído pela criação autenticada do Admin. */
+const doPainel = (req) => !!req.admin;
 
 /* Pela porta pública só se mexe na reserva de ENTRADA (matrícula ou aula
    avulsa da 1ª aula), e só enquanto ela não foi paga. É o alcance real da tela
@@ -238,36 +234,9 @@ function soMatriculaPelaPortaPublica(req, res, booking) {
   return true;
 }
 
-/* O que a INSTRUTORA pode chamar. É uma lista fechada e só de leitura: a agenda
-   dela é para consultar, não para operar. Qualquer outra rota — inclusive
-   qualquer POST/PATCH/DELETE — cai no 403 abaixo, mesmo que alguém monte a
-   chamada na mão fora da tela. A permissão mora aqui, não no botão. */
-const INSTRUTORA_API = [
-  ["GET", /^\/api\/state$/],
-  ["GET", /^\/api\/settings$/],
-  ["GET", /^\/api\/slots\/available$/],
-  ["GET", /^\/api\/testimonials$/],
-  ["POST", /^\/api\/admin\/logout$/],
-];
-const isInstrutoraApi = (req) => INSTRUTORA_API.some(([m, re]) => m === req.method && re.test(req.path));
-
-app.use((req, res, next) => {
-  if (!req.path.startsWith("/api/")) return next(); // arquivos estáticos etc.
-  if (!hasAdmin) return next(); // primeiro uso: sem admin cadastrado, tudo liberado
-
-  // Extrai a sessão se houver token de autorização (necessário para rotas compartilhadas como POST /api/bookings)
-  const tok = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
-  const sess = tok ? adminTokens.get(tok) : null;
-  if (sess) req.admin = sess;
-
-  if (isPublicApi(req)) return next();
-
-  if (!sess) return res.status(401).json({ error: "Acesso restrito ao painel. Faça login." });
-  if (sess.role === "instrutora" && !isInstrutoraApi(req)) {
-    return res.status(403).json({ error: "Seu acesso é apenas de consulta à Agenda." });
-  }
-  return next();
-});
+const access = createAccessControl({ prisma, isPublicApi });
+app.use(access.middleware);
+app.use(access.router);
 
 // "hoje" pelo relógio de Brasília (o servidor pode rodar em UTC): com
 // toISOString, das 21h à meia-noite o dia já virava e as aulas da noite eram
@@ -1296,7 +1265,7 @@ app.get(
       avisosDoFunil(),
     ]);
     const hoje = todayISO();
-    res.json({
+    res.json(filterState({
       /* `feriados` é o calendário já resolvido ({ 'YYYY-MM-DD': nome }): a tela
          não recalcula Páscoa nem junta lista manual, só consulta o dia. */
       meta: {
@@ -1308,6 +1277,7 @@ app.get(
         feriadosBasePorUnidade: FERIADOS_BASE_POR_UNIDADE,
         aberturasFeriado: ABERTURAS_FERIADO.map(({ date, unit }) => ({ date, unit })),
       },
+      access: req.admin ? access.safeUser(req.admin) : null,
       clients: clients.map(({ pin, ...c }) => ({ ...c, tags: parseTags(c.tags), hasPin: !!pin })),
       slots,
       bookings,
@@ -1321,7 +1291,7 @@ app.get(
       pixAlertas,
       // funil de leads: retornos marcados para hoje (ou atrasados) e leads novas
       funilAvisos,
-    });
+    }, req.admin));
   })
 );
 
@@ -9274,79 +9244,7 @@ app.put(
 
 /* ---------- AUTH DO PAINEL ADMIN (usuário + senha) ---------- */
 
-// Existe algum administrador cadastrado? (define se mostra "criar 1º acesso" ou "login")
-app.get("/api/admin/exists", wrap(async (_req, res) => {
-  const n = await prisma.adminUser.count();
-  res.json({ exists: n > 0 });
-}));
-
-const cleanUsername = (u) => String(u || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-
-// Criar o PRIMEIRO administrador (só funciona enquanto não houver nenhum)
-app.post("/api/admin/setup", wrap(async (req, res) => {
-  if ((await prisma.adminUser.count()) > 0) return res.status(409).json({ error: "Já existe um administrador. Use o login." });
-  const username = cleanUsername(req.body.username);
-  const password = String(req.body.password || "");
-  if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
-  if (password.length < 4) return res.status(400).json({ error: "Senha deve ter ao menos 4 caracteres." });
-  await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10), role: "admin" } });
-  hasAdmin = true;
-  const token = genToken(); adminTokens.set(token, { username, role: "admin" });
-  res.json({ ok: true, token, username, role: "admin" });
-}));
-
-// Cadastro de novo acesso pela própria tela de login (equipe da Inêz)
-// Por enquanto: permite apenas 1 único usuário no sistema.
-app.post("/api/admin/register", wrap(async (req, res) => {
-  if ((await prisma.adminUser.count()) > 0) return res.status(409).json({ error: "Já existe um acesso cadastrado. Use o login." });
-  const username = cleanUsername(req.body.username);
-  const password = String(req.body.password || "");
-  if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
-  if (password.length < 4) return res.status(400).json({ error: "Senha deve ter ao menos 4 caracteres." });
-  if (await prisma.adminUser.findFirst({ where: { username } })) return res.status(409).json({ error: "Usuário já existe. Use o login." });
-  await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10), role: "admin" } });
-  hasAdmin = true;
-  const token = genToken(); adminTokens.set(token, { username, role: "admin" });
-  res.json({ ok: true, token, username, role: "admin" });
-}));
-
-// Login
-app.post("/api/admin/login", wrap(async (req, res) => {
-  const username = cleanUsername(req.body.username);
-  const password = String(req.body.password || "");
-  const user = await prisma.adminUser.findFirst({ where: { username } });
-  if (!user || !(await bcrypt.compare(password, user.pass))) return res.status(401).json({ error: "Usuário ou senha inválidos." });
-  const role = user.role === "instrutora" ? "instrutora" : "admin";
-  // `nome` vai na sessão para o histórico dizer QUEM fez (ex.: funil de leads)
-  const token = genToken(); adminTokens.set(token, { username, role, nome: user.nome || null });
-  res.json({ ok: true, token, username, role, nome: user.nome || null });
-}));
-
-// Logout (invalida o token da sessão)
-app.post("/api/admin/logout", wrap(async (req, res) => {
-  const tok = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
-  adminTokens.delete(tok);
-  res.json({ ok: true });
-}));
-
-// Adicionar novo usuário do painel (protegido — só admin logado) — equipe da Inêz
-app.post("/api/admin/users", wrap(async (req, res) => {
-  const username = cleanUsername(req.body.username);
-  const password = String(req.body.password || "");
-  if (username.length < 3) return res.status(400).json({ error: "Usuário deve ter ao menos 3 caracteres." });
-  if (password.length < 4) return res.status(400).json({ error: "Senha deve ter ao menos 4 caracteres." });
-  if (await prisma.adminUser.findFirst({ where: { username } })) return res.status(409).json({ error: "Usuário já existe." });
-  const role = req.body.role === "instrutora" ? "instrutora" : "admin";
-  const nome = String(req.body.nome || "").trim() || null;
-  await prisma.adminUser.create({ data: { username, pass: await bcrypt.hash(password, 10), role, nome } });
-  res.json({ ok: true, username, role });
-}));
-
-// Listar usuários do painel (protegido)
-app.get("/api/admin/users", wrap(async (_req, res) => {
-  const list = await prisma.adminUser.findMany({ select: { id: true, username: true, role: true, nome: true, createdAt: true }, orderBy: { createdAt: "asc" } });
-  res.json(list);
-}));
+// Gestão de usuários, perfis e sessões: accessControl.js.
 
 /* ---------- AUTH (PIN de 4 dígitos) ---------- */
 

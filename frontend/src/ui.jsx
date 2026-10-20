@@ -1,6 +1,8 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { STATUS, contemBusca } from "./helpers.js";
+import { canAccess } from "./api.js";
+import { toast } from "./toast.jsx";
 
 /* ---------- Modal global ---------- */
 const ModalContext = createContext(null);
@@ -11,8 +13,15 @@ export function ModalProvider({ children }) {
      fora passam por ela; `close()` e `open()` chamados pelo próprio fluxo
      (terminou, voltou ao perfil) fecham direto. */
   const guardRef = useRef(null);
-  const open = useCallback((el) => { guardRef.current = null; setNode(el); }, []);
+  const open = useCallback((el) => {
+    const module = el?.type?.accessModule;
+    if (module && !canAccess(module, 2)) { toast("Seu perfil permite apenas consulta ou não tem acesso a esta ação.", "info"); return; }
+    const readModule = el?.type?.accessReadModule;
+    if (readModule && !canAccess(readModule)) { toast("Seu perfil não tem acesso a esta consulta.", "info"); return; }
+    guardRef.current = null; setNode(el);
+  }, []);
   const close = useCallback(() => { guardRef.current = null; setNode(null); }, []);
+  useEffect(() => { window.addEventListener("fqc-access", close); return () => window.removeEventListener("fqc-access", close); }, [close]);
   const dismiss = useCallback(async () => {
     const guard = guardRef.current;
     if (guard && !(await guard())) return;
