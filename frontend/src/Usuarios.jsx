@@ -8,13 +8,28 @@ import "./acessos.css";
 const date = v => v ? new Date(v).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" }) : "Ainda não entrou";
 const ACTIONS = { primeiro_admin: "Primeiro Admin criado", usuario_criado: "Usuário criado", usuario_alterado: "Usuário alterado", sessoes_encerradas: "Sessões encerradas", perfil_criado: "Perfil criado", perfil_alterado: "Perfil alterado", perfil_excluido: "Perfil excluído" };
 
-function UserForm({ user, profiles, onSaved }) {
+const LEVELS = ["Sem acesso", "Somente consulta", "Consultar e editar"];
+// Lista de módulos com o nível de cada um. Sem onChange, só mostra o que o perfil libera.
+function ModulePermissions({ modules, value, onChange, legend = "Módulos que o usuário acessa" }) {
+  return <fieldset className="access-permissions"><legend>{legend}</legend>{modules.map(m => <div className="access-permission" key={m.key}>
+    <label htmlFor={`perm-${m.key}`}>{m.label}</label>
+    {onChange ? <Select id={`perm-${m.key}`} value={value[m.key] || 0} onChange={v => onChange({ ...value, [m.key]: Number(v) })} options={LEVELS.slice(0, m.readOnly ? 2 : 3).map((label, level) => ({ value: level, label }))} />
+      : <span className={`badge ${value[m.key] === 2 ? "b-ok" : value[m.key] === 1 ? "b-info" : "b-muted"}`}>{LEVELS[value[m.key] || 0]}</span>}
+  </div>)}</fieldset>;
+}
+
+function UserForm({ user, profiles, modules, onSaved }) {
   const { close } = useModal();
-  const [form, setForm] = useState({ username: user?.username || "", nome: user?.nome || "", password: "", role: user?.role || "instrutora", profileId: user?.profileId || null, active: user?.active ?? true });
+  const [form, setForm] = useState({ username: user?.username || "", nome: user?.nome || "", password: "", role: user?.role || "instrutora", profileId: user?.profileId || null, permissions: user?.custom ? user.permissions : null, active: user?.active ?? true });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const set = (key, value) => setForm(f => ({ ...f, [key]: value }));
-  const profile = form.role === "equipe" ? String(form.profileId || "") : form.role;
+  const profile = form.role !== "equipe" ? form.role : form.profileId ? String(form.profileId) : "custom";
+  const chosen = profiles.find(p => String(p.id) === profile);
+  function pickProfile(v) {
+    if (v === "custom") return setForm(f => ({ ...f, role: "equipe", profileId: null, permissions: f.permissions || { ...(chosen?.id === "admin" ? {} : chosen?.permissions) } }));
+    setForm(f => ({ ...f, role: ["admin", "instrutora"].includes(v) ? v : "equipe", profileId: ["admin", "instrutora"].includes(v) ? null : Number(v), permissions: null }));
+  }
   async function save(e) {
     e.preventDefault();
     if (busy) return;
@@ -22,6 +37,7 @@ function UserForm({ user, profiles, onSaved }) {
     try {
       const body = { ...form };
       if (user && !body.password) delete body.password;
+      if (profile !== "custom") delete body.permissions;
       await (user ? api.admin.updateUser(user.id, body) : api.admin.addUser(body));
       close(); await onSaved(); toast(user ? "Acesso atualizado." : "Usuário criado.", "ok");
     } catch (e) { setError(e.message); } finally { setBusy(false); }
@@ -30,8 +46,11 @@ function UserForm({ user, profiles, onSaved }) {
     <form className="access-form" onSubmit={save}>
       <label htmlFor="access-name">Nome de exibição<input id="access-name" value={form.nome} maxLength={120} onChange={e => set("nome", e.target.value)} autoComplete="name" /></label>
       <label htmlFor="access-user">Usuário de acesso<input id="access-user" required minLength={3} maxLength={60} value={form.username} autoComplete="off" onChange={e => set("username", e.target.value)} /></label>
-      <div><label htmlFor="access-profile">Perfil</label><Select id="access-profile" value={profile} options={profiles.map(p => ({ value: String(p.id), label: p.name, hint: p.description }))} onChange={v => setForm(f => ({ ...f, role: ["admin", "instrutora"].includes(v) ? v : "equipe", profileId: ["admin", "instrutora"].includes(v) ? null : Number(v) }))} /></div>
-      {form.role === "admin" && <p className="access-note">Admin pode realizar todas as ações, inclusive gerenciar usuários e perfis.</p>}
+      <div><label htmlFor="access-profile">Perfil</label><Select id="access-profile" value={profile} options={[...profiles.map(p => ({ value: String(p.id), label: p.name, hint: p.description })), { value: "custom", label: "Personalizado", hint: "Escolher os módulos só para este usuário" }]} onChange={pickProfile} /></div>
+      {form.role === "admin" ? <p className="access-note">Admin pode realizar todas as ações, inclusive gerenciar usuários e perfis.</p>
+        : profile === "custom" ? <ModulePermissions modules={modules} value={form.permissions || {}} onChange={v => set("permissions", v)} />
+        : chosen && <ModulePermissions modules={modules} value={chosen.permissions} legend={`Módulos do perfil ${chosen.name}`} />}
+      {profile === "custom" && <p className="access-muted">Valores, vencimentos e pagamentos exigem também edição em Financeiro. Relatórios mostram valores financeiros.</p>}
       <label htmlFor="access-pass">{user ? "Nova senha (deixe vazia para manter)" : "Senha inicial"}<input id="access-pass" type="password" autoComplete="new-password" value={form.password} required={!user} minLength={8} onChange={e => set("password", e.target.value)} /></label>
       <p className="access-muted">Mínimo de 8 caracteres. A troca de senha encerra as sessões abertas.</p>
       {user && <label className="access-check"><input type="checkbox" checked={form.active} onChange={e => set("active", e.target.checked)} /> Usuário ativo</label>}
@@ -62,12 +81,7 @@ function ProfileForm({ profile, modules, onSaved }) {
     <label htmlFor="profile-name">Nome do perfil<input id="profile-name" required minLength={3} maxLength={80} value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Atendimento ou Financeiro" /></label>
     <label htmlFor="profile-desc">Descrição<input id="profile-desc" maxLength={250} value={description} onChange={e => setDescription(e.target.value)} /></label>
     <p className="access-note">Escolha o acesso a cada módulo. Somente Admin gerencia usuários, perfis e o histórico de acessos. Relatórios incluem dados financeiros.</p>
-    <fieldset className="access-permissions"><legend>Permissões por módulo</legend>{modules.map(m => <div className="access-permission" key={m.key}>
-      <label htmlFor={`perm-${m.key}`}>{m.label}</label>
-      <Select id={`perm-${m.key}`} value={permissions[m.key] || 0} onChange={v => setPermissions(p => ({ ...p, [m.key]: Number(v) }))} options={[
-        { value: 0, label: "Sem acesso" }, { value: 1, label: "Somente consulta" }, ...(!m.readOnly ? [{ value: 2, label: "Consultar e editar" }] : []),
-      ]} />
-    </div>)}</fieldset>
+    <ModulePermissions modules={modules} value={permissions} onChange={setPermissions} legend="Permissões por módulo" />
     {error && <p className="access-error" role="alert">{error}</p>}
     <div className="access-actions"><button className="btn ghost" type="button" onClick={close} disabled={busy}>Cancelar</button><button className="btn" disabled={busy}>{busy ? "Salvando…" : "Salvar perfil"}</button></div>
   </form></Modal>;
@@ -102,7 +116,7 @@ export default function Usuarios() {
     try { await fn(); await saved(); toast("Alteração concluída.", "ok"); } catch (e) { toast(e.message, "error"); } finally { setBusy(false); }
   }
   const norm = v => String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  const list = users.filter(u => norm(`${u.nome} ${u.username}`).includes(norm(search)) && (status === "todos" || u.active === (status === "ativos")) && (profileFilter === "todos" || (u.role === "equipe" ? String(u.profileId) : u.role) === profileFilter));
+  const list = users.filter(u => norm(`${u.nome} ${u.username}`).includes(norm(search)) && (status === "todos" || u.active === (status === "ativos")) && (profileFilter === "todos" || (u.role !== "equipe" ? u.role : u.profileId ? String(u.profileId) : "custom") === profileFilter));
   if (loading) return <div className="panel" role="status">Carregando acessos…</div>;
   if (error) return <div className="panel"><p role="alert">{error}</p><button className="btn" onClick={load}>Tentar novamente</button></div>;
   return <div className="access-page">
@@ -110,11 +124,11 @@ export default function Usuarios() {
     <p className="access-note">Admin tem acesso total. Alterações de perfil passam a valer nas próximas requisições; bloqueios e trocas de senha encerram o acesso.</p>
     <div className="seg access-tabs" aria-label="Gestão de acessos">{[["usuarios", "Usuários"], ["perfis", "Perfis e permissões"], ["historico", "Histórico"]].map(([v, label]) => <button key={v} className={tab === v ? "on" : ""} onClick={() => setTab(v)} aria-pressed={tab === v}>{label}</button>)}</div>
     {tab === "usuarios" && <section className="panel">
-      <div className="access-heading"><h2>Usuários do painel</h2><button className="btn" onClick={() => open(<UserForm profiles={allProfiles} onSaved={saved} />)}>＋ Novo usuário</button></div>
-      <div className="access-filters"><input aria-label="Buscar usuários" placeholder="Buscar por nome ou usuário" value={search} onChange={e => setSearch(e.target.value)} /><Select value={status} onChange={setStatus} options={[{ value: "todos", label: "Todos os status" }, { value: "ativos", label: "Ativos" }, { value: "bloqueados", label: "Bloqueados" }]} /><Select value={profileFilter} onChange={setProfileFilter} options={[{ value: "todos", label: "Todos os perfis" }, ...allProfiles.map(p => ({ value: String(p.id), label: p.name }))]} /></div>
+      <div className="access-heading"><h2>Usuários do painel</h2><button className="btn" onClick={() => open(<UserForm profiles={allProfiles} modules={catalog.modules} onSaved={saved} />)}>＋ Novo usuário</button></div>
+      <div className="access-filters"><input aria-label="Buscar usuários" placeholder="Buscar por nome ou usuário" value={search} onChange={e => setSearch(e.target.value)} /><Select value={status} onChange={setStatus} options={[{ value: "todos", label: "Todos os status" }, { value: "ativos", label: "Ativos" }, { value: "bloqueados", label: "Bloqueados" }]} /><Select value={profileFilter} onChange={setProfileFilter} options={[{ value: "todos", label: "Todos os perfis" }, ...allProfiles.map(p => ({ value: String(p.id), label: p.name })), { value: "custom", label: "Personalizado" }]} /></div>
       <div className="access-users">{list.map(u => <article className="access-user" key={u.id}>
         <div><h3>{u.nome || u.username}{u.id === getSession()?.id && <small> · você</small>}</h3><span className="access-muted">{u.username}</span><div className="access-tags"><span className="chip">{u.profileName}</span><span className={`badge ${u.active ? "b-ok" : "b-danger"}`}>{u.active ? "Ativo" : "Bloqueado"}</span></div><p className="access-muted">Último acesso: {date(u.lastLoginAt)} · {u.sessions} sessão(ões)</p></div>
-        <div className="access-actions"><button className="btn sec sm" disabled={busy} onClick={() => open(<UserForm user={u} profiles={allProfiles} onSaved={saved} />)}>Editar acesso</button><button className="btn ghost sm" disabled={busy} onClick={() => action(u.active ? "Bloquear usuário" : "Reativar usuário", `${u.nome || u.username}: ${u.active ? "o acesso será bloqueado e as sessões serão encerradas." : "poderá entrar novamente com a senha atual."}`, () => api.admin.updateUser(u.id, { active: !u.active }))}>{u.active ? "Bloquear" : "Reativar"}</button><button className="btn ghost sm" disabled={busy || !u.sessions} onClick={() => action("Encerrar sessões", `Todos os acessos abertos de ${u.username} serão encerrados.`, () => api.admin.revoke(u.id))}>Encerrar sessões</button></div>
+        <div className="access-actions"><button className="btn sec sm" disabled={busy} onClick={() => open(<UserForm user={u} profiles={allProfiles} modules={catalog.modules} onSaved={saved} />)}>Editar acesso</button><button className="btn ghost sm" disabled={busy} onClick={() => action(u.active ? "Bloquear usuário" : "Reativar usuário", `${u.nome || u.username}: ${u.active ? "o acesso será bloqueado e as sessões serão encerradas." : "poderá entrar novamente com a senha atual."}`, () => api.admin.updateUser(u.id, { active: !u.active }))}>{u.active ? "Bloquear" : "Reativar"}</button><button className="btn ghost sm" disabled={busy || !u.sessions} onClick={() => action("Encerrar sessões", `Todos os acessos abertos de ${u.username} serão encerrados.`, () => api.admin.revoke(u.id))}>Encerrar sessões</button></div>
       </article>)}</div>{!list.length && <p className="access-empty">Nenhum usuário encontrado com estes filtros.</p>}
     </section>}
     {tab === "perfis" && <section className="panel"><div className="access-heading"><h2>Perfis e permissões</h2><button className="btn" onClick={() => open(<ProfileForm modules={catalog.modules} onSaved={saved} />)}>＋ Novo perfil</button></div>

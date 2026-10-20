@@ -87,6 +87,16 @@ test("gestão por HTTP: usuários, perfis, sessões e auditoria", async t => {
   assert.equal(JSON.stringify(history.data).includes(admin), false);
   const users = await request("GET", "/api/admin/users", admin);
   assert.equal(JSON.stringify(users.data).includes("$2"), false);
+  const custom = await request("POST", "/api/admin/users", admin, { username: "caixa", password: "TesteAcesso123", role: "equipe", profileId: null, permissions: { financeiro: 2, agenda: 1 } });
+  assert.equal(custom.status, 201); assert.equal(custom.data.profileName, "Personalizado"); assert.equal(custom.data.custom, true);
+  assert.equal((await request("POST", "/api/admin/users", admin, { username: "vazio", password: "TesteAcesso123", role: "equipe", profileId: null, permissions: { agenda: 0 } })).status, 400);
+  let caixa = (await request("POST", "/api/admin/login", null, { username: "caixa", password: "TesteAcesso123" })).data.token;
+  assert.equal((await request("POST", "/api/invoices/1/pay", caixa)).status, 200, "módulos próprios valem na API");
+  assert.equal((await request("POST", "/api/slots", caixa)).status, 403);
+  assert.equal((await request("PATCH", `/api/admin/users/${custom.data.id}`, admin, { nome: "Caixa" })).data.permissions.financeiro, 2, "editar outro campo mantém os módulos");
+  const toProfile = await request("PATCH", `/api/admin/users/${custom.data.id}`, admin, { role: "equipe", profileId, permissions: { financeiro: 2 } });
+  assert.equal(toProfile.data.profileName, "Atendimento"); assert.equal(toProfile.data.custom, false);
+  assert.equal((await request("POST", "/api/invoices/1/pay", caixa)).status, 403, "perfil vinculado substitui os módulos próprios");
   const other = await request("POST", "/api/admin/users", admin, { username: "admin2", password: "TesteAcesso123", role: "admin" });
   const admin2 = (await request("POST", "/api/admin/login", null, { username: "admin2", password: "TesteAcesso123" })).data.token;
   const concurrent = await Promise.all([

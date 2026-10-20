@@ -24,15 +24,18 @@ export function validatePermissions(value) {
     if (!mod || !Number.isInteger(level) || level < 0 || level > (mod.readOnly ? 1 : 2)) throw new Error("Permissão inválida: " + key);
     result[key] = level;
   }
-  if (!Object.values(result).some(v => v > 0)) throw new Error("Libere ao menos um módulo para o perfil.");
+  if (!Object.values(result).some(v => v > 0)) throw new Error("Libere ao menos um módulo.");
   return result;
 }
 export function permissionsFor(user) {
   if (!user || user.active === false) return {};
   if (user.role === "admin") return { ...FULL_ACCESS };
   if (user.role === "instrutora") return { agenda: 1 };
-  if (user.role !== "equipe" || !user.profile) return {};
-  try { return validatePermissions(JSON.parse(user.profile.permissions)); } catch { return {}; }
+  if (user.role !== "equipe") return {};
+  // Personalizado: sem perfil vinculado, valem os módulos gravados no usuário.
+  const source = user.profile ? user.profile.permissions : user.profileId ? null : user.permissions;
+  if (!source) return {};
+  try { return validatePermissions(JSON.parse(source)); } catch { return {}; }
 }
 export function can(user, module, level = 1) {
   return (permissionsFor(user)[module] || 0) >= level;

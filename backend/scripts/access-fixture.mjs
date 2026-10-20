@@ -22,7 +22,7 @@ export function memoryPrisma() {
       async count({ where } = {}) { return data[key].filter(r => matches(r, where)).length; },
       async create({ data: values, include }) {
         if ((key === "adminUser" && data[key].some(u => u.username === values.username)) || (key === "accessProfile" && data[key].some(p => p.name === values.name))) throw Object.assign(new Error("duplicate"), { code: "P2002" });
-        const row = { id: Math.max(0, ...data[key].map(r => r.id)) + 1, createdAt: new Date(), ...(key === "adminUser" ? { active: true, profileId: null, sessionVersion: 0, lastLoginAt: null, nome: null } : {}), ...values };
+        const row = { id: Math.max(0, ...data[key].map(r => r.id)) + 1, createdAt: new Date(), ...(key === "adminUser" ? { active: true, profileId: null, permissions: null, sessionVersion: 0, lastLoginAt: null, nome: null } : {}), ...values };
         data[key].push(row); return enrich(row, include);
       },
       async update({ where, data: values, include }) {

@@ -7,6 +7,10 @@ sessões. Contas são bloqueadas em vez de apagadas, preservando o histórico.
 O perfil **Admin** tem acesso integral, inclusive a todas as rotas atuais e
 futuras. **Instrutora** mantém consulta à agenda. Esses dois perfis são fixos.
 Perfis personalizados permitem bloquear, consultar ou editar cada módulo.
+Na ficha do usuário, os módulos do perfil escolhido aparecem logo abaixo dele.
+A opção **Personalizado** deixa marcar os módulos só para aquele usuário, sem
+criar perfil (ficam em `AdminUser.permissions`); ao trocar para um perfil, os
+módulos próprios são descartados e passam a valer os do perfil.
 Painel e relatórios só têm consulta; relatórios incluem dados financeiros.
 Somente Admin administra contas, perfis, histórico e o desfazer global.
 
@@ -33,8 +37,9 @@ entram nas respostas de listagem ou no histórico. O histórico registra as
 ## Banco e publicação
 
 O schema adiciona `AccessProfile`, `AccessAudit` e quatro campos em `AdminUser`.
-Os usuários existentes continuam ativos, mantendo os perfis atuais. A migration
-é `20261019120000_gestao_acessos`. O Dockerfile existente usa `prisma db push`
+Os usuários existentes continuam ativos, mantendo os perfis atuais. As migrations
+são `20261019120000_gestao_acessos` e `20261020120000_permissoes_por_usuario`
+(coluna `AdminUser.permissions`). O Dockerfile existente usa `prisma db push`
 antes de iniciar; não aplicar a migration SQL manualmente depois desse push.
 Em ambientes geridos exclusivamente por migrations, usar o fluxo de migrations
 do ambiente. O primeiro uso só permite criar o Admin; não libera dados do painel.

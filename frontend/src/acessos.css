@@ -10,3 +10,4 @@
 [data-fqc-denied~="campanhas:2"] [data-access="campanhas:2"]{display:none!important}
 [data-fqc-denied~="depoimentos:2"] [data-access="depoimentos:2"]{display:none!important}
 [data-fqc-denied~="configuracoes:2"] [data-access="configuracoes:2"]{display:none!important}
+.access-permission .badge{justify-self:start}

@@ -8,8 +8,8 @@ const fail = (status, message) => { throw Object.assign(new Error(message), { st
 const usernameOf = value => String(value || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 const safeUser = user => ({
   id: user.id, username: user.username, nome: user.nome, role: user.role,
-  active: user.active, profileId: user.profileId,
-  profileName: user.role === "admin" ? "Admin" : user.role === "instrutora" ? "Instrutora" : user.profile?.name || "Sem perfil",
+  active: user.active, profileId: user.profileId, custom: user.role === "equipe" && !user.profileId && !!user.permissions,
+  profileName: user.role === "admin" ? "Admin" : user.role === "instrutora" ? "Instrutora" : user.profile?.name || (user.permissions ? "Personalizado" : "Sem perfil"),
   permissions: permissionsFor(user), createdAt: user.createdAt, lastLoginAt: user.lastLoginAt,
 });
 const serializeProfile = p => ({ ...p, permissions: JSON.parse(p.permissions), userCount: p._count?.users || 0, _count: undefined });
@@ -52,11 +52,18 @@ export function createAccessControl({ prisma, isPublicApi, now = Date.now }) {
     return bcrypt.hash(password, 10);
   };
   const assignment = async (db, body) => {
-    if (["admin", "instrutora"].includes(body.role)) return { role: body.role, profileId: null };
+    if (["admin", "instrutora"].includes(body.role)) return { role: body.role, profileId: null, permissions: null };
+    if (body.role === "equipe" && body.profileId == null && body.permissions) {
+      // Personalizado: módulos escolhidos na ficha do próprio usuário.
+      let permissions;
+      try { permissions = validatePermissions(typeof body.permissions === "string" ? JSON.parse(body.permissions) : body.permissions); } catch (e) { fail(400, e.message); }
+      return { role: "equipe", profileId: null, permissions: JSON.stringify(permissions) };
+    }
     if (body.role !== "equipe" || !Number.isInteger(body.profileId) || body.profileId < 1) fail(400, "Escolha um perfil válido.");
     if (!await db.accessProfile.findUnique({ where: { id: body.profileId } })) fail(400, "Perfil não encontrado.");
-    return { role: "equipe", profileId: body.profileId };
+    return { role: "equipe", profileId: body.profileId, permissions: null };
   };
+  const auditAccess = u => ({ username: u.username, nome: u.nome, role: u.role, profileId: u.profileId, ...(u.permissions ? { permissions: JSON.parse(u.permissions) } : {}), active: u.active });
   const getUser = async (db, id) => {
     if (!Number.isSafeInteger(id) || id < 1) fail(400, "Usuário inválido.");
     const user = await db.adminUser.findUnique({ where: { id }, include: { profile: true } });
@@ -135,7 +142,7 @@ export function createAccessControl({ prisma, isPublicApi, now = Date.now }) {
     const user = await transaction(async db => {
       const access = await assignment(db, req.body);
       const u = await db.adminUser.create({ data: { ...identity, ...access, pass }, include: { profile: true } });
-      await audit(db, req, "usuario_criado", u.username, { role: u.role, profileId: u.profileId });
+      await audit(db, req, "usuario_criado", u.username, auditAccess(u));
       return u;
     });
     res.status(201).json(safeUser(user));
@@ -153,7 +160,7 @@ export function createAccessControl({ prisma, isPublicApi, now = Date.now }) {
         if (await db.adminUser.count({ where: { role: "admin", active: true } }) <= 1) fail(409, "Mantenha ao menos um Admin ativo no sistema.");
       }
       const u = await db.adminUser.update({ where: { id }, data: { ...identity, ...access, active, ...(pass ? { pass } : {}), ...(pass || active !== before.active ? { sessionVersion: { increment: 1 } } : {}) }, include: { profile: true } });
-      await audit(db, req, "usuario_alterado", u.username, { anterior: { username: before.username, nome: before.nome, role: before.role, profileId: before.profileId, active: before.active }, atual: { username: u.username, nome: u.nome, role: u.role, profileId: u.profileId, active }, senhaAlterada: !!pass });
+      await audit(db, req, "usuario_alterado", u.username, { anterior: auditAccess(before), atual: auditAccess(u), senhaAlterada: !!pass });
       return u;
     });
     res.json(safeUser(user));
