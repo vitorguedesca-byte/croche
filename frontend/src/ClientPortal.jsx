@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 // "toast" abaixo é o aviso de erro global — apelidado porque o portal tem um
 // estado local com o mesmo nome (que antes escondia esta função e quebrava os
 // avisos de erro silenciosamente).
@@ -69,6 +69,8 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   const [authStep, setAuthStep] = useState("phone"); // phone | create | enter
   const [pin, setPin] = useState("");
   const [pinConfirm, setPinConfirm] = useState("");
+  const [activationCode, setActivationCode] = useState("");
+  const sessionEpoch = useRef(0);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [screen, setScreen] = useState("home"); // home | book | pay
@@ -93,11 +95,13 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   const marcarLiberada = (id, campos) => setLiberadasAgora((m) => ({ ...m, [id]: { status: "cancelada", ...campos } }));
 
   const load = async (p) => {
+    const epoch = sessionEpoch.current;
     setLoading(true); setErr("");
     try {
       const d = await api.portal.get(p);
+      if (epoch !== sessionEpoch.current) return;
       setData(d); setPhone(p);
-    } catch (e) { setErr(e.message || "Não consegui carregar."); setData(null); }
+    } catch (e) { if (epoch === sessionEpoch.current) { setErr(e.message || "Não consegui carregar."); setData(null); } }
     finally { setLoading(false); }
   };
 
@@ -105,7 +109,8 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   // tropeçar, não faz nada. O `load` acima zera `data` quando falha — o que
   // jogaria a aluna de volta para o login no meio de uma atualização de fundo.
   const refreshSilencioso = async (p = phone) => {
-    try { setData(await api.portal.get(p)); } catch {}
+    const epoch = sessionEpoch.current;
+    try { const updated = await api.portal.get(p); if (epoch === sessionEpoch.current) setData(updated); } catch {}
   };
 
   const checkCpf = async (cpfExplicit) => {
@@ -142,20 +147,30 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
     if (pin.length !== 4) { setErr("O PIN deve ter 4 números."); return; }
     if (pin !== pinConfirm) { setErr("Os PINs não conferem."); setPinConfirm(""); return; }
     setLoading(true); setErr("");
-    try { const r = await api.auth.setPin(input.replace(/\D/g, ""), pin); await load(portalKey(r.client)); }
-    catch (e) { setErr(e.message); setLoading(false); }
+    const epoch = sessionEpoch.current;
+    try { const r = await api.auth.setPin(input.replace(/\D/g, ""), pin, activationCode); if (epoch === sessionEpoch.current) await load(portalKey(r.client)); }
+    catch (e) { if (epoch === sessionEpoch.current) { setErr(e.message); setLoading(false); } }
   };
   const enterPin = async () => {
     if (pin.length !== 4) { setErr("Digite os 4 números do seu PIN."); return; }
     setLoading(true); setErr("");
-    try { const r = await api.auth.login(input.replace(/\D/g, ""), pin); await load(portalKey(r.client)); }
-    catch (e) { setErr(e.message); setPin(""); setLoading(false); }
+    const epoch = sessionEpoch.current;
+    try { const r = await api.auth.login(input.replace(/\D/g, ""), pin); if (epoch === sessionEpoch.current) await load(portalKey(r.client)); }
+    catch (e) { if (epoch === sessionEpoch.current) { setErr(e.message); setPin(""); setLoading(false); } }
   };
   const disconnect = () => {
+    sessionEpoch.current++;
+    api.auth.logout().catch(() => {});
     try { localStorage.removeItem(CPF_KEY); } catch {}
     setPhone(""); setData(null); setScreen("home"); setInput("");
-    setAuthStep("phone"); setPin(""); setPinConfirm(""); setErr(""); setLiberadasAgora({});
+    setAuthStep("phone"); setPin(""); setPinConfirm(""); setActivationCode(""); setErr(""); setLiberadasAgora({});
+    setLoading(false);
   };
+  useEffect(() => {
+    const expired = () => { disconnect(); setErr("Sessão encerrada. Entre novamente com seu PIN."); };
+    window.addEventListener("fqc-portal-expired", expired);
+    return () => window.removeEventListener("fqc-portal-expired", expired);
+  }, []);
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 3500); };
 
   // Quiosque: qualquer toque reinicia a contagem; parado demais, cai fora sozinho.
@@ -219,21 +234,23 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
             <p className="pt-hint">É a sua primeira vez? Toque em <b>Agendar aula</b> na página inicial. 💚</p>
           </>)}
           {authStep === "create" && (<>
-            <p className="pt-sub">Primeiro acesso! Crie um PIN de 4 números para entrar nas próximas vezes.</p>
+            <p className="pt-sub">Solicite à escola um código de acesso. Ele vale por 24 horas e permite criar seu PIN uma única vez.</p>
+            <label className="pt-label">Código de acesso da escola</label>
+            <input className="pt-input" inputMode="numeric" autoComplete="one-time-code" maxLength={8} value={activationCode} onChange={e => setActivationCode(e.target.value.replace(/\D/g, ""))} />
             <label className="pt-label" style={{ textAlign: "center" }}>Escolha o seu PIN</label>
             <PinBoxes value={pin} onChange={setPin} idp="a" />
             <label className="pt-label" style={{ textAlign: "center", marginTop: "1rem" }}>Confirme o PIN</label>
             <PinBoxes value={pinConfirm} onChange={setPinConfirm} idp="b" />
             {err && <div className="pt-err">{err}</div>}
             <button className="pt-btn" onClick={createPin} disabled={loading}>{loading ? "Salvando…" : "Criar PIN e entrar"}</button>
-            <button className="pt-link" style={{ marginTop: ".6rem" }} onClick={() => { setAuthStep("phone"); setPin(""); setPinConfirm(""); setErr(""); }}>← Voltar</button>
+            <button className="pt-link" style={{ marginTop: ".6rem" }} onClick={disconnect}>← Voltar</button>
           </>)}
           {authStep === "enter" && (<>
             <p className="pt-sub">Digite o seu PIN de 4 números.</p>
             <PinBoxes value={pin} onChange={setPin} idp="a" />
             {err && <div className="pt-err">{err}</div>}
             <button className="pt-btn" onClick={enterPin} disabled={loading}>{loading ? "Entrando…" : "Entrar"}</button>
-            <button className="pt-link" style={{ marginTop: ".6rem" }} onClick={() => { setAuthStep("phone"); setPin(""); setErr(""); }}>← Trocar CPF</button>
+            <button className="pt-link" style={{ marginTop: ".6rem" }} onClick={disconnect}>← Trocar CPF</button>
           </>)}
           {!kiosk && <a className="pt-link" href="/landing.html" style={{ display: "block", marginTop: "1.2rem" }}>← Voltar ao site</a>}
         </div>

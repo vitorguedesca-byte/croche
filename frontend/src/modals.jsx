@@ -2403,9 +2403,9 @@ export function ClientProfile({ client, initialTab }) {
   ];
 
   const resetPin = async () => {
-    if (!(await confirmModal({ title: "Redefinir PIN", message: `Redefinir o PIN de ${c.name}?\n\nO PIN atual será apagado e ela criará um novo no próximo acesso ao portal.`, confirmLabel: "Redefinir", tone: "danger" }))) return;
-    await run(api.resetPin(c.id));
-    toast("PIN redefinido. O(a) aluno(a) criará um novo PIN no próximo acesso. 💚");
+    if (!(await confirmModal({ title: "Gerar código de acesso", message: `Gerar um código para ${c.name}? O PIN atual e as sessões do portal serão encerrados. Entregue o código somente à própria aluna após conferir sua identidade.`, confirmLabel: "Gerar código", tone: "danger" }))) return;
+    const result = await run(api.resetPin(c.id));
+    await confirmModal({ title: "Código de acesso da aluna", message: `Código de ${c.name}: ${result.activationCode}\n\nVálido por 24 horas e para um único uso. Reiniciar o servidor invalida o código. A aluna informa este código ao criar o PIN no portal.`, confirmLabel: "Entendi" });
   };
   const del = async () => {
     if (!(await confirmModal({ title: "Excluir cadastro", message: `Excluir ${c.name}?\n\nAs aulas futuras serão removidas da agenda; o histórico de aulas passadas é mantido.`, confirmLabel: "Excluir", tone: "danger" }))) return;
@@ -2427,7 +2427,7 @@ export function ClientProfile({ client, initialTab }) {
       {c.status !== "cancelado" && <button data-access="alunos:2" className="btn sec" onClick={() => open(<PresentearForm client={c} />)}>🎁 Presentear</button>}
       {ehMensalista && <button data-access="agenda:2" className="btn" onClick={() => open(<BatchBookForm client={c} />)}>📅 Agendar em lote</button>}
       {ehMensalista && temAulaFutura && <button data-access="agenda:2" className="btn sec" onClick={() => open(<BatchUnbookForm client={c} />)}>🗑 Tirar em lote</button>}
-      {c.hasPin && <button data-access="alunos:2" className="btn ghost" onClick={resetPin}>🔑 Redefinir PIN</button>}
+      <button data-access="alunos:2" className="btn ghost" onClick={resetPin}>🔑 {c.hasPin ? "Redefinir PIN" : "Gerar acesso"}</button>
       <div style={{ flex: 1 }} />
       <button data-access="alunos:2" className="btn sec" onClick={() => setTab("editar")}>✏️ Editar cadastro</button>
     </>

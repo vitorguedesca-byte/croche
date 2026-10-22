@@ -100,6 +100,15 @@ croche/
 └─ README.md
 ```
 
+## Segurança do WhatsApp e portal
+
+- Configure `WA_APP_SECRET` com o segredo do aplicativo Meta antes de publicar esta versão. O POST do webhook valida a assinatura sobre o corpo original; sem o segredo, responde 503 e não processa notificações. `WA_VERIFY_TOKEN` continua servindo apenas para a confirmação do GET.
+- Alunas com PIN existente continuam usando CPF + PIN. O portal exige sessão própria, com validade de 12 horas, e não usa a sessão administrativa. Sair ou redefinir o PIN revoga o acesso correspondente.
+- Para primeiro acesso ou recuperação, a equipe com permissão de editar Alunos usa **Gerar acesso / Redefinir PIN**, confere a identidade da aluna e entrega o código mostrado no painel. Ele vale por 24 horas e um único uso. CPF sozinho não permite criar PIN.
+- Sessões e códigos são mantidos na memória do backend, como as sessões administrativas. Reiniciar o processo encerra ambos; após reiniciar, gere outro código se necessário. Esta implementação pressupõe uma única instância do backend.
+- As aulas legadas não têm `clientId`: o portal limita consultas e alterações por nome e telefone correspondente. Aulas sem telefone não são atribuídas por nome; cadastros com o mesmo nome e telefone precisam de conferência pela escola.
+- Testes locais, sem banco ou integrações reais: `cd backend` e `node --test scripts/portal-security.test.mjs scripts/access.test.mjs`.
+
 ## Próximos passos sugeridos
 
 - Autenticação (login da Inêz / equipe)

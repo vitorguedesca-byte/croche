@@ -43,6 +43,7 @@ function LoginFlow({ onAuth }) {
   const [phone, setPhone] = useState("");
   const [pin, setPin] = useState("");
   const [pinConfirm, setPinConfirm] = useState("");
+  const [activationCode, setActivationCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
@@ -64,7 +65,7 @@ function LoginFlow({ onAuth }) {
     if (pin !== pinConfirm) { setErr("Os PINs não coincidem."); setPinConfirm(""); return; }
     setLoading(true);
     try {
-      const r = await api.auth.setPin(phone.replace(/\D/g, ""), pin);
+      const r = await api.auth.setPin(phone.replace(/\D/g, ""), pin, activationCode);
       onAuth(r.client);
     } catch (e) { setErr(e.message); }
     finally { setLoading(false); }
@@ -108,8 +109,10 @@ function LoginFlow({ onAuth }) {
         {step === "create" && (
           <div className="panel">
             <p style={{ marginBottom: "1rem", color: "var(--muted)", textAlign: "center" }}>
-              Primeiro acesso! Crie um PIN de 4 dígitos para entrar nas próximas vezes.
+              Solicite à escola um código de acesso, válido por 24 horas, para criar seu PIN.
             </p>
+            <label>Código de acesso da escola</label>
+            <input inputMode="numeric" autoComplete="one-time-code" maxLength={8} value={activationCode} onChange={e => setActivationCode(e.target.value.replace(/\D/g, ""))} />
             <label style={{ display: "block", marginBottom: ".5rem", fontWeight: 600, fontSize: ".9rem", textAlign: "center" }}>Escolha seu PIN</label>
             <PinInput value={pin} onChange={setPin} />
             <label style={{ display: "block", margin: "1rem 0 .5rem", fontWeight: 600, fontSize: ".9rem", textAlign: "center" }}>Confirme o PIN</label>
@@ -118,7 +121,7 @@ function LoginFlow({ onAuth }) {
             <button className="btn terra" style={{ width: "100%", justifyContent: "center", marginTop: "1.2rem" }} onClick={createPin} disabled={loading}>
               {loading ? "Salvando…" : "Criar PIN e entrar"}
             </button>
-            <button className="btn ghost sm" style={{ width: "100%", justifyContent: "center", marginTop: ".5rem" }} onClick={() => { setStep("phone"); setPin(""); setPinConfirm(""); setErr(""); }}>
+            <button className="btn ghost sm" disabled={loading} style={{ width: "100%", justifyContent: "center", marginTop: ".5rem" }} onClick={() => { api.auth.logout().catch(() => {}); setStep("phone"); setPin(""); setPinConfirm(""); setErr(""); }}>
               ← Voltar
             </button>
           </div>
@@ -132,7 +135,7 @@ function LoginFlow({ onAuth }) {
             <button className="btn terra" style={{ width: "100%", justifyContent: "center", marginTop: "1.2rem" }} onClick={enterPin} disabled={loading}>
               {loading ? "Entrando…" : "Entrar"}
             </button>
-            <button className="btn ghost sm" style={{ width: "100%", justifyContent: "center", marginTop: ".5rem" }} onClick={() => { setStep("phone"); setPin(""); setErr(""); }}>
+            <button className="btn ghost sm" disabled={loading} style={{ width: "100%", justifyContent: "center", marginTop: ".5rem" }} onClick={() => { api.auth.logout().catch(() => {}); setStep("phone"); setPin(""); setErr(""); }}>
               ← Trocar número
             </button>
           </div>
@@ -165,7 +168,7 @@ export default function ClienteApp({ onBack }) {
         }
 
         <div style={{ textAlign: "center", marginTop: "1.5rem" }}>
-          <button className="btn ghost sm" onClick={() => { setAuthClient(null); setBookingMode(false); }}>Sair da conta</button>
+          <button className="btn ghost sm" onClick={() => { api.auth.logout().catch(() => {}); setAuthClient(null); setBookingMode(false); }}>Sair da conta</button>
           {onBack && <button className="btn ghost sm" style={{ marginLeft: ".5rem" }} onClick={onBack}>← Admin</button>}
         </div>
       </div>

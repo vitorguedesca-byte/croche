@@ -1,8 +1,10 @@
 import express from "express";
 import { createAccessControl } from "./accessControl.js";
 import { filterState } from "./accessPolicy.js";
+import { createPortalAuth } from "./portalAuth.js";
+import { bookingWhere, ownsPortalBooking } from "./portalBookingScope.js";
+import { waWebhookJson } from "./waWebhookAuth.js";
 import cors from "cors";
-import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import multer from "multer";
 import { fileURLToPath } from "url";
@@ -170,6 +172,8 @@ const depoUpload = multer({
 
 const app = express();
 app.use(cors());
+// Antes do parser geral e de qualquer efeito colateral do webhook.
+app.post("/api/wa/webhook", ...waWebhookJson());
 app.use(express.json());
 // Garantir UTF-8 em todas as respostas JSON da API
 app.use("/api", (_req, res, next) => { res.setHeader("Content-Type", "application/json; charset=utf-8"); next(); });
@@ -192,7 +196,7 @@ const PUBLIC_API = [
      pagamento e `paid` de QUALQUER reserva, e nenhuma tela pública o usa —
      quem o chama é o painel, que já entra logado. */
   ["POST", /^\/api\/bookings\/\d+\/(invoice|pay|cancel-pending)$/],
-  ["POST", /^\/api\/auth\/(check|set-pin|login)$/],
+  ["POST", /^\/api\/auth\/(check|set-pin|login|logout)$/],
   [null, /^\/api\/portal\//],
   /* Prévia do código de promoção na tela pública de matrícula. Só CONSULTA
      (não reserva vaga da campanha) e tem limite de tentativas por IP — ver
@@ -237,6 +241,9 @@ function soMatriculaPelaPortaPublica(req, res, booking) {
 const access = createAccessControl({ prisma, isPublicApi });
 app.use(access.middleware);
 app.use(access.router);
+const portalAuth = createPortalAuth({ prisma, clientByCpf, canEnter: clientPodeAcessarPortal, safeClient: c => safeClient(c) });
+app.use(portalAuth.router);
+app.use("/api/portal/:key", portalAuth.requireSession);
 
 // "hoje" pelo relógio de Brasília (o servidor pode rodar em UTC): com
 // toISOString, das 21h à meia-noite o dia já virava e as aulas da noite eram
@@ -324,11 +331,11 @@ const semVaga = (slot, occ) => turmaFechada(slot) || occ >= (slot?.capacity || 1
 async function situacaoNaTurma(slotId, clientName) {
   // a ativa vem primeiro: se ela liberou e depois voltou, quem vale é a de pé
   const ativa = await prisma.booking.findFirst({
-    where: { slotId, clientName, status: { not: "cancelada" } },
+    where: { slotId, ...bookingWhere(clientName), status: { not: "cancelada" } },
   });
   if (ativa) return { tipo: "ativa", motivo: "já marcada", booking: ativa };
   const liberada = await prisma.booking.findFirst({
-    where: { slotId, clientName, status: "cancelada" },
+    where: { slotId, ...bookingWhere(clientName), status: "cancelada" },
   });
   if (liberada) return { tipo: "liberada", motivo: "aula liberada — o lote não remarca", booking: liberada };
   return null;
@@ -378,7 +385,7 @@ const comEncargos = (inv) => {
    transforme feriado sem aula em consumo fictício do plano. */
 async function aulasAtivasDe(client, desde = todayISO()) {
   return prisma.booking.findMany({
-    where: { clientName: client.name, status: { not: "cancelada" }, date: { gte: desde } },
+    where: { ...bookingWhere(client), status: { not: "cancelada" }, date: { gte: desde } },
     select: { id: true, date: true, time: true, status: true, paymentMethod: true },
     orderBy: [{ date: "asc" }, { time: "asc" }],
   });
@@ -400,7 +407,7 @@ async function exigirRegras(client, alvo, { forcar = false, ignorarJanela = fals
   const hoje = todayISO();
   const isEscala = tipoMensalista(client) === "escala";
   const todasAulas = isEscala
-    ? await prisma.booking.findMany({ where: { clientName: client.name, status: { not: "cancelada" } } })
+    ? await prisma.booking.findMany({ where: { ...bookingWhere(client), status: { not: "cancelada" } } })
     : [];
   const r = checarRegras(client, alvo, {
     hoje,
@@ -537,7 +544,7 @@ async function creditosComAulaDeVolta(clientName, creditos) {
   if (!abertos.length) return new Set();
   const bks = await prisma.booking.findMany({
     where: {
-      clientName,
+      ...bookingWhere(clientName),
       date: { in: [...new Set(abertos.map((c) => c.originDate))] },
       status: { not: "cancelada" },
     },
@@ -553,7 +560,7 @@ async function creditosComAulaDeVolta(clientName, creditos) {
 async function reposicoesNoMes(client, comp) {
   return prisma.booking.count({
     where: {
-      clientName: client.name,
+      ...bookingWhere(client),
       paymentMethod: "Reposição",
       status: { not: "cancelada" },
       date: { gte: `${comp}-01`, lte: `${comp}-31` },
@@ -571,7 +578,7 @@ async function resumoReposicao(client) {
     reposicoesNoMes(client, compAtual),
   ]);
   // A aula de origem voltou para a agenda? Então não há o que repor.
-  const voltaram = await creditosComAulaDeVolta(client.name, creditos);
+  const voltaram = await creditosComAulaDeVolta(client, creditos);
   const marcados = creditos.map((c) => ({
     ...c,
     // "aguardando" = a aula liberada ainda não chegou; vira "disponivel" no dia seguinte
@@ -659,7 +666,7 @@ async function marcarReposicao(client, slotId, { forcar = false } = {}) {
   /* Crédito cuja aula de origem voltou não é crédito: a aluna tem a aula.
      Filtrar aqui, e não na cláusula acima, é o que garante que nenhuma porta
      nova de criação de aula escape da regra — ver creditosComAulaDeVolta. */
-  const revogados = await creditosComAulaDeVolta(client.name, candidatos);
+  const revogados = await creditosComAulaDeVolta(client, candidatos);
   const credito = candidatos.find((c) => !revogados.has(c.id)) || null;
   if (!credito) {
     // Distingue "não tem crédito" de "tem, mas a aula liberada ainda não chegou" —
@@ -668,7 +675,7 @@ async function marcarReposicao(client, slotId, { forcar = false } = {}) {
       where: { clientId: client.id, usedBookingId: null, expiresOn: { gte: t }, originDate: { gte: t } },
       orderBy: { originDate: "asc" },
     });
-    const futurosRevogados = await creditosComAulaDeVolta(client.name, futuros);
+    const futurosRevogados = await creditosComAulaDeVolta(client, futuros);
     const esperando = futuros.find((c) => !futurosRevogados.has(c.id)) || null;
     if (esperando)
       throw Object.assign(
@@ -708,7 +715,7 @@ async function marcarReposicao(client, slotId, { forcar = false } = {}) {
       { code: 409 }
     );
   const dup = await prisma.booking.findFirst({
-    where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } },
+    where: { slotId: slot.id, ...bookingWhere(client), status: { not: "cancelada" } },
   });
   if (dup) throw Object.assign(new Error("Você já tem essa aula marcada."), { code: 400 });
   // não há vaga reservada para reposição: só entra se a turma tiver vaga livre
@@ -843,7 +850,7 @@ async function marcarAulaExtra(client, slotId, { forcar = false, passe = false }
   // justamente uma aula fora do plano, comprada à parte.
   await exigirRegras(client, slot, { forcar, ignorarJanela: true, ignorarTeto: true });
   const dup = await prisma.booking.findFirst({
-    where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } },
+    where: { slotId: slot.id, ...bookingWhere(client), status: { not: "cancelada" } },
   });
   if (dup) throw Object.assign(new Error("Você já tem essa aula marcada."), { code: 400 });
   if ((await occupancy(slot.id)) >= (slot.capacity || 1))
@@ -1002,7 +1009,7 @@ async function marcarAulaPresente(client, slotId, { forcar = false } = {}) {
   // Como a aula extra: fora do plano, então a janela da escala e o teto não valem.
   await exigirRegras(client, slot, { forcar, ignorarJanela: true, ignorarTeto: true });
   const dup = await prisma.booking.findFirst({
-    where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } },
+    where: { slotId: slot.id, ...bookingWhere(client), status: { not: "cancelada" } },
   });
   if (dup) throw Object.assign(new Error("Você já tem essa aula marcada."), { code: 400 });
   if ((await occupancy(slot.id)) >= (slot.capacity || 1))
@@ -2231,7 +2238,7 @@ const ehReservaDeEntrada = (b) => ehPagamentoDeMatricula(b.paymentMethod) || b.p
    confirmarPagamentoPorTxid devolve a aula se ainda houver vaga. */
 async function sobrasDoLead(client) {
   const pendentes = (await prisma.booking.findMany({
-    where: { clientName: client.name, status: "aguardando", paid: false },
+    where: { ...bookingWhere(client), status: "aguardando", paid: false },
   })).filter(ehReservaDeEntrada);
   const agora = Date.now();
   const vivas = pendentes.filter((b) => b.holdUntil && new Date(b.holdUntil).getTime() > agora);
@@ -4607,7 +4614,7 @@ app.post("/api/vouchers/validar", wrap(async (req, res) => {
 app.post("/api/portal/:key/voucher", wrap(async (req, res) => {
   if (excedeuTentativasVoucher(req))
     return res.status(429).json({ error: "Muitas tentativas. Espere alguns minutos e tente de novo. 💚" });
-  const client = await clientByPortalKey(req.params.key);
+  const client = req.portalClient;
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const pode = clientPodeAcessarPortal(client);
   if (!pode.ok) return res.status(403).json({ error: pode.motivo });
@@ -5180,27 +5187,18 @@ setTimeout(dispararAniversarios, 60_000);
 
 
 /* ---------- PORTAL DO ALUNO ---------- */
-// Localiza o aluno pela "chave" usada no portal: CPF, telefone (dígitos) ou id.
-async function clientByPortalKey(key) {
-  const d = onlyDigits(key);
-  const clients = await prisma.client.findMany();
-  return (
-    clients.find((c) => (c.cpf && onlyDigits(c.cpf) === d) || (c.phone && onlyDigits(c.phone) === d)) ||
-    (Number(key) ? clients.find((c) => c.id === Number(key)) : null) ||
-    null
-  );
-}
+// A sessão identifica a aluna; CPF/telefone/id na URL são somente aliases.
 const safeClient = (c) => { const { pin, ...rest } = c; return { ...rest, tags: parseTags(c.tags), hasPin: !!pin }; };
 
 // Dados do aluno: cadastro, aulas e horários disponíveis para marcar
 app.get("/api/portal/:key", wrap(async (req, res) => {
-  const client = await clientByPortalKey(req.params.key);
+  const client = req.portalClient;
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const pode = clientPodeAcessarPortal(client);
   if (!pode.ok) return res.status(403).json({ error: pode.motivo, leadPendente: pode.leadPendente || false });
   const t = todayISO();
   const [bookings, slots, ativas, invoices] = await Promise.all([
-    prisma.booking.findMany({ where: { clientName: client.name }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
+    prisma.booking.findMany({ where: { ...bookingWhere(client) }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
     prisma.slot.findMany({ where: { date: { gte: t } }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
     prisma.booking.findMany({ where: { status: { not: "cancelada" } } }),
     // Mensalidade cancelada não é dívida nem histórico útil para a aluna — fica de fora.
@@ -5287,7 +5285,7 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
    Público como o resto do portal, mas só entrega cobrança de mensalidade que
    pertence à própria aluna e que ainda está em aberto. */
 app.post("/api/portal/:key/invoice/:id/pix", wrap(async (req, res) => {
-  const client = await clientByPortalKey(req.params.key);
+  const client = req.portalClient;
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const id = Number(req.params.id);
   const inv = Number.isInteger(id) ? await prisma.invoice.findUnique({ where: { id } }) : null;
@@ -5318,7 +5316,7 @@ app.post("/api/portal/:key/invoice/:id/pix", wrap(async (req, res) => {
 /* Comprar uma aula extra: devolve o Pix a pagar (ou avisa que já há uma paga
    esperando horário). O calendário só abre depois que o Sicredi confirmar. */
 app.post("/api/portal/:key/extra/checkout", wrap(async (req, res) => {
-  const client = await clientByPortalKey(req.params.key);
+  const client = req.portalClient;
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   try {
     const { pass, jaPago } = await comprarAulaExtra(client);
@@ -5336,7 +5334,7 @@ app.post("/api/portal/:key/extra/checkout", wrap(async (req, res) => {
    se a cobrança foi paga — o webhook é o caminho normal, mas se ele atrasar (ou
    o servidor estiver atrás de um túnel que caiu) a aluna não fica presa na tela. */
 app.get("/api/portal/:key/extra/status", wrap(async (req, res) => {
-  const client = await clientByPortalKey(req.params.key);
+  const client = req.portalClient;
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   let pass = (await passeExtraDisponivel(client.id)) || (await passeExtraPendente(client.id));
   if (pass?.status === "pendente" && pass.txid) {
@@ -5351,7 +5349,7 @@ app.get("/api/portal/:key/extra/status", wrap(async (req, res) => {
 
 // Desistiu antes de pagar: cancela a cobrança pendente e limpa a tela.
 app.post("/api/portal/:key/extra/cancelar", wrap(async (req, res) => {
-  const client = await clientByPortalKey(req.params.key);
+  const client = req.portalClient;
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const pendente = await passeExtraPendente(client.id);
   if (pendente) {
@@ -5364,11 +5362,11 @@ app.post("/api/portal/:key/extra/cancelar", wrap(async (req, res) => {
 /* Consulta e confirma (se de fato pago no Sicredi) a reserva de aula de uma aluna.
    Nunca dá baixa manual: pergunta ao Sicredi se o Pix foi pago. */
 app.post("/api/portal/:key/booking/:id/check-pay", wrap(async (req, res) => {
-  const client = await clientByPortalKey(req.params.key);
+  const client = req.portalClient;
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const id = Number(req.params.id);
   const booking = Number.isInteger(id) ? await prisma.booking.findUnique({ where: { id } }) : null;
-  if (!booking || booking.clientName !== client.name) {
+  if (!ownsPortalBooking(client, booking)) {
     return res.status(404).json({ error: "Marcação não encontrada." });
   }
   if (booking.paid) return res.json({ ok: true, pago: true, booking });
@@ -5404,7 +5402,7 @@ app.post("/api/portal/:key/booking/:id/check-pay", wrap(async (req, res) => {
 /* Consulta e confirma (se de fato pago no Sicredi) a mensalidade de uma aluna.
    Nunca dá baixa manual: pergunta ao Sicredi se o Pix foi pago. */
 app.post("/api/portal/:key/invoice/:id/check-pay", wrap(async (req, res) => {
-  const client = await clientByPortalKey(req.params.key);
+  const client = req.portalClient;
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const id = Number(req.params.id);
   const inv = Number.isInteger(id) ? await prisma.invoice.findUnique({ where: { id } }) : null;
@@ -5461,7 +5459,7 @@ const resumoPasse = (p) => ({
 
 // Converter em mensalista pelo portal (usado no tablet da sala)
 app.post("/api/portal/:key/enroll", wrap(async (req, res) => {
-  const client = await clientByPortalKey(req.params.key);
+  const client = req.portalClient;
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const pode = clientPodeAcessarPortal(client);
   if (!pode.ok) return res.status(403).json({ error: pode.motivo });
@@ -5483,7 +5481,7 @@ app.post("/api/portal/:key/enroll", wrap(async (req, res) => {
 // Marcar aula. { reposicao: true } consome crédito; { extra: true } é aula
 // avulsa paga (não mexe no saldo de reposição — são coisas separadas).
 app.post("/api/portal/:key/book", wrap(async (req, res) => {
-  const client = await clientByPortalKey(req.params.key);
+  const client = req.portalClient;
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const pode = clientPodeAcessarPortal(client);
   if (!pode.ok) return res.status(403).json({ error: pode.motivo });
@@ -5515,7 +5513,7 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
     });
   const slot = await prisma.slot.findUnique({ where: { id: Number(req.body.slotId) } });
   if (!slot) return res.status(404).json({ error: "Horário não encontrado." });
-  const dup = await prisma.booking.findFirst({ where: { slotId: slot.id, clientName: client.name, status: { not: "cancelada" } } });
+  const dup = await prisma.booking.findFirst({ where: { slotId: slot.id, ...bookingWhere(client), status: { not: "cancelada" } } });
   if (dup) return res.status(400).json({ error: "Você já tem essa aula marcada." });
   if (turmaFechada(slot)) return res.status(409).json({ error: TURMA_FECHADA });
   if ((await occupancy(slot.id)) >= (slot.capacity || 1)) return res.status(400).json({ error: "Turma lotada." });
@@ -5591,20 +5589,20 @@ async function liberarAula(client, b, extra = {}, { devolverRepo = false } = {})
 
 // Cancelar aula (libera a vaga)
 app.post("/api/portal/:key/cancel/:bookingId", wrap(async (req, res) => {
-  const client = await clientByPortalKey(req.params.key);
+  const client = req.portalClient;
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const b = await prisma.booking.findUnique({ where: { id: Number(req.params.bookingId) } });
-  if (!b || b.clientName !== client.name) return res.status(404).json({ error: "Aula não encontrada." });
+  if (!ownsPortalBooking(client, b)) return res.status(404).json({ error: "Aula não encontrada." });
   const r = await liberarAula(client, b);
   res.json({ ok: true, ...r });
 }));
 
 // "Não poderei ir" — registra o aviso/motivo e libera a vaga
 app.post("/api/portal/:key/absence/:bookingId", wrap(async (req, res) => {
-  const client = await clientByPortalKey(req.params.key);
+  const client = req.portalClient;
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const b = await prisma.booking.findUnique({ where: { id: Number(req.params.bookingId) } });
-  if (!b || b.clientName !== client.name) return res.status(404).json({ error: "Aula não encontrada." });
+  if (!ownsPortalBooking(client, b)) return res.status(404).json({ error: "Aula não encontrada." });
   // Sempre grava um motivo: sem texto, fica o registro de que ela avisou —
   // é isso que diferencia "avisou que não vem" de "cancelou" na tela dela.
   const reason = String(req.body.reason || "").trim().slice(0, 500) || "Avisou que não poderá ir";
@@ -5665,7 +5663,7 @@ async function criarGradeInicial12Meses(client, slotsBase) {
         });
         slotsCriados.push(alvo);
       }
-      const sit = await situacaoNaTurma(alvo.id, client.name);
+      const sit = await situacaoNaTurma(alvo.id, client);
       if (sit?.tipo === "ativa") continue;
       /* Remontar a grade (troca de plano, novo horário) não pode ressuscitar as
          datas que a aluna já tinha liberado nesta mesma turma. */
@@ -5727,7 +5725,7 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
   const erroEscala = erroEscalaSoAte2x(freq, tipoEfetivo);
   if (erroEscala) throw erroEscala;
   const jaTemGrade = jaMensalista ? await prisma.booking.count({
-    where: { clientName: client.name, date: { gte: todayISO() }, status: { not: "cancelada" }, paymentMethod: PGTO_PLANO },
+    where: { ...bookingWhere(client), date: { gte: todayISO() }, status: { not: "cancelada" }, paymentMethod: PGTO_PLANO },
   }) > 0 : false;
   if (jaMensalista && jaTemGrade) {
     throw Object.assign(new Error("Esta aluna já é mensalista. Para alterar o plano dela, use a troca de plano."), { code: 409 });
@@ -5741,7 +5739,7 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
   // APENAS se for aluna nova na 1ª aula e a aula for futura (não tenta replicar aulas passadas de alunas antigas)
   if (tipoEfetivo === "fixo" && ids.length < freq && client.firstClass) {
     const bookings = await prisma.booking.findMany({
-      where: { clientName: client.name, status: { not: "cancelada" }, date: { gte: todayISO() } },
+      where: { ...bookingWhere(client), status: { not: "cancelada" }, date: { gte: todayISO() } },
       orderBy: { date: "asc" },
       take: freq,
     });
@@ -5775,7 +5773,7 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
     if (feriadoNoDia(slot.date, slot.unit)) throw Object.assign(new Error(recusaFeriado(feriadoNoDia(slot.date, slot.unit), slot.date)), { code: 409 });
     if (turmaFechada(slot)) throw Object.assign(new Error(`A turma de ${fmtDiaBR(slot.date)} às ${hhmm(slot.time)} foi fechada pela escola. Escolha outro horário.`), { code: 409 });
     if ((await occupancy(slot.id)) >= (slot.capacity || 1)) {
-      const sit = await situacaoNaTurma(slot.id, client.name);
+      const sit = await situacaoNaTurma(slot.id, client);
       if (sit?.tipo !== "ativa") {
         throw Object.assign(new Error(`A turma de ${slot.date} às ${slot.time} acabou de lotar.`), { code: 409 });
       }
@@ -5957,7 +5955,7 @@ async function abrirReservaDeMatricula(client, { weeklyFreq, mensalistaTipo, slo
 
   // Refazer a matrícula solta a reserva anterior que não foi paga — e o QR dela
   const anteriores = await prisma.booking.findMany({
-    where: { clientName: client.name, paymentMethod: MARCA_MATRICULA, status: "aguardando", paid: false },
+    where: { ...bookingWhere(client), paymentMethod: MARCA_MATRICULA, status: "aguardando", paid: false },
   });
   await prisma.booking.updateMany({
     where: { id: { in: anteriores.map((b) => b.id) } },
@@ -5969,7 +5967,7 @@ async function abrirReservaDeMatricula(client, { weeklyFreq, mensalistaTipo, slo
   for (const s of slots) {
     if (s.date < hoje) throw Object.assign(new Error("Escolha somente aulas futuras."), { code: 400 });
     if (feriadoNoDia(s.date, s.unit)) throw Object.assign(new Error(recusaFeriado(feriadoNoDia(s.date, s.unit), s.date)), { code: 409 });
-    const dup = await prisma.booking.findFirst({ where: { slotId: s.id, clientName: client.name, status: { not: "cancelada" } } });
+    const dup = await prisma.booking.findFirst({ where: { slotId: s.id, ...bookingWhere(client), status: { not: "cancelada" } } });
     if (dup) throw Object.assign(new Error(`${client.name} já tem aula em ${fmtDiaBR(s.date)} às ${hhmm(s.time)}. Escolha outro horário.`), { code: 409 });
     if (turmaFechada(s)) throw Object.assign(new Error(`A turma de ${fmtDiaBR(s.date)} às ${hhmm(s.time)} foi fechada pela escola. Escolha outro horário.`), { code: 409 });
     if ((await occupancy(s.id)) >= (s.capacity || 1))
@@ -6175,7 +6173,7 @@ app.post("/api/clients/:id/matricula/refund", wrap(async (req, res) => {
      outra (ou não existia) recebe de volta o que é dela, não o que a tabela de
      hoje diria. */
   const reservaMatricula = await prisma.booking.findFirst({
-    where: { clientName: client.name, paymentMethod: { in: MARCAS_MATRICULA }, paid: true },
+    where: { ...bookingWhere(client), paymentMethod: { in: MARCAS_MATRICULA }, paid: true },
     orderBy: { paymentDate: "desc" },
   });
   desfez.pago = Number(reservaMatricula?.value || 0);
@@ -6184,7 +6182,7 @@ app.post("/api/clients/:id/matricula/refund", wrap(async (req, res) => {
 
   // Aulas futuras do plano somem — a aula de matrícula (já realizada) fica no histórico.
   const aulas = await prisma.booking.updateMany({
-    where: { clientName: client.name, date: { gte: t }, status: { not: "cancelada" }, paymentMethod: { notIn: MARCAS_MATRICULA } },
+    where: { ...bookingWhere(client), date: { gte: t }, status: { not: "cancelada" }, paymentMethod: { notIn: MARCAS_MATRICULA } },
     data: { status: "cancelada", absenceReason: "Matrícula devolvida — aluna não continuou" },
   });
   desfez.aulas = aulas.count;
@@ -6346,7 +6344,7 @@ app.post("/api/clients/:id/batch-book", wrap(async (req, res) => {
     const slot = await prisma.slot.findFirst({ where: { date, time, unit } });
     if (!slot) { pulos.semTurma++; continue; }
     // já agendado nesta turma? (ou liberado de propósito — o lote não remarca)
-    const sit = await situacaoNaTurma(slot.id, client.name);
+    const sit = await situacaoNaTurma(slot.id, client);
     if (sit?.tipo === "ativa") { pulos.jaAgendado++; continue; }
     if (sit?.tipo === "liberada") { pulos.liberada++; continue; }
     // capacidade (a turma fechada pela escola conta como cheia)
@@ -8525,12 +8523,12 @@ async function encerrarAluna(client) {
   const t = todayISO();
   // 1. Coleta todas as aulas futuras da aluna para backup antes de excluir
   const aulasParaRemover = await prisma.booking.findMany({
-    where: { clientName: client.name, date: { gte: t } },
+    where: { ...bookingWhere(client), date: { gte: t } },
   });
 
   // 2. Exclui definitivamente as aulas futuras da grade sem deixar registros fantasmas
   const deletadas = await prisma.booking.deleteMany({
-    where: { clientName: client.name, date: { gte: t } },
+    where: { ...bookingWhere(client), date: { gte: t } },
   });
 
   // 3. Cancela todas as mensalidades pendentes da aluna (mês atual e futuros)
@@ -8776,7 +8774,7 @@ app.post(
 
     // Busca reservas associadas ao cliente
     const bookings = await prisma.booking.findMany({
-      where: { clientName: client.name },
+      where: { ...bookingWhere(client) },
       orderBy: { id: "desc" },
     });
 
@@ -9282,6 +9280,7 @@ function clientPodeAcessarPortal(client) {
 
 // Localiza o aluno(a) pelo CPF (somente dígitos)
 async function clientByCpf(cpfRaw) {
+  if (typeof cpfRaw !== "string") return null;
   const cpf = onlyDigits(cpfRaw);
   if (cpf.length !== 11) return null;
   return prisma.client.findFirst({ where: { cpf } });
@@ -9322,7 +9321,7 @@ app.post("/api/auth/check", wrap(async (req, res) => {
      inativa. Só as reservas desta volta (createdAt depois de voltaDesde). */
   if (ehExAluna(client) && client.voltaDesde) {
     const daVolta = (await prisma.booking.findMany({
-      where: { clientName: client.name, status: "aguardando", paid: false, paymentMethod: MARCA_MATRICULA, txid: { not: null } },
+      where: { ...bookingWhere(client), status: "aguardando", paid: false, paymentMethod: MARCA_MATRICULA, txid: { not: null } },
     })).filter((b) => ehPagamentoDaVolta(client, b));
     for (const b of daVolta) await confirmarPagamentoPorTxid(b.txid).catch(() => false);
     if (daVolta.length) client = (await prisma.client.findUnique({ where: { id: client.id } })) || client;
@@ -9341,40 +9340,7 @@ app.post("/api/auth/check", wrap(async (req, res) => {
   res.json({ exists: true, hasPin: !!client.pin, clientId: client.id });
 }));
 
-// Define PIN pela primeira vez (aluno(a) já cadastrado, sem PIN)
-app.post("/api/auth/set-pin", wrap(async (req, res) => {
-  const pin = String(req.body.pin || "");
-  if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error: "PIN de 4 dígitos é obrigatório." });
-  const client = await clientByCpf(req.body.cpf);
-  if (!client) return res.status(404).json({ error: "CPF não encontrado." });
-  const pode = clientPodeAcessarPortal(client);
-  if (!pode.ok) return res.status(403).json({ error: pode.motivo });
-  if (client.pin) return res.status(409).json({ error: "PIN já cadastrado. Use o login normal." });
-  const hash = await bcrypt.hash(pin, 10);
-  const updated = await prisma.client.update({ where: { id: client.id }, data: { pin: hash } });
-  const { pin: _p, ...safe } = updated;
-  res.json({ ok: true, client: { ...safe, tags: parseTags(safe.tags), hasPin: true } });
-}));
-
-// Login com CPF + PIN
-app.post("/api/auth/login", wrap(async (req, res) => {
-  const pin = String(req.body.pin || "");
-  if (!pin) return res.status(400).json({ error: "PIN obrigatório." });
-  const client = await clientByCpf(req.body.cpf);
-  if (!client || !client.pin) return res.status(401).json({ error: "Credenciais inválidas." });
-  const pode = clientPodeAcessarPortal(client);
-  if (!pode.ok) return res.status(403).json({ error: pode.motivo });
-  const ok = await bcrypt.compare(pin, client.pin);
-  if (!ok) return res.status(401).json({ error: "PIN incorreto." });
-  const { pin: _p, ...safe } = client;
-  res.json({ ok: true, client: { ...safe, tags: parseTags(safe.tags), hasPin: true } });
-}));
-
-// Resetar PIN (admin — apaga o hash, cliente volta ao fluxo de primeiro acesso)
-app.delete("/api/clients/:id/pin", wrap(async (req, res) => {
-  await prisma.client.update({ where: { id: Number(req.params.id) }, data: { pin: null } });
-  res.json({ ok: true });
-}));
+// Criação, login, logout e redefinição segura do PIN: portalAuth.js.
 
 /* ===================== DEPOIMENTOS ===================== */
 

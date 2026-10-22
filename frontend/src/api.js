@@ -2,6 +2,8 @@
 
 // ----- token de sessão do painel admin -----
 let TOKEN = null;
+let PORTAL_TOKEN = null; // só em memória; não acompanha o CPF salvo no aparelho
+let PORTAL_GENERATION = 0;
 // Perfil de quem entrou: "admin" (tudo) ou "instrutora" (só a Agenda, e só ver).
 // É uma conveniência da tela — quem manda de verdade é o backend, que recusa
 // qualquer rota fora da lista da instrutora mesmo sem passar por botão nenhum.
@@ -57,7 +59,11 @@ export function canAccess(module, level = 1) {
 
 async function req(method, url, body) {
   const headers = { "Content-Type": "application/json" };
-  if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
+  const portalRequest = url.startsWith("/api/portal/");
+  const studentRequest = portalRequest || url.startsWith("/api/auth/");
+  const sentPortalToken = PORTAL_TOKEN;
+  if (TOKEN && !studentRequest) headers.Authorization = `Bearer ${TOKEN}`;
+  if (PORTAL_TOKEN && studentRequest) headers["X-Portal-Token"] = PORTAL_TOKEN;
   const res = await fetch(url, {
     method,
     headers,
@@ -71,7 +77,12 @@ async function req(method, url, body) {
     let corpo = null;
     try { corpo = await res.json(); msg = corpo.error || msg; } catch {}
     const err = new Error(msg);
-    if (res.status === 401 && TOKEN && !url.startsWith("/api/admin/login")) {
+    if (res.status === 401 && portalRequest && sentPortalToken && sentPortalToken === PORTAL_TOKEN) {
+      PORTAL_TOKEN = null;
+      PORTAL_GENERATION++;
+      window.dispatchEvent(new Event("fqc-portal-expired"));
+    }
+    if (res.status === 401 && TOKEN && !studentRequest && !url.startsWith("/api/admin/login")) {
       setToken(null);
       window.dispatchEvent(new Event("fqc-access"));
     }
@@ -80,6 +91,14 @@ async function req(method, url, body) {
     throw err;
   }
   return res.status === 204 ? null : res.json();
+}
+
+async function portalLogin(path, body) {
+  const generation = ++PORTAL_GENERATION;
+  const result = await req("POST", path, body);
+  if (generation !== PORTAL_GENERATION) throw new Error("Acesso cancelado. Entre novamente.");
+  PORTAL_TOKEN = result.portalToken;
+  return result;
 }
 
 export const api = {
@@ -257,8 +276,9 @@ export const api = {
 
   auth: {
     check:  (cpf)       => req("POST", "/api/auth/check",   { cpf }),
-    setPin: (cpf, pin)  => req("POST", "/api/auth/set-pin", { cpf, pin }),
-    login:  (cpf, pin)  => req("POST", "/api/auth/login",   { cpf, pin }),
+    setPin: (cpf, pin, activationCode) => portalLogin("/api/auth/set-pin", { cpf, pin, activationCode }),
+    login:  (cpf, pin) => portalLogin("/api/auth/login", { cpf, pin }),
+    logout: () => { const pending = req("POST", "/api/auth/logout"); PORTAL_TOKEN = null; PORTAL_GENERATION++; return pending; },
   },
 
   // Login do painel administrativo
