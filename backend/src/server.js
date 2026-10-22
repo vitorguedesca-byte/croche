@@ -7943,8 +7943,12 @@ Toque abaixo para escolher 👇`,
      Em 07/10 quinze alunas responderam a um aviso da escola e receberam
      "escolha a unidade". Agora, no começo da conversa (ou depois de ela ter
      terminado), o telefone é procurado nas fichas. Os botões do lembrete
-     (faltarei/presença), o Pix e "Matrícula nova" seguem o caminho de sempre. */
-  const ridDoFluxo = rid === "new" || rid === "volta" || rid === "duvida:pix" || rid === "retomar" ||
+     (faltarei/presença), o Pix e "Matrícula nova" seguem o caminho de sempre.
+     "Continuar" só segue direto enquanto a conversa vale: o botão de uma
+     conversa expirada não tem mais passo para retomar. Em 21/10 a Keila,
+     matriculada pelo painel naquela tarde, tocou no "Continuar" de setembro e
+     recebeu o menu de aluna nova. */
+  const ridDoFluxo = rid === "new" || rid === "volta" || rid === "duvida:pix" || (rid === "retomar" && !expirou) ||
     rid.startsWith("faltarei:") || rid.startsWith("presenca:");
   if (!ridDoFluxo && (primeiroContato || expirou || ["start", "done", "aluna", "exaluna"].includes(conv.step))) {
     const alunas = await alunasPeloTelefone(phone);
