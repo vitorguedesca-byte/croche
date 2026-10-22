@@ -2843,9 +2843,9 @@ export function EnrollForm({ client }) {
    (Vitor, 08/10/2026). O servidor abre a reserva de matrícula, igual à do
    site: ela só vira mensalista quando o pagamento entra — pelo Pix (o banco
    avisa sozinho) ou pela baixa que você dá aqui quando recebe por fora. */
-export function MatricularNovaForm({ client, plano: planoInicial, tipo: tipoInicial }) {
+export function MatricularNovaForm({ client, plano: planoInicial, tipo: tipoInicial, recemCadastrada = false }) {
   const { data, run } = useStore();
-  const { open } = useModal();
+  const { open, close } = useModal();
   const meta = data.meta || {};
   const [freq, setFreq] = useState(Number(planoInicial) || 1);
   const [tipo, setTipo] = useState(tipoInicial === "escala" ? "escala" : "fixo");
@@ -2953,10 +2953,50 @@ export function MatricularNovaForm({ client, plano: planoInicial, tipo: tipoInic
     cancelLabel: "Continuar a matrícula",
     tone: "danger",
   });
+  const voltarSemMatricular = async () => { if (await sairSemMatricular()) voltar(); };
+
+  /* Logo depois do cadastro, a tela NÃO fecha sem a matrícula (Vitor, 21/10/2026):
+     a pergunta acima ainda deixava sair, e a ficha avulsa ficava esquecida em
+     Leads. Sem Pix nem "recebi por fora", a única saída é desfazer o cadastro —
+     a ficha que acabou de nascer some, e não sobra aluna pela metade. */
+  const desfazerCadastro = async () => {
+    if (!(await confirmModal({
+      title: "Desfazer o cadastro",
+      message: `A ficha de ${client.name} será apagada, como se o cadastro não tivesse sido feito.\n\n` +
+        "Use quando ela não vai se matricular agora ou o cadastro foi feito errado. Para matricular depois, cadastre de novo.",
+      confirmLabel: "Desfazer o cadastro",
+      cancelLabel: "Continuar a matrícula",
+      tone: "danger",
+    }))) return;
+    setBusy(true);
+    try {
+      await run(api.deleteClient(client.id));
+      toast(`Cadastro de ${client.name} desfeito.`, "success");
+      close();
+    } catch { /* run já avisou */ }
+    finally { setBusy(false); }
+  };
+  const naoFechaSemMatricula = async () => {
+    const querDesfazer = await confirmModal({
+      title: "Conclua a matrícula",
+      message: `${client.name} acabou de ser cadastrada e ainda NÃO é mensalista. Esta tela só fecha depois da matrícula:\n\n` +
+        "• 💠 Gerar Pix — ela vira mensalista quando o Pix cair\n" +
+        "• ✓ Recebi por fora — ela vira mensalista agora\n\n" +
+        "Se ela não vai se matricular agora ou o cadastro foi feito errado, desfaça o cadastro.\n\n" +
+        "Se ela já era aluna antes do sistema, desfaça e cadastre de novo marcando \"Primeira aula? Não — já é aluno(a)\".",
+      confirmLabel: "🗑 Desfazer cadastro",
+      cancelLabel: "Continuar a matrícula",
+      tone: "danger",
+    });
+    if (querDesfazer) await desfazerCadastro();
+    return false; // quem fecha é o desfazer (ou a matrícula), nunca o ×
+  };
 
   return (
-    <Modal title="Matricular — taxa + 1ª mensalidade" confirmClose={sairSemMatricular} footer={<>
-      <button data-access="financeiro:2" className="btn ghost" onClick={voltar}>← Voltar ao perfil</button>
+    <Modal title="Matricular — taxa + 1ª mensalidade" confirmClose={recemCadastrada ? naoFechaSemMatricula : sairSemMatricular} footer={<>
+      {recemCadastrada
+        ? <button data-access="financeiro:2" className="btn ghost" onClick={desfazerCadastro} disabled={busy}>🗑 Desfazer cadastro</button>
+        : <button data-access="financeiro:2" className="btn ghost" onClick={voltarSemMatricular}>← Voltar ao perfil</button>}
       <div style={{ flex: 1 }} />
       <button data-access="financeiro:2" className="btn sec" onClick={recebiPorFora} disabled={busy}>✓ Recebi por fora</button>
       <button data-access="financeiro:2" className="btn" onClick={gerarPix} disabled={busy}>{busy ? "Aguarde…" : "💠 Gerar Pix"}</button>
@@ -3867,7 +3907,7 @@ function useClientForm(client, onDone) {
     const saved = await run(client ? api.updateClient(client.id, payload) : api.createClient(payload));
     if (matriculaComCobranca && saved) {
       // A ficha está salva; a matrícula (horários + cobrança) segue no próximo passo.
-      open(<MatricularNovaForm client={{ ...(client || {}), ...saved }} plano={Number(plano)} tipo={tipoMens} />);
+      open(<MatricularNovaForm client={{ ...(client || {}), ...saved }} plano={Number(plano)} tipo={tipoMens} recemCadastrada={!client} />);
       return;
     }
     if (precisaMatricular) {
