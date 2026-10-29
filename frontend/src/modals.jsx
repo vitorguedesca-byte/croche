@@ -35,7 +35,7 @@ const profOptions = (meta) => meta.profs.map((p) => ({ value: p, label: p, icon:
 /* Os dois jeitos de a mensalista ocupar a agenda (ver backend/src/regrasAula.js) */
 const TIPO_MENSALISTA_OPCOES = [
   { value: "fixo", label: "Fixo", hint: "dia e hora fixos — você monta a agenda dela", icon: "📌" },
-  { value: "escala", label: "Escala", hint: "ela marca a própria aula, no dia da aula dela", icon: "🙋" },
+  { value: "escala", label: "Escala", hint: "ela marca as aulas do mês, quando quiser", icon: "🙋" },
 ];
 /* 3x e 4x por semana são só para mensalista fixo: a opção que não combina
    com a outra escolha aparece travada, com o motivo no lugar da dica. */

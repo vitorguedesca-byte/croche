@@ -771,7 +771,8 @@ export function situacaoMensalidade(data, client, comp = compAtual()) {
    Ao mexer numa regra, mexa nos dois lugares.
 
    • A frequência do plano define a grade inicial de 12 meses.
-   • Escala: a aluna marca a próxima aula no dia da aula dela.
+   • Escala: pacote de 4 (1x) ou 8 (2x) aulas por mês, marcadas quando ela
+     quiser, no mês atual e no seguinte (29/10/2026).
 
    Não há mais regra por DATA. As duas que existiam saíram, porque as duas
    diziam que parte da grade real da escola estava fora do plano: "a partir das
@@ -802,12 +803,25 @@ export function limiteMensalEscala(client, date) {
   return 4; // padrão 1x (R$ 120,00) = 4 aulas por mês
 }
 
+/* Aulas do pacote do mês já usadas: as do plano de pé + as que ela liberou
+   (viram crédito, não voltam ao pacote). ESPELHO de aulasDoPacote no backend. */
+export function aulasDoPacote(todasAulasDaAluna, comp) {
+  const doMes = (todasAulasDaAluna || []).filter(
+    (b) => b && b.paymentMethod === "Mensalista" && String(b.date || "").startsWith(comp)
+  );
+  const chave = (b) => `${b.date} ${hhmm(b.time)}`;
+  const dePe = doMes.filter((b) => b.status !== "cancelada");
+  const aulasDePe = new Set(dePe.map(chave));
+  const liberadas = new Set(
+    doMes.filter((b) => b.status === "cancelada" && b.liberada).map(chave).filter((k) => !aulasDePe.has(k))
+  );
+  return dePe.length + liberadas.size;
+}
+
 export function tetoMensalEscala(client, date, todasAulasDaAluna) {
   const comp = String(date || "").slice(0, 7);
   const limite = limiteMensalEscala(client, date);
-  const marcadas = (todasAulasDaAluna || []).filter(
-    (b) => b && b.status !== "cancelada" && (b.paymentMethod === "Mensalista" || !b.paymentMethod) && String(b.date || "").startsWith(comp)
-  ).length;
+  const marcadas = aulasDoPacote(todasAulasDaAluna, comp);
   return {
     competencia: comp,
     limite,
@@ -817,109 +831,26 @@ export function tetoMensalEscala(client, date, todasAulasDaAluna) {
   };
 }
 
-export function diaBR(date) {
-  const m = String(date || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return date;
-  const dow = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"][
-    new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()
-  ];
-  return `${dow}, ${m[3]}/${m[2]}`;
-}
+/* Pacote do mês da escala (29/10/2026): marca quando quiser, no mês atual e
+   no seguinte. ESPELHO de janelaEscala em backend/src/regrasAula.js. */
+export const ESCALA_MESES_ABERTOS = 2;
+const somarComp = (comp, n) => {
+  const [y, m] = String(comp).split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + n, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+};
 
-export function janelaEscala(aulasAtivas, hoje, opts = {}) {
-  const { weeklyFreq = 1, alvoDate, todasAulas = [] } = opts;
-  const futuras = (aulasAtivas || [])
-    .filter((b) => b && b.status !== "cancelada" && b.date >= hoje)
-    .sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
-
-  const contaNoTeto = (b) => b && b.status !== "cancelada" && (b.paymentMethod === "Mensalista" || !b.paymentMethod);
-
-  if (Number(weeklyFreq) === 2) {
-    const segHoje = weekStart(hoje);
-    const listaCompleta = todasAulas.length ? todasAulas : (aulasAtivas || []);
-
-    const aulasSemanaAtual = listaCompleta
-      .filter((b) => contaNoTeto(b) && mesmaSemana(b.date, hoje))
-      .sort((a, b) => a.date.localeCompare(b.date));
-    const ultimaAulaSemanaAtual = aulasSemanaAtual[aulasSemanaAtual.length - 1];
-    const ultimaAulaJaPassou = !ultimaAulaSemanaAtual || ultimaAulaSemanaAtual.date <= hoje;
-
-    // Se NÃO passou alvoDate: consulta geral
-    if (!alvoDate) {
-      if (aulasSemanaAtual.length < 2) {
-        return { aberta: true, proxima: null, motivo: "" };
-      }
-      if (!ultimaAulaJaPassou) {
-        return {
-          aberta: false,
-          proxima: ultimaAulaSemanaAtual,
-          motivo: `Na escala 2x, as aulas da próxima semana são liberadas a partir da sua última aula desta semana (${diaBR(ultimaAulaSemanaAtual.date)}). 💚`,
-        };
-      }
-      const segProx = addDays(segHoje, 7);
-      const marcadasNaProx = listaCompleta.filter((b) => contaNoTeto(b) && mesmaSemana(b.date, segProx));
-      if (marcadasNaProx.length < 2) {
-        return { aberta: true, proxima: null, motivo: "" };
-      }
-      return {
-        aberta: false,
-        proxima: marcadasNaProx[0],
-        motivo: `Você já tem as 2 aulas agendadas para a próxima semana. 💚`,
-      };
-    }
-
-    const alvo = alvoDate;
-    if (alvo < hoje) {
-      return { aberta: false, proxima: null, motivo: "Não é possível agendar aulas em datas passadas." };
-    }
-    const segAlvo = weekStart(alvo);
-    const marcadasNaSemanaAlvo = listaCompleta.filter(
-      (b) => contaNoTeto(b) && mesmaSemana(b.date, alvo)
-    );
-
-    if (segAlvo > segHoje) {
-      if (!ultimaAulaJaPassou) {
-        return {
-          aberta: false,
-          proxima: ultimaAulaSemanaAtual,
-          motivo: `Na escala 2x, as aulas da próxima semana são liberadas a partir da sua última aula desta semana (${diaBR(ultimaAulaSemanaAtual.date)}). 💚`,
-        };
-      }
-      const segProx = addDays(segHoje, 7);
-      if (segAlvo > segProx) {
-        return {
-          aberta: false,
-          proxima: null,
-          motivo: "Na escala 2x, você pode marcar aulas para esta semana ou para a próxima semana. 💚",
-        };
-      }
-    }
-
-    if (marcadasNaSemanaAlvo.length < 2) {
-      return { aberta: true, proxima: null, motivo: "" };
-    }
-
+export function janelaEscala(hoje, alvoDate) {
+  if (!alvoDate) return { aberta: true, motivo: "" };
+  if (alvoDate < hoje) return { aberta: false, motivo: "Não é possível agendar aulas em datas passadas." };
+  const ultimoMes = somarComp(String(hoje).slice(0, 7), ESCALA_MESES_ABERTOS - 1);
+  if (String(alvoDate).slice(0, 7) > ultimoMes)
     return {
       aberta: false,
-      proxima: marcadasNaSemanaAlvo[0],
-      motivo: segAlvo === segHoje
-        ? `Você já tem as 2 aulas agendadas para esta semana. 💚`
-        : `Você já tem as 2 aulas agendadas para essa semana. 💚`,
+      motivo: `Na escala você marca as aulas deste mês e do próximo. As de ${compPorExtenso(somarComp(ultimoMes, 1))} abrem no dia 1º. 💚`,
     };
-  }
-
-  // Regra padrão 1x por semana:
-  if (futuras.some((b) => b.date === hoje)) return { aberta: true, proxima: null, motivo: "" };
-  if (!futuras.length) return { aberta: true, proxima: null, motivo: "" };
-  const prox = futuras[0];
-  return {
-    aberta: false,
-    proxima: prox,
-    motivo: `Na escala, a próxima aula é marcada no dia da sua aula. Sua próxima é ${diaBR(prox.date)}` +
-      (prox.time ? ` às ${prox.time}` : "") + " — marque por lá. 💚",
-  };
+  return { aberta: true, motivo: "" };
 }
-
 
 /**
  * Validação do algoritmo oficial do CPF (módulo 11 com 2 dígitos verificadores).

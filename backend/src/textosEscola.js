@@ -181,7 +181,7 @@ export const textoConfirmarAvulsa = ({ nome, valorAvulsa, duracaoMin = 120, plan
     .join("\n");
   return `Só confirmando${primeiro ? ", " + primeiro : ""}: você quer pagar *somente a aula avulsa* (${moeda(valorAvulsa)} por uma aula de ${duracao})? 🧺
 ${linhas ? `
-Temos também a opção de *mensalista na escala*: toda semana você agenda a sua próxima aula, nos dias e horários disponíveis — e cada aula fica mais em conta:
+Temos também a opção de *mensalista na escala*: você tem um pacote de aulas por mês e marca quando quiser, nos dias e horários disponíveis — e cada aula fica mais em conta:
 
 ${linhas}
 ` : ""}
@@ -202,7 +202,7 @@ export const textoValores = ({ valorAvulsa, duracaoMin = 120, planos = [], taxa 
 📅 *Mensalista* — a 1ª aula já está inclusa:
 ${planos.map((p) => `• *${p.freq}x por semana* — ${moeda(p.valor)}/mês (${p.aulas} aulas · ${moeda(p.porAula)} por aula)`).join("\n")}
 
-1x e 2x podem ser na *escala* (você agenda a próxima aula toda semana) ou em horário *fixo*; 3x e 4x são só em horário fixo.${taxa ? `
+1x e 2x podem ser na *escala* (você marca as aulas do mês quando quiser) ou em horário *fixo*; 3x e 4x são só em horário fixo.${taxa ? `
 No primeiro pagamento do plano entra a taxa de matrícula de ${moeda(taxa)}, cobrada uma vez só.` : ""}`;
 };
 

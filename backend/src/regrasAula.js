@@ -9,10 +9,10 @@
    cancelamento, remarcação, reposição e aula extra não alteram uma contagem
    obrigatória da semana.
 
-   Para a modalidade ESCALA, continua valendo que a aluna marca a próxima aula
-   NO DIA da aula dela — ou seja,
-      a janela de marcação só abre nos dias em que ela tem aula. Quantas aulas
-      ela marca nesse dia é com ela; o que a regra prende é o dia.
+   Para a modalidade ESCALA (Vitor, 29/10/2026) não há mais regra de dia nem
+   de semana: ela tem um PACOTE de aulas por mês (4 no 1x, 8 no 2x) e marca
+   quando quiser — as 4 na mesma semana, se for o caso — no mês atual e no
+   seguinte. Semana sem aula não vira reposição. Ver janelaEscala().
 
    DUAS REGRAS DE DATA/HORA FORAM REMOVIDAS, e pelo mesmo motivo — as duas
    diziam que parte da grade da escola não fazia parte do plano:
@@ -310,16 +310,6 @@ export const podeReplicarMensalista = (client) => tipoMensalista(client) === "fi
 
 export const TIPO_LABEL = { fixo: "Mensalista fixo", escala: "Mensalista escala" };
 
-// 'YYYY-MM-DD' → 'sáb, 22/08' (curto, para caber nas mensagens)
-function diaBR(date) {
-  const m = String(date || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return date;
-  const dow = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"][
-    new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()
-  ];
-  return `${dow}, ${m[3]}/${m[2]}`;
-}
-
 // 'YYYY-MM-DD' → segunda-feira daquela semana, em UTC (sem fuso atrapalhar)
 export function segundaDaSemana(date) {
   const m = String(date || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -332,103 +322,37 @@ export const mesmaSemana = (a, b) => segundaDaSemana(a) === segundaDaSemana(b);
 // Só conta como aula do plano o que o backend marcou como "Mensalista".
 export const contaNoTeto = (b) => b && b.status !== "cancelada" && b.paymentMethod === PGTO_PLANO;
 
-/* Janela de marcação da escala.
-   • 1x por semana: a próxima aula é marcada no dia da sua aula (ou se não houver aula futura).
-   • 2x por semana (Vitor, 04/09/2026): a aluna de escala 2x pode marcar as DUAS aulas da semana
-     a partir da última aula realizada da semana anterior. Não trava após marcar a 1ª aula. */
-export function janelaEscala(aulasAtivas, hoje, opts = {}) {
-  const { weeklyFreq = 1, alvoDate, todasAulas = [] } = opts;
-  const futuras = (aulasAtivas || [])
-    .filter((b) => b && b.status !== "cancelada" && b.date >= hoje)
-    .sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+/* ===================== JANELA DA ESCALA: O PACOTE DO MÊS =====================
+   Vitor, 29/10/2026. Substitui as duas regras anteriores — a do 1x ("a próxima
+   aula é marcada no dia da sua aula") e a do 2x de 04/09 ("duas por semana, a
+   próxima semana abre na última aula desta").
 
-  if (Number(weeklyFreq) === 2) {
-    const segHoje = segundaDaSemana(hoje);
-    const listaCompleta = todasAulas.length ? todasAulas : (aulasAtivas || []);
+   A aluna de escala tem um PACOTE de aulas por mês (limiteMensalEscala: 4 no
+   1x, 8 no 2x) e marca quando quiser. Não existe mais regra de dia nem de
+   semana: as 4 aulas do 1x podem cair todas na mesma semana. O 1x/2x diz só o
+   tamanho do pacote.
 
-    // Aulas da semana atual
-    const aulasSemanaAtual = listaCompleta
-      .filter((b) => contaNoTeto(b) && mesmaSemana(b.date, hoje))
-      .sort((a, b) => a.date.localeCompare(b.date));
-    const ultimaAulaSemanaAtual = aulasSemanaAtual[aulasSemanaAtual.length - 1];
-    const ultimaAulaJaPassou = !ultimaAulaSemanaAtual || ultimaAulaSemanaAtual.date <= hoje;
+   O que sobra para a janela é ATÉ ONDE ela enxerga: o mês atual e o seguinte
+   (ESCALA_MESES_ABERTOS), cada um com o seu pacote. Só o mês atual deixaria a
+   aluna sem como marcar a aula da semana que vem no dia 29; sem limite nenhum,
+   a escala viraria grade fixa e seguraria vaga por meses.
 
-    // Se NÃO passou alvoDate: consulta geral (para saber se o portal/aluna pode marcar algo agora)
-    if (!alvoDate) {
-      if (aulasSemanaAtual.length < 2) {
-        return { aberta: true, proxima: null, motivo: "" };
-      }
-      if (!ultimaAulaJaPassou) {
-        return {
-          aberta: false,
-          proxima: ultimaAulaSemanaAtual,
-          motivo: `Na escala 2x, as aulas da próxima semana são liberadas a partir da sua última aula desta semana (${diaBR(ultimaAulaSemanaAtual.date)}). 💚`,
-        };
-      }
-      const segProx = somarDias(segHoje, 7);
-      const marcadasNaProx = listaCompleta.filter((b) => contaNoTeto(b) && mesmaSemana(b.date, segProx));
-      if (marcadasNaProx.length < 2) {
-        return { aberta: true, proxima: null, motivo: "" };
-      }
-      return {
-        aberta: false,
-        proxima: marcadasNaProx[0],
-        motivo: `Você já tem as 2 aulas agendadas para a próxima semana. 💚`,
-      };
-    }
+   O que ela não marcar no mês se perde: semana sem aula NÃO vira reposição.
+   Reposição só nasce de aula marcada e liberada — e a aula liberada continua
+   contando no pacote (ver aulasDoPacote), senão liberar daria duas aulas por
+   uma: o crédito e a vaga de volta no pacote. */
+export const ESCALA_MESES_ABERTOS = 2; // o mês atual + o seguinte
 
-    const alvo = alvoDate;
-    if (alvo < hoje) {
-      return { aberta: false, proxima: null, motivo: "Não é possível agendar aulas em datas passadas." };
-    }
-    const segAlvo = segundaDaSemana(alvo);
-    const marcadasNaSemanaAlvo = listaCompleta.filter(
-      (b) => contaNoTeto(b) && mesmaSemana(b.date, alvo)
-    );
-
-    // Se estiver tentando marcar para uma semana futura:
-    if (segAlvo > segHoje) {
-      if (!ultimaAulaJaPassou) {
-        return {
-          aberta: false,
-          proxima: ultimaAulaSemanaAtual,
-          motivo: `Na escala 2x, as aulas da próxima semana são liberadas a partir da sua última aula desta semana (${diaBR(ultimaAulaSemanaAtual.date)}). 💚`,
-        };
-      }
-      const segProx = somarDias(segHoje, 7);
-      if (segAlvo > segProx) {
-        return {
-          aberta: false,
-          proxima: null,
-          motivo: "Na escala 2x, você pode marcar aulas para esta semana ou para a próxima semana. 💚",
-        };
-      }
-    }
-
-    // Na semana do alvo, pode marcar se tiver menos de 2 aulas:
-    if (marcadasNaSemanaAlvo.length < 2) {
-      return { aberta: true, proxima: null, motivo: "" };
-    }
-
+export function janelaEscala(hoje, alvoDate) {
+  if (!alvoDate) return { aberta: true, motivo: "" };
+  if (alvoDate < hoje) return { aberta: false, motivo: "Não é possível agendar aulas em datas passadas." };
+  const ultimoMes = somarComp(String(hoje).slice(0, 7), ESCALA_MESES_ABERTOS - 1);
+  if (String(alvoDate).slice(0, 7) > ultimoMes)
     return {
       aberta: false,
-      proxima: marcadasNaSemanaAlvo[0],
-      motivo: segAlvo === segHoje
-        ? `Você já tem as 2 aulas agendadas para esta semana. 💚`
-        : `Você já tem as 2 aulas agendadas para essa semana. 💚`,
+      motivo: `Na escala você marca as aulas deste mês e do próximo. As de ${compPorExtenso(somarComp(ultimoMes, 1))} abrem no dia 1º. 💚`,
     };
-  }
-
-  // Regra padrão 1x por semana:
-  if (futuras.some((b) => b.date === hoje)) return { aberta: true, proxima: null, motivo: "" };
-  if (!futuras.length) return { aberta: true, proxima: null, motivo: "" };
-  const prox = futuras[0];
-  return {
-    aberta: false,
-    proxima: prox,
-    motivo: `Na escala, a próxima aula é marcada no dia da sua aula. Sua próxima é ${diaBR(prox.date)}` +
-      (prox.time ? ` às ${prox.time}` : "") + " — marque por lá. 💚",
-  };
+  return { aberta: true, motivo: "" };
 }
 
 /* Quantas aulas do plano a aluna já tem na semana da data alvo, e qual é o teto.
@@ -463,8 +387,12 @@ export function tetoSemanal(client, date, aulasAtivas) {
    Vitor, 03/09/2026:
    • Aluna de escala no plano 1x (R$ 120,00): tem direito a 4 aulas no mês.
    • Aluna de escala no plano 2x (R$ 200,00): tem direito a 8 aulas no mês.
-   Aulas canceladas, reposições (PGTO_REPOSICAO), aulas extras (PGTO_EXTRA) e
-   aulas de presente (PGTO_PRESENTE) NÃO consomem essas aulas do plano mensal. */
+   Reposições (PGTO_REPOSICAO), aulas extras (PGTO_EXTRA) e aulas de presente
+   (PGTO_PRESENTE) NÃO consomem essas aulas do plano mensal.
+
+   Aula cancelada, desde 29/10/2026, depende de QUEM cancelou (ver aulasDoPacote):
+   a que a aluna liberou continua contando; a que a escola tirou sem compensar
+   (feriado, exclusão no painel) volta para o pacote. */
 
 export function compPorExtenso(comp) {
   const m = String(comp || "").match(/^(\d{4})-(\d{2})$/);
@@ -483,12 +411,33 @@ export function limiteMensalEscala(client, date) {
   return 4; // padrão 1x (R$ 120,00) = 4 aulas por mês
 }
 
+/* Quantas aulas do pacote do mês `comp` ('YYYY-MM') a aluna já usou.
+
+   Conta as aulas do plano de pé MAIS as que ela liberou (`liberada`, gravado
+   por liberarAula no server): a liberada vira crédito de reposição, e devolver
+   também a vaga no pacote daria duas aulas por uma. A cancelada sem a marca é
+   a que a escola tirou — feriado, exclusão — e essa volta para o pacote.
+
+   A liberada deixa de contar se a mesma aula (data e hora) voltou a ficar de
+   pé: é a aluna se arrependendo, e a aula não pode contar duas vezes. É a
+   mesma leitura de creditosComAulaDeVolta no server. */
+export function aulasDoPacote(todasAulasDaAluna, comp) {
+  const doMes = (todasAulasDaAluna || []).filter(
+    (b) => b && b.paymentMethod === PGTO_PLANO && String(b.date || "").startsWith(comp)
+  );
+  const chave = (b) => `${b.date} ${hhmm(b.time)}`;
+  const dePe = doMes.filter((b) => b.status !== "cancelada");
+  const aulasDePe = new Set(dePe.map(chave));
+  const liberadas = new Set(
+    doMes.filter((b) => b.status === "cancelada" && b.liberada).map(chave).filter((k) => !aulasDePe.has(k))
+  );
+  return dePe.length + liberadas.size;
+}
+
 export function tetoMensalEscala(client, date, todasAulasDaAluna) {
   const comp = String(date || "").slice(0, 7);
   const limite = limiteMensalEscala(client, date);
-  const marcadas = (todasAulasDaAluna || []).filter(
-    (b) => contaNoTeto(b) && String(b.date || "").startsWith(comp)
-  ).length;
+  const marcadas = aulasDoPacote(todasAulasDaAluna, comp);
   return {
     competencia: comp,
     limite,
@@ -503,8 +452,8 @@ export function tetoMensalEscala(client, date, todasAulasDaAluna) {
    client       — o registro do Client (precisa de plan, mensalistaTipo, weeklyFreq)
    alvo         — { date, time } do horário escolhido
    ctx.hoje     — 'YYYY-MM-DD' pelo relógio de Brasília
-   ctx.aulasAtivas — aulas não canceladas da aluna (a escala usa)
-   ctx.todasAulas  — histórico de aulas da aluna para cômputo do mês
+   ctx.todasAulas  — aulas da aluna, canceladas inclusive (o pacote do mês
+                     conta as liberadas — ver aulasDoPacote)
    ctx.ignorarJanela — true em caminhos onde a janela da escala não faz sentido
    ctx.ignorarTeto   — true para reposição e aula extra
 
@@ -516,16 +465,11 @@ export function checarRegras(client, alvo, ctx = {}) {
 
   if (tipo === "escala") {
     if (!ctx.ignorarJanela) {
-      const freq = freqNaData(client, alvo?.date || ctx.hoje);
-      const j = janelaEscala(ctx.aulasAtivas, ctx.hoje, {
-        weeklyFreq: freq,
-        alvoDate: alvo?.date,
-        todasAulas: ctx.todasAulas || ctx.aulasAtivas,
-      });
+      const j = janelaEscala(ctx.hoje, alvo?.date);
       if (!j.aberta) return { ok: false, codigo: "escala", motivo: j.motivo };
     }
     if (!ctx.ignorarTeto && alvo?.date) {
-      const tm = tetoMensalEscala(client, alvo.date, ctx.todasAulas || ctx.aulasAtivas);
+      const tm = tetoMensalEscala(client, alvo.date, ctx.todasAulas);
       if (tm.atingido) {
         return {
           ok: false,

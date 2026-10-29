@@ -2,7 +2,7 @@
 import {
   checarRegras, janelaEscala, freqNaData, podeReplicarMensalista,
   segundaDaSemana, mesmaSemana, tetoSemanal, PGTO_PLANO,
-  limiteMensalEscala, tetoMensalEscala, compPorExtenso,
+  limiteMensalEscala, tetoMensalEscala, aulasDoPacote, compPorExtenso,
   somarComp, diaDoMes,
   encargosDaMensalidade, diasEntreISO, MULTA_ATRASO_REAIS, JUROS_DIA_PERCENTUAL,
   primeiroPagamento, mensalidadeDoPagamento,
@@ -19,7 +19,7 @@ const escala = { plan: "mensalista", mensalistaTipo: "escala" };
 const avulsa = { plan: "avulso" };
 const HOJE = "2026-08-24"; // segunda
 
-const c = (cli, alvo, ctx = {}) => checarRegras(cli, alvo, { hoje: HOJE, aulasAtivas: [], ...ctx });
+const c = (cli, alvo, ctx = {}) => checarRegras(cli, alvo, { hoje: HOJE, ...ctx });
 
 console.log("\n— fixo —");
 ok(c(fixo, { date: "2026-08-24", time: "17:30" }).ok === true, "fixo: 17:30 passa");
@@ -52,113 +52,51 @@ ok(podeReplicarMensalista(fixo) === true, "mensalista fixa pode participar da gr
 ok(podeReplicarMensalista(escala) === false, "mensalista de escala nunca é replicada");
 ok(podeReplicarMensalista(avulsa) === false, "aluna avulsa não entra em grade replicada");
 
-console.log("\n— escala: janela de marcação —");
+/* Regra de 29/10/2026: a escala não tem mais dia nem semana — tem o pacote do
+   mês (4 no 1x, 8 no 2x) e marca quando quiser, no mês atual e no seguinte.
+   Os casos marcados "(antes barrado)" eram recusados pela regra antiga do
+   "marque no dia da sua aula" / "2 por semana"; estão aqui para ela não voltar. */
+console.log("\n— escala: janela = mês atual + o seguinte —");
 const alvoOk = { date: "2026-08-26", time: "09:00" }; // quarta
-ok(c(escala, alvoOk, { aulasAtivas: [] }).ok === true,
-  "escala sem nenhuma aula em aberto: janela aberta (não trava a primeira)");
-ok(c(escala, alvoOk, { aulasAtivas: [{ date: HOJE, time: "14:00", status: "confirmada" }] }).ok === true,
-  "escala com aula HOJE: pode marcar");
-ok(c(escala, alvoOk, { aulasAtivas: [{ date: "2026-08-27", time: "14:00", status: "confirmada" }] }).codigo === "escala",
-  "escala com aula só na quinta: barrada hoje");
-ok(c(escala, alvoOk, { aulasAtivas: [{ date: HOJE, time: "14:00", status: "cancelada" }] }).ok === true,
-  "escala: aula cancelada hoje não conta, mas sem outra aula a janela abre");
-ok(c(escala, alvoOk, {
-  aulasAtivas: [{ date: HOJE, time: "14:00", status: "cancelada" }, { date: "2026-08-28", time: "09:00", status: "confirmada" }],
-}).codigo === "escala", "escala: liberou a de hoje e tem outra na sexta → barrada");
-ok(c(escala, alvoOk, {
-  aulasAtivas: [{ date: HOJE, time: "14:00", status: "confirmada" }, { date: "2026-08-28", time: "09:00", status: "confirmada" }],
-}).ok === true, "escala: com aula hoje pode marcar mais de uma (sem teto no dia)");
+const doPlanoEm = (date, extra = {}) => ({ date, time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO, ...extra });
+ok(c(escala, alvoOk).ok === true, "escala sem nenhuma aula: pode marcar");
+ok(c(escala, alvoOk, { todasAulas: [doPlanoEm("2026-08-27")] }).ok === true,
+  "escala com aula só na quinta: marca hoje mesmo (antes barrado)");
+ok(c(escala, { date: "2026-08-28", time: "09:00" }, {
+  todasAulas: [doPlanoEm("2026-08-25"), doPlanoEm("2026-08-26"), doPlanoEm("2026-08-27")],
+}).ok === true, "escala 1x: as 4 aulas do mês na MESMA semana (antes barrado)");
+ok(c(escala, { date: "2026-09-15", time: "09:00" }).ok === true, "escala: o mês seguinte já está aberto");
+ok(c(escala, { date: "2026-09-30", time: "09:00" }).ok === true, "escala: até o último dia do mês seguinte");
+const doisMeses = c(escala, { date: "2026-10-01", time: "09:00" });
+ok(doisMeses.codigo === "escala" && /outubro de 2026/.test(doisMeses.motivo),
+  `escala: dois meses à frente fica fechado: "${doisMeses.motivo}"`);
+ok(c(escala, { date: "2026-08-20", time: "09:00" }).codigo === "escala", "escala: data passada é recusada");
+ok(c(escala, { date: "2026-09-02", time: "09:00" }, { hoje: "2026-08-29" }).ok === true,
+  "escala: no dia 29 marca a semana que vem, já no mês seguinte");
+ok(c(escala, { date: "2027-01-05", time: "09:00" }, { hoje: "2026-12-20" }).ok === true,
+  "escala: virada do ano — janeiro abre em dezembro");
+ok(c(escala, { date: "2027-02-01", time: "09:00" }, { hoje: "2026-12-20" }).codigo === "escala",
+  "escala: virada do ano — fevereiro ainda fechado em dezembro");
+ok(janelaEscala(HOJE).aberta === true, "janelaEscala sem data alvo: aberta (o dia é que decide)");
 
-console.log("\n— escala: nenhuma data barra mais, só a janela —");
-ok(c(escala, { date: "2026-08-22", time: "09:00" }, { aulasAtivas: [{ date: HOJE, time: "14:00", status: "confirmada" }] }).ok === true,
-  "escala: sábado passa com a janela aberta");
-ok(c(escala, { date: "2026-08-26", time: "18:30" }, { aulasAtivas: [{ date: HOJE, time: "14:00", status: "confirmada" }] }).ok === true,
-  "escala: 18:30 passa com a janela aberta");
+console.log("\n— escala: nenhuma data barra, só o horizonte e o pacote —");
+ok(c(escala, { date: "2026-08-29", time: "09:00" }).ok === true, "escala: sábado passa");
+ok(c(escala, { date: "2026-08-26", time: "18:30" }).ok === true, "escala: 18:30 passa");
 
-console.log("\n— ignorarJanela (aula extra / 1ª aula oficial / lote) —");
-ok(c(escala, alvoOk, { aulasAtivas: [{ date: "2026-08-27", time: "14:00", status: "confirmada" }], ignorarJanela: true }).ok === true,
-  "ignorarJanela: a janela da escala não se aplica");
+console.log("\n— ignorarJanela (aula extra / presente / lote do painel) —");
+ok(c(escala, { date: "2026-10-06", time: "09:00" }, { ignorarJanela: true }).ok === true,
+  "ignorarJanela: fora do horizonte, passa");
 ok(c(escala, { date: "2026-08-22", time: "09:00" }, { ignorarJanela: true }).ok === true,
   "ignorarJanela: sem a janela, o sábado passa");
 
-console.log("\n— janelaEscala: mensagem —");
-const j = janelaEscala([{ date: "2026-08-27", time: "14:00", status: "confirmada" }], HOJE);
-ok(j.aberta === false && /quinta, 27\/08/.test(j.motivo), `mensagem cita o dia da próxima aula: "${j.motivo}"`);
-
-console.log("\n— escala 2x: marcar as duas aulas da semana —");
+console.log("\n— escala 2x: pacote de 8, sem regra de semana —");
 const escala2x = { plan: "mensalista", mensalistaTipo: "escala", weeklyFreq: 2 };
-const aulaTerca = { date: "2026-08-25", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO };
-const aulaQuinta = { date: "2026-08-27", time: "14:00", status: "confirmada", paymentMethod: PGTO_PLANO };
-
-// 1. Sem aulas na semana: pode marcar a 1ª aula da semana
-ok(c(escala2x, { date: "2026-08-25", time: "09:00" }, { aulasAtivas: [] }).ok === true,
-  "escala 2x: pode marcar a 1ª aula da semana");
-
-// 2. Já marcou a 1ª aula (terça): a janela CONTINUA ABERTA para marcar a 2ª aula (quinta) da mesma semana!
-ok(c(escala2x, { date: "2026-08-27", time: "14:00" }, {
-  aulasAtivas: [aulaTerca],
-  todasAulas: [aulaTerca],
-}).ok === true, "escala 2x: após marcar a 1ª, pode marcar a 2ª aula da mesma semana");
-
-// 3. Já tem 2 aulas marcadas na semana: não pode marcar a 3ª aula na mesma semana
 ok(c(escala2x, { date: "2026-08-28", time: "15:00" }, {
-  aulasAtivas: [aulaTerca, aulaQuinta],
-  todasAulas: [aulaTerca, aulaQuinta],
-}).codigo === "escala", "escala 2x: 3ª aula na mesma semana é bloqueada pela janela/teto");
-
-// 4. Marcação para a próxima semana: só abre a partir da última aula da semana atual
+  todasAulas: ["2026-08-24", "2026-08-25", "2026-08-26", "2026-08-27"].map((d) => doPlanoEm(d)),
+}).ok === true, "escala 2x: 5ª aula na mesma semana passa (antes barrado)");
 ok(c(escala2x, { date: "2026-09-01", time: "09:00" }, {
-  aulasAtivas: [aulaTerca, aulaQuinta],
-  todasAulas: [aulaTerca, aulaQuinta],
-  hoje: "2026-08-26", // quarta: a aula de quinta ainda não aconteceu
-}).codigo === "escala", "escala 2x: próxima semana bloqueada antes da última aula da semana atual");
-
-// 5. No dia da última aula (quinta 27/08): a próxima semana fica liberada para as 2 aulas!
-ok(c(escala2x, { date: "2026-09-01", time: "09:00" }, {
-  aulasAtivas: [aulaQuinta],
-  todasAulas: [aulaTerca, aulaQuinta],
-  hoje: "2026-08-27", // quinta: dia da última aula
-}).ok === true, "escala 2x: próxima semana liberada a partir da última aula");
-
-// 6. Sábado após as duas aulas da semana (caso Débora): consulta geral com janela aberta
-ok(janelaEscala([], "2026-09-26", {
-  weeklyFreq: 2,
-  alvoDate: null,
-  todasAulas: [
-    { date: "2026-09-22", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
-    { date: "2026-09-23", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
-  ],
-}).aberta === true, "escala 2x: consulta geral aberta no sábado quando a próxima semana tem vagas");
-
-// 7. Sábado após as duas aulas: marcar na terça da próxima semana (29/09) passa com sucesso!
-ok(c(escala2x, { date: "2026-09-29", time: "15:00" }, {
-  aulasAtivas: [],
-  todasAulas: [
-    { date: "2026-09-22", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
-    { date: "2026-09-23", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
-  ],
-  hoje: "2026-09-26",
-}).ok === true, "escala 2x: terça da próxima semana liberada para marcação");
-
-// 8. Tentar marcar para o sábado da semana atual (26/09) quando já fez 2 aulas: bloqueado!
-ok(c(escala2x, { date: "2026-09-26", time: "09:00" }, {
-  aulasAtivas: [],
-  todasAulas: [
-    { date: "2026-09-22", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
-    { date: "2026-09-23", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
-  ],
-  hoje: "2026-09-26",
-}).codigo === "escala", "escala 2x: 3ª aula na mesma semana atual é bloqueada");
-
-// 9. Tentar marcar 2 semanas à frente: bloqueado!
-ok(c(escala2x, { date: "2026-10-06", time: "09:00" }, {
-  aulasAtivas: [],
-  todasAulas: [
-    { date: "2026-09-22", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
-    { date: "2026-09-23", time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO },
-  ],
-  hoje: "2026-09-26",
-}).codigo === "escala", "escala 2x: 2 semanas à frente bloqueada");
+  todasAulas: [doPlanoEm("2026-08-27", { time: "14:00" })], hoje: "2026-08-26",
+}).ok === true, "escala 2x: semana seguinte aberta antes da última aula desta (antes barrado)");
 
 console.log("\n— teto mensal da escala (120,00 = 4 aulas / 200,00 = 8 aulas) —");
 const escala120 = { plan: "mensalista", mensalistaTipo: "escala", weeklyFreq: 1, monthlyValue: 120 };
@@ -181,7 +119,6 @@ ok(tetoMensalEscala(escala200, "2026-08-24", aulas4).restantes === 4, "2x ainda 
 
 // checarRegras bloqueia 5ª aula no mesmo mês para escala 1x
 ok(c(escala120, { date: "2026-08-31", time: "09:00" }, {
-  aulasAtivas: [{ date: HOJE, time: "09:00", status: "confirmada" }],
   todasAulas: aulas4,
 }).codigo === "teto_mes", "escala 1x: 5ª aula do mês é bloqueada pelo teto mensal");
 
@@ -195,6 +132,24 @@ const aulasComRepo = [
 ];
 ok(tetoMensalEscala(escala120, "2026-08-24", aulasComRepo).atingido === false, "reposição e extra não consomem o teto mensal (3 do plano < 4)");
 ok(tetoMensalEscala(escala120, "2026-08-24", aulasComRepo).marcadas === 3, "apenas as 3 do plano são contabilizadas");
+
+console.log("\n— pacote do mês: aula liberada continua contando (29/10/2026) —");
+const tres = [doPlanoEm("2026-08-03"), doPlanoEm("2026-08-10"), doPlanoEm("2026-08-17")];
+const liberadaDia24 = doPlanoEm("2026-08-24", { status: "cancelada", liberada: true });
+const tiradaPelaEscola = doPlanoEm("2026-08-24", { status: "cancelada" });
+ok(aulasDoPacote([...tres, liberadaDia24], "2026-08") === 4, "liberada pela aluna conta no pacote (virou crédito)");
+ok(c(escala120, { date: "2026-08-28", time: "09:00" }, { todasAulas: [...tres, liberadaDia24] }).codigo === "teto_mes",
+  "escala 1x: 3 de pé + 1 liberada = pacote cheio, não marca a 5ª");
+ok(aulasDoPacote([...tres, tiradaPelaEscola], "2026-08") === 3, "cancelada pela escola (feriado, exclusão) volta para o pacote");
+ok(aulasDoPacote([...tres, liberadaDia24, doPlanoEm("2026-08-24")], "2026-08") === 4,
+  "liberou e remarcou a MESMA aula: conta uma vez só");
+ok(aulasDoPacote([...tres, liberadaDia24, { ...liberadaDia24 }], "2026-08") === 4,
+  "a mesma aula liberada duas vezes conta uma vez só");
+ok(aulasDoPacote([...tres, liberadaDia24], "2026-09") === 0, "cada mês tem o seu pacote");
+ok(c(escala120, { date: "2026-09-01", time: "09:00" }, { todasAulas: aulas4 }).ok === true,
+  "pacote de agosto cheio não trava setembro");
+ok(aulasDoPacote([doPlanoEm("2026-08-03", { paymentMethod: "Reposição", status: "cancelada", liberada: true })], "2026-08") === 0,
+  "reposição liberada não entra no pacote");
 
 /* ===================== teto de aulas por semana (plano 1x/2x) ===================== */
 // Semana de 24/08 (seg) a 30/08 (dom) de 2026

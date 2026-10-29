@@ -7,7 +7,7 @@ import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
 import Agendamentos from "./Agendamentos.jsx";
-import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, compPorExtenso, PLANOS_MENSALISTA, valorPlanoMeta, aulasSeChocam, janelaEscala, PGTO_PRESENTE } from "./helpers.js";
+import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, compPorExtenso, PLANOS_MENSALISTA, valorPlanoMeta, aulasSeChocam, janelaEscala, aulasDoPacote, PGTO_PRESENTE } from "./helpers.js";
 
 const CPF_KEY = "fqc_portal_cpf";
 // WhatsApp da escola: (31) 98496-6403 — sem o "55", que o waLink já acrescenta
@@ -303,9 +303,8 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   const nome = ((data.client && data.client.name) || "").split(" ")[0] || "aluno(a)";
   const meta = data.meta || {};
   const cliente = data.client || {};
-  // Regras do plano, calculadas pelo backend (sábado, 18h e a janela da escala).
-  // Os horários que ela não pode marcar já vêm de fora da lista `available`; o
-  // que sobra para a tela é explicar a janela da escala quando está fechada.
+  // Regras do plano, calculadas pelo backend (pacote do mês da escala). O
+  // calendário mostra toda vaga livre; o dia é que explica por que não dá.
   const regras = data.regras || {};
   const mensalistaEscala = cliente.plan === "mensalista" && cliente.mensalistaTipo === "escala";
   const podeMarcarAulaNormal = cliente.plan !== "mensalista" || mensalistaEscala;
@@ -689,8 +688,8 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
   const repondo = modo === "repor";
   const extrando = modo === "extra";
   const presenteando = modo === "presente";
-  // Mensalista escala: só marca a próxima aula NO DIA da aula dela. Sábado e os
-  // horários a partir das 18h nem chegam aqui — o backend já não os manda.
+  // Mensalista escala: marca quando quiser, no mês atual e no seguinte, até o
+  // pacote do mês (4 no 1x, 8 no 2x).
   // Reposição, aula extra e presente são sempre escolhas unitárias, fora da grade de 12 meses.
   const foraDoPlano = repondo || extrando || presenteando;
   // O presente vale até uma data: depois dela o dia não oferece vaga.
@@ -750,13 +749,16 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
 
   const tetoEscala = regras && regras.tetoEscala;
   const compDia = dia ? dia.slice(0, 7) : "";
-  const marcadasNoMes = dia ? bookings.filter((b) => b.status !== "cancelada" && (b.paymentMethod === "Mensalista" || !b.paymentMethod) && b.date.startsWith(compDia)).length : 0;
+  const marcadasNoMes = dia ? aulasDoPacote(bookings, compDia) : 0;
   const limiteMes = tetoEscala?.limite || 4;
-  const tetoAtingido = !foraDoPlano && regras && regras.tipo === "escala" && marcadasNoMes >= limiteMes;
+  // O pacote no topo acompanha o mês do calendário: na escala ela marca este
+  // mês e o próximo, e cada um tem o seu.
+  const compVisto = `${y}-${String(m + 1).padStart(2, "0")}`;
+  const usadasNoVisto = aulasDoPacote(bookings, compVisto);
+  const tetoAtingido =!foraDoPlano && regras && regras.tipo === "escala" && marcadasNoMes >= limiteMes;
 
-  const freqEscala = regras?.weeklyFreq || cliente?.weeklyFreq || (tetoEscala?.limite === 8 ? 2 : 1);
   const janelaDoDia = dia && !foraDoPlano && regras && regras.tipo === "escala"
-    ? janelaEscala(bookings, t, { weeklyFreq: freqEscala, alvoDate: dia, todasAulas: bookings })
+    ? janelaEscala(t, dia)
     : { aberta: true, motivo: "" };
 
   const bloqueioDoDia = dia
@@ -779,8 +781,8 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
 
       {regras && regras.tipo === "escala" && tetoEscala && (
         <div className="mini-dica" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: ".5rem", marginBottom: ".5rem" }}>
-          <span>🗓️ <b>Plano Escala:</b> {tetoEscala.marcadas} de {tetoEscala.limite} aulas agendadas neste mês</span>
-          {tetoEscala.atingido && <span style={{ color: "var(--warn)", fontWeight: 600 }}>Limite do mês atingido</span>}
+          <span>🗓️ <b>Plano Escala:</b> {usadasNoVisto} de {limiteMes} aulas de {label} usadas</span>
+          {usadasNoVisto >= limiteMes && <span style={{ color: "var(--warn)", fontWeight: 600 }}>Limite do mês atingido</span>}
         </div>
       )}
 

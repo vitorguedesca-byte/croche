@@ -406,12 +406,13 @@ async function exigirRegras(client, alvo, { forcar = false, ignorarJanela = fals
   if (forcar) return { ok: true, codigo: "", motivo: "" };
   const hoje = todayISO();
   const isEscala = tipoMensalista(client) === "escala";
+  // Canceladas vêm junto: a aula que ela liberou continua no pacote do mês
+  // (aulasDoPacote decide quais contam).
   const todasAulas = isEscala
-    ? await prisma.booking.findMany({ where: { ...bookingWhere(client), status: { not: "cancelada" } } })
+    ? await prisma.booking.findMany({ where: { ...bookingWhere(client) } })
     : [];
   const r = checarRegras(client, alvo, {
     hoje,
-    aulasAtivas: todasAulas.filter((b) => b.date >= hoje),
     todasAulas,
     ignorarJanela,
     ignorarTeto,
@@ -1960,6 +1961,9 @@ async function compensarAluna(client, b, slot, quem) {
   };
   const credito = async () => {
     const c = await creditoDaEscola(client, b);
+    // Com o crédito na mão, a aula conta no pacote da escala como liberada —
+    // senão ela ganharia o crédito E a vaga de volta no pacote do mês.
+    await prisma.booking.update({ where: { id: b.id }, data: { liberada: true } });
     return { tipo: "credito", texto: `ganhou 1 crédito de reposição (vale até ${fmtDiaBR(c.expiresOn)})` };
   };
   const mensalistaAtiva = client?.plan === "mensalista";
@@ -5234,10 +5238,7 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
   // A janela da escala é um aviso à parte (os horários continuam visíveis, o
   // botão é que fica preso), para a aluna entender por que não dá hoje.
   const tipo = tipoMensalista(client);
-  const ativasFuturas = bookings.filter((b) => b.status !== "cancelada" && b.date >= t);
-  const janela = tipo === "escala"
-    ? janelaEscala(ativasFuturas, t, { weeklyFreq: client.weeklyFreq, alvoDate: null, todasAulas: bookings })
-    : { aberta: true, proxima: null, motivo: "" };
+  const janela = tipo === "escala" ? janelaEscala(t) : { aberta: true, motivo: "" };
   const tetoEscala = tipo === "escala"
     ? tetoMensalEscala(client, t, bookings)
     : null;
@@ -5253,7 +5254,7 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
     regras: {
       tipo,                                  // "fixo" | "escala" | null
       weeklyFreq: client.weeklyFreq,
-      janela,                                // { aberta, proxima, motivo }
+      janela,                                // { aberta, motivo }
       tetoEscala,                            // { competencia, limite, marcadas, restantes, atingido }
     },
     // Aula extra comprada: null, ou { status, valor, pixCode, ... }
@@ -5575,15 +5576,22 @@ async function previaLiberacao(client, b) {
   if (b.paymentMethod === PGTO_PRESENTE)
     return { credito: false, aviso: "Esta é a sua aula de presente 🎁 — se você liberar, ela não é remarcada." };
   const sem = await semCreditoAgora(client, b);
-  if (!sem.codigo) return { credito: true, aviso: "Liberando agora, esta aula vira 1 crédito de reposição. 💚" };
+  // Escala: a aula liberada não volta para o pacote do mês (ver aulasDoPacote).
+  const pacote = tipoMensalista(client) === "escala" && b.paymentMethod === PGTO_PLANO
+    ? " Ela continua contando nas aulas do seu plano deste mês."
+    : "";
+  if (!sem.codigo) return { credito: true, aviso: `Liberando agora, esta aula vira 1 crédito de reposição. 💚${pacote}` };
   if (sem.codigo === "plano") return { credito: false, aviso: "" };
   if (sem.codigo === "atraso")
-    return { credito: false, aviso: "Sua mensalidade está em atraso: esta aula não vai gerar crédito de reposição, nem depois do pagamento." };
-  return { credito: false, aviso: `Esta aula não vai gerar crédito de reposição. ${sem.motivo}` };
+    return { credito: false, aviso: `Sua mensalidade está em atraso: esta aula não vai gerar crédito de reposição, nem depois do pagamento.${pacote}` };
+  return { credito: false, aviso: `Esta aula não vai gerar crédito de reposição. ${sem.motivo}${pacote}` };
 }
 
 async function liberarAulaERegras(client, b, extra = {}, { devolverRepo = false } = {}) {
-  await prisma.booking.update({ where: { id: b.id }, data: { status: "cancelada", ...extra } });
+  /* `liberada`: foi a aluna que abriu mão da aula — na escala, ela continua
+     contando no pacote do mês (ver aulasDoPacote). `devolverRepo` é a escola
+     desmarcando em lote: aí só conta se a aula virar crédito, lá embaixo. */
+  await prisma.booking.update({ where: { id: b.id }, data: { status: "cancelada", liberada: !devolverRepo, ...extra } });
   await fecharPixDasReservas([b], "aula liberada"); // só age se ainda havia Pix em aberto
   if (b.paymentMethod === "Reposição") {
     if (devolverRepo) {
@@ -5616,6 +5624,7 @@ async function liberarAulaERegras(client, b, extra = {}, { devolverRepo = false 
      formato estourando MakeupCredit.originTime, VARCHAR(5).) */
   try {
     const { credito, motivo } = await concederCredito(client, b);
+    if (credito && devolverRepo) await prisma.booking.update({ where: { id: b.id }, data: { liberada: true } });
     return { credito: !!credito, devolvido: false, motivo };
   } catch (e) {
     console.error(`[reposição] vaga de ${client.name} liberada, mas o crédito falhou: ${e.message}`);

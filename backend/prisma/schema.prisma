@@ -271,6 +271,12 @@ model Booking {
      depois que o aviso da hora já sumiu. null = gerou crédito, não passou pela
      liberação, ou é anterior a 28/10/2026. */
   creditoMotivo String?  @db.VarChar(300)
+  /* A aluna LIBEROU esta aula (cancelou, avisou que não vem), ou a escola a
+     tirou dando crédito em troca — gravado por liberarAula() e pela turma
+     fechada. Na mensalista de escala, aula liberada continua contando no
+     pacote do mês (aulasDoPacote em regrasAula.js); cancelada sem esta marca
+     (feriado, exclusão) volta para o pacote. false em tudo antes de 29/10/2026. */
+  liberada      Boolean  @default(false)
   value         Float    @default(80)
   /* Quanto de TAXA DE MATRÍCULA está dentro de `value`. Só a reserva da aula
      de matrícula tem isto preenchido; null = reserva sem taxa (todas as antigas).

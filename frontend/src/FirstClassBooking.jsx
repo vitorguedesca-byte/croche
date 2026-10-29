@@ -80,8 +80,8 @@ function PtAgenda({ available, value, onPick }) {
    ver com quantas aulas ela faz:
 
    • FIXO   — o mesmo dia e horário toda semana, a escola deixa marcado para você.
-   • ESCALA — ela escolhe a aula durante a semana, marcando a próxima no dia da
-              aula dela.
+   • ESCALA — um pacote de aulas no mês (4 no 1x, 8 no 2x) que ela marca
+              quando quiser (29/10/2026).
 
    3x e 4x por semana só existem no fixo (23/09/2026). */
 function EscolhaDePlano({
@@ -184,7 +184,7 @@ function EscolhaDePlano({
             <Opcao
               on={tipo === "escala"} onClick={() => setTipo("escala")}
               titulo="Escala"
-              linhas="Você escolhe a aula durante a semana, marcando a próxima no dia da sua aula. Bom para quem tem a semana variável."
+              linhas="Você tem um pacote de aulas no mês e marca quando quiser, nos dias e horários disponíveis. Bom para quem tem a semana variável."
             />
           )}
           {/* Aqui dizia "de segunda a sexta, até as 18h" — as duas regras saíram
@@ -203,7 +203,7 @@ function EscolhaDePlano({
             <h3 style={{ marginTop: 0 }}>🧺 Só a aula avulsa mesmo?</h3>
             <p>Você quer pagar <b>somente a aula avulsa</b> ({money(valorAvulsa)} por uma aula de {duracao})?</p>
             {comparativo.length > 0 && (<>
-              <p>Temos também a opção de <b>mensalista na escala</b>: toda semana você agenda a sua próxima aula, nos dias e horários disponíveis — e cada aula fica mais em conta:</p>
+              <p>Temos também a opção de <b>mensalista na escala</b>: você tem um pacote de aulas por mês e marca quando quiser, nos dias e horários disponíveis — e cada aula fica mais em conta:</p>
               <ul style={{ margin: ".3rem 0 0 1.1rem", padding: 0 }}>
                 {comparativo.map((p) => (
                   <li key={p.freq} style={{ marginBottom: ".3rem" }}>
