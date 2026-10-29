@@ -614,12 +614,12 @@ async function resumoReposicao(client) {
   };
 }
 
-// Concede o crédito quando a aluna libera a aula. Devolve o crédito ou null
-// (com o motivo) — liberar fora do prazo continua valendo, só não gera crédito.
-async function concederCredito(client, booking) {
+/* Por que liberar ESTA aula agora não gera crédito — "" quando gera. Não grava
+   nada: é a mesma conta da liberação, e a prévia do portal (previaLiberacao)
+   usa esta função para a aluna saber ANTES de liberar, não depois. */
+async function semCreditoAgora(client, booking) {
   const eleg = await elegivelReposicao(client);
-  // Na liberação, o atraso fala de ESTA aula — ver ATRASO_GANHAR.
-  if (!eleg.ok) return { credito: null, motivo: eleg.codigo === "atraso" ? ATRASO_GANHAR : eleg.motivo };
+  if (!eleg.ok) return { codigo: eleg.codigo, motivo: eleg.motivo };
   /* Feriado e antecedência: as duas recusas que não dependem do banco, e nesta
      ordem — feriado primeiro. Ver motivoSemCredito() e o bloco FERIADO NÃO GERA
      CRÉDITO em regrasAula.js, que é onde a regra tem teste. */
@@ -630,12 +630,22 @@ async function concederCredito(client, booking) {
     agora: agoraBR(),
     diaBR: fmtDiaBR,
   });
-  if (motivo) return { credito: null, motivo };
+  if (motivo) return { codigo: "regra", motivo };
   const competencia = booking.date.slice(0, 7);
   // O crédito da turma fechada pela escola não come o teto dela (ver porEscola).
   const noMes = await prisma.makeupCredit.count({ where: { clientId: client.id, competencia, porEscola: false } });
   if (noMes >= REPO_MAX_MES)
-    return { credito: null, motivo: `Você já atingiu o limite de ${REPO_MAX_MES} reposições de ${compPorExtenso(competencia)}.` };
+    return { codigo: "teto", motivo: `Você já atingiu o limite de ${REPO_MAX_MES} reposições de ${compPorExtenso(competencia)}.` };
+  return { codigo: "", motivo: "" };
+}
+
+// Concede o crédito quando a aluna libera a aula. Devolve o crédito ou null
+// (com o motivo) — liberar fora do prazo continua valendo, só não gera crédito.
+async function concederCredito(client, booking) {
+  const sem = await semCreditoAgora(client, booking);
+  // Na liberação, o atraso fala de ESTA aula — ver ATRASO_GANHAR.
+  if (sem.codigo) return { credito: null, motivo: sem.codigo === "atraso" ? ATRASO_GANHAR : sem.motivo };
+  const competencia = booking.date.slice(0, 7);
   const credito = await prisma.makeupCredit.create({
     data: {
       clientId: client.id,
@@ -5541,8 +5551,38 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
    Aula de reposição liberada NÃO gera crédito novo nem devolve o antigo: não se
    repõe a reposição. O crédito já foi gasto e se encerra ali.
    `devolverRepo` é a exceção do painel: quando a Inêz desfaz a marcação (excluir
-   a aula, cancelar uma turma), a aluna não pode pagar por isso. */
-async function liberarAula(client, b, extra = {}, { devolverRepo = false } = {}) {
+   a aula, cancelar uma turma), a aluna não pode pagar por isso.
+
+   Quando não sai crédito, o motivo fica gravado na aula (creditoMotivo): o aviso
+   da hora some da tela, e a aluna que volta dias depois precisa ver ali por que
+   aquela aula não virou reposição (Vitor, 28/10/2026 — caso da Pitya). */
+async function liberarAula(client, b, extra = {}, opts = {}) {
+  const r = await liberarAulaERegras(client, b, extra, opts);
+  if (!r.credito && !r.devolvido && r.motivo)
+    await prisma.booking.update({ where: { id: b.id }, data: { creditoMotivo: r.motivo.slice(0, 300) } });
+  return r;
+}
+
+/* O que liberar esta aula AGORA vai dar, sem mexer em nada — a prévia que o
+   portal mostra antes de a aluna confirmar. Segue os mesmos ramos de
+   liberarAulaERegras, com o texto no futuro. `aviso` vazio = nada a dizer
+   (aluna avulsa, que não tem reposição). */
+async function previaLiberacao(client, b) {
+  if (b.paymentMethod === "Reposição")
+    return { credito: false, aviso: "Esta é a sua aula de reposição — se você liberar, o crédito se encerra. Não é possível repor a reposição." };
+  if (b.paymentMethod === "Avulsa")
+    return { credito: false, aviso: "Esta é uma aula extra — se você liberar, o valor pago não é devolvido." };
+  if (b.paymentMethod === PGTO_PRESENTE)
+    return { credito: false, aviso: "Esta é a sua aula de presente 🎁 — se você liberar, ela não é remarcada." };
+  const sem = await semCreditoAgora(client, b);
+  if (!sem.codigo) return { credito: true, aviso: "Liberando agora, esta aula vira 1 crédito de reposição. 💚" };
+  if (sem.codigo === "plano") return { credito: false, aviso: "" };
+  if (sem.codigo === "atraso")
+    return { credito: false, aviso: "Sua mensalidade está em atraso: esta aula não vai gerar crédito de reposição, nem depois do pagamento." };
+  return { credito: false, aviso: `Esta aula não vai gerar crédito de reposição. ${sem.motivo}` };
+}
+
+async function liberarAulaERegras(client, b, extra = {}, { devolverRepo = false } = {}) {
   await prisma.booking.update({ where: { id: b.id }, data: { status: "cancelada", ...extra } });
   await fecharPixDasReservas([b], "aula liberada"); // só age se ainda havia Pix em aberto
   if (b.paymentMethod === "Reposição") {
@@ -5595,6 +5635,15 @@ app.post("/api/portal/:key/cancel/:bookingId", wrap(async (req, res) => {
   if (!ownsPortalBooking(client, b)) return res.status(404).json({ error: "Aula não encontrada." });
   const r = await liberarAula(client, b);
   res.json({ ok: true, ...r });
+}));
+
+// Prévia do cancelamento / "não poderei ir": se a aula vai virar crédito. Não grava nada.
+app.get("/api/portal/:key/liberar-previa/:bookingId", wrap(async (req, res) => {
+  const client = req.portalClient;
+  if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const b = await prisma.booking.findUnique({ where: { id: Number(req.params.bookingId) } });
+  if (!ownsPortalBooking(client, b)) return res.status(404).json({ error: "Aula não encontrada." });
+  res.json(await previaLiberacao(client, b));
 }));
 
 // "Não poderei ir" — registra o aviso/motivo e libera a vaga

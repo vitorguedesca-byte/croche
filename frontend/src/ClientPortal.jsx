@@ -77,6 +77,8 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   const [payBooking, setPayBooking] = useState(null);
   const [absenceFor, setAbsenceFor] = useState(null);
   const [absenceText, setAbsenceText] = useState("");
+  // Prévia do "Não poderei ir" aberto: { id, aviso } — se a aula vai virar crédito.
+  const [absencePrevia, setAbsencePrevia] = useState(null);
   // Aulas que a aluna acabou de liberar nesta tela. A aula sai da lista na hora,
   // sem depender do recarregamento — se a resposta do servidor demorar (ou vier
   // atrasada), ela não fica olhando para uma aula que já cancelou.
@@ -280,7 +282,19 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
     ["mes", "Mês", prox.filter((b) => b.date <= fimDoMes).length],
     ["todas", "Todas", prox.length],
   ];
-  const passadas = ativos.filter((b) => b.date < t).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  const passadas = bookings.filter((b) => b.date < t).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  /* Se a aula liberada virou crédito de reposição — e, se não virou, por quê.
+     O crédito é achado pela aula de origem; o motivo vem gravado na aula
+     (creditoMotivo). Aula liberada antes de 28/10/2026 sem crédito não tem o
+     motivo guardado, e aí a tela não diz nada em vez de adivinhar. */
+  const creditos = (data.makeup && data.makeup.creditos) || [];
+  const creditoDaLiberada = (b) => {
+    if (creditos.some((c) => c.originBookingId === b.id))
+      return <div className="pt-lib-ok">💚 Gerou 1 crédito de reposição.</div>;
+    if (b.creditoMotivo && cliente.plan === "mensalista")
+      return <div className="pt-sub2" style={{ marginTop: ".4rem" }}>ℹ️ Sem crédito de reposição. {b.creditoMotivo}</div>;
+    return null;
+  };
   // Aulas que ela liberou (cancelou ou avisou que não vai): continuam visíveis
   // para ela ter certeza de que o aviso foi registrado.
   const liberadas = bookings
@@ -316,8 +330,27 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   // Aula de presente não se remarca: ela precisa saber ANTES de liberar.
   const ehPresente = (b) => b.paymentMethod === PGTO_PRESENTE;
   const avisoPresente = "Esta é a sua aula de presente 🎁 — se você liberar, ela não é remarcada.";
+  /* O que liberar esta aula vai dar, perguntado ao servidor na hora — é ali que
+     moram o teto do mês e o prazo. Sem resposta, ficam os dois avisos que a tela
+     já sabe sozinha. */
+  const previaLiberacao = async (b) => {
+    try {
+      const r = await api.portal.liberarPrevia(phone, b.id);
+      if (r) return r.credito ? `✓ ${r.aviso}` : r.aviso ? `⚠️ ${r.aviso}` : "";
+    } catch { /* cai no aviso local */ }
+    return ehPresente(b) ? `⚠️ ${avisoPresente}` : emAtrasoRepo ? `⚠️ ${avisoAtrasoRepo}` : "";
+  };
+  const abrirAbsence = async (b) => {
+    if (absenceFor === b.id) { setAbsenceFor(null); return; }
+    setAbsenceFor(b.id); setAbsenceText(""); setAbsencePrevia(null);
+    const aviso = await previaLiberacao(b);
+    setAbsencePrevia({ id: b.id, aviso });
+  };
   const doCancel = async (b) => {
-    const aviso = ehPresente(b) ? `\n\n⚠️ ${avisoPresente}` : emAtrasoRepo ? `\n\n⚠️ ${avisoAtrasoRepo}` : "";
+    setBusy(true);
+    const previa = await previaLiberacao(b);
+    setBusy(false);
+    const aviso = previa ? `\n\n${previa}` : "";
     if (!(await confirmModal({ title: "Cancelar aula", message: `Cancelar a sua aula de ${fmtDateLong(b.date)} às ${b.time}?\n\nA vaga ficará livre para outra pessoa.${aviso}`, confirmLabel: "Cancelar aula", cancelLabel: "Voltar", tone: "danger" }))) return;
     setBusy(true);
     try {
@@ -484,16 +517,16 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
               <button className="pt-pay-cta" onClick={() => openPay(b)}>💳 Pagar reserva · {money(b.value)}</button>
             )}
             <div className="pt-aula-actions">
-              <button className="pt-btn-out" onClick={() => { setAbsenceFor(absenceFor === b.id ? null : b.id); setAbsenceText(""); }} disabled={busy}>Não poderei ir</button>
+              <button className="pt-btn-out" onClick={() => abrirAbsence(b)} disabled={busy}>Não poderei ir</button>
               <button className="pt-btn-danger" onClick={() => doCancel(b)} disabled={busy}>Cancelar</button>
             </div>
             {absenceFor === b.id && (
               <div className="pt-absence">
                 <label className="pt-absence-l">Conte rapidinho o motivo (opcional):</label>
                 <textarea className="pt-absence-t" value={absenceText} onChange={(e) => setAbsenceText(e.target.value)} placeholder="Ex.: tive um imprevisto, vou ao médico…" />
-                {ehPresente(b)
-                  ? <div className="pt-sub2" style={{ marginTop: ".4rem" }}>⚠️ {avisoPresente}</div>
-                  : emAtrasoRepo && <div className="pt-sub2" style={{ marginTop: ".4rem" }}>⚠️ {avisoAtrasoRepo}</div>}
+                {absencePrevia && absencePrevia.id === b.id && absencePrevia.aviso && (
+                  <div className="pt-sub2" style={{ marginTop: ".4rem" }}>{absencePrevia.aviso}</div>
+                )}
                 <div className="pt-absence-actions">
                   <button className="pt-link" onClick={() => { setAbsenceFor(null); setAbsenceText(""); }}>Voltar</button>
                   <button className="pt-btn-out" onClick={() => doAbsence(b)} disabled={busy}>Enviar aviso</button>
@@ -524,6 +557,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
                   <div className="pt-lib-motivo">“{b.absenceReason}”</div>
                 )}
                 <div className="pt-lib-ok">✓ Registrado — avisamos a escola e a vaga ficou livre.</div>
+                {creditoDaLiberada(b)}
               </div>
             );
           })}
@@ -531,7 +565,20 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
 
         {passadas.length > 0 && (<>
           <h2 className="pt-h2">Aulas anteriores</h2>
-          {passadas.slice(0, 6).map((b) => (
+          {passadas.slice(0, 6).map((b) => b.status === "cancelada" ? (
+            /* A cancelada fica no histórico: sumir com ela deixava só as aulas
+               de antes à vista, como "Concluída", e a aluna lia ali a aula que
+               tinha liberado (caso da Pitya, 28/10/2026). O texto não diz quem
+               cancelou — aqui também caem as que a escola desmarcou. */
+            <div className="pt-aula pt-past" key={b.id}>
+              <div className="pt-when"><b>{fmtDate(b.date)}</b><span>{b.time} · {b.unit}</span></div>
+              <div className="pt-status cancelada">✕ Aula cancelada</div>
+              {(b.absenceReason || "").trim() && b.absenceReason !== "Avisou que não poderá ir" && (
+                <div className="pt-lib-motivo">“{b.absenceReason}”</div>
+              )}
+              {creditoDaLiberada(b)}
+            </div>
+          ) : (
             <div className="pt-aula pt-past" key={b.id}>
               <div className="pt-when"><b>{fmtDate(b.date)}</b><span>{b.time} · {b.unit}</span></div>
               <div className="pt-status">{b.attendance === "presente" ? "✓ Presente" : b.attendance === "falta" ? "Faltou" : "Concluída"}</div>

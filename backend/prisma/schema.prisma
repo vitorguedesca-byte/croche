@@ -266,6 +266,11 @@ model Booking {
   status        String   @default("aguardando") // aguardando | confirmada | concluida | cancelada
   attendance    String   @default("") // '' | presente | falta
   absenceReason String   @default("") @db.VarChar(500) // motivo informado pelo aluno
+  /* Por que a liberação desta aula NÃO gerou crédito de reposição (teto do mês,
+     prazo, atraso…), gravado por liberarAula(). O portal mostra na aula liberada
+     depois que o aviso da hora já sumiu. null = gerou crédito, não passou pela
+     liberação, ou é anterior a 28/10/2026. */
+  creditoMotivo String?  @db.VarChar(300)
   value         Float    @default(80)
   /* Quanto de TAXA DE MATRÍCULA está dentro de `value`. Só a reserva da aula
      de matrícula tem isto preenchido; null = reserva sem taxa (todas as antigas).
