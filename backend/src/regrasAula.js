@@ -255,6 +255,33 @@ export function prazoLiberacao(date, time, horasMin = REPO_HORAS_MIN) {
 // Comparação de texto ISO: 'agora' é o relógio de Brasília, não o UTC do servidor.
 export const liberouATempo = (date, time, agora) => agora <= prazoLiberacao(date, time);
 
+/* ===================== REPOSIÇÃO DA FIXA DE SEMANA NÃO VAI PARA O SÁBADO =====================
+   Vitor, 31/10/2026: a mensalista fixa que faz aula durante a semana não pode
+   marcar reposição no sábado. A fixa com sábado na grade continua podendo, e a
+   escala não tem essa trava (ela já marca o pacote em qualquer turma).
+
+   Não é a regra "sábado não faz parte do plano" removida em 30/08/2026 — sábado
+   continua na grade e checarRegras() não barra data nenhuma. Aqui é só o destino
+   da reposição que a aluna marca pelo portal; no painel a agenda é da Inêz, e
+   ela marca onde precisar.
+
+   A grade é lida das aulas FUTURAS do plano: uma aula de sábado de meses atrás
+   não diz nada sobre a grade de hoje. Sem nenhuma aula do plano pela frente não
+   dá para dizer que ela faz aula durante a semana, então não barra — é o aviso
+   do topo deste arquivo sobre deduzir direito de uma tabela sem dados.
+   `aulasFuturas`: aulas ativas da aluna de hoje em diante (aulasAtivasDe). */
+export const ehSabado = (iso) => new Date(`${iso}T00:00Z`).getUTCDay() === 6;
+
+export function fixaSemSabado(client, aulasFuturas) {
+  if (tipoMensalista(client) !== "fixo") return false;
+  const grade = (aulasFuturas || []).filter(contaNoTeto);
+  const dow = (b) => new Date(`${b.date}T00:00Z`).getUTCDay();
+  return grade.some((b) => dow(b) >= 1 && dow(b) <= 5) && !grade.some((b) => ehSabado(b.date));
+}
+
+export const MOTIVO_REPOSICAO_SABADO =
+  "Quem faz aula durante a semana marca a reposição de segunda a sexta. Escolha outro dia. 💚";
+
 /* Por que uma aula liberada NÃO vira crédito — a parte da decisão que não
    precisa do banco. `concederCredito` no server.js consulta esta função antes
    de olhar teto do mês e elegibilidade (essas dependem de contar linhas).

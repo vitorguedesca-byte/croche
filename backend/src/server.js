@@ -51,6 +51,9 @@ import {
   podeReplicarMensalista,
   mesmaSemana,
   diasEntreISO,
+  ehSabado,
+  fixaSemSabado,
+  MOTIVO_REPOSICAO_SABADO,
 } from "./regrasAula.js";
 import {
   anosDoCalendario,
@@ -573,10 +576,11 @@ async function reposicoesNoMes(client, comp) {
 async function resumoReposicao(client) {
   const t = todayISO();
   const compAtual = t.slice(0, 7);
-  const [eleg, creditos, marcadasNoMes] = await Promise.all([
+  const [eleg, creditos, marcadasNoMes, aulasFuturas] = await Promise.all([
     elegivelReposicao(client),
     prisma.makeupCredit.findMany({ where: { clientId: client.id }, orderBy: { createdAt: "desc" } }),
     reposicoesNoMes(client, compAtual),
+    aulasAtivasDe(client, t),
   ]);
   // A aula de origem voltou para a agenda? Então não há o que repor.
   const voltaram = await creditosComAulaDeVolta(client, creditos);
@@ -611,6 +615,7 @@ async function resumoReposicao(client) {
       horasMin: REPO_HORAS_MIN,
       manhaAte: REPO_MANHA_ATE,
       atrasoBloqueia: !!SETTINGS.travaAtraso,
+      semSabado: fixaSemSabado(client, aulasFuturas),
     },
   };
 }
@@ -666,7 +671,7 @@ async function concederCredito(client, booking) {
 // Lança { code, message } para o wrap devolver o status certo.
 // A reposição segue as MESMAS regras da marcação normal (teto da semana e a
 // janela da escala) — foi assim que a Inêz pediu: remarcar não é porta de fuga.
-async function marcarReposicao(client, slotId, { forcar = false } = {}) {
+async function marcarReposicao(client, slotId, { forcar = false, painel = false } = {}) {
   const eleg = await elegivelReposicao(client);
   if (!eleg.ok) throw Object.assign(new Error(eleg.motivo), { code: 403 });
   const t = todayISO();
@@ -718,6 +723,9 @@ async function marcarReposicao(client, slotId, { forcar = false } = {}) {
 
   // A reposição não é aula do plano: não ocupa vaga do teto semanal 1x/2x.
   await exigirRegras(client, slot, { forcar, ignorarTeto: true });
+  // Fixa de semana não repõe no sábado (ver fixaSemSabado). O painel não passa por aqui.
+  if (!painel && ehSabado(slot.date) && fixaSemSabado(client, await aulasAtivasDe(client, t)))
+    throw Object.assign(new Error(MOTIVO_REPOSICAO_SABADO), { code: 409, codigo: "sabado" });
   // Teto de reposições dentro do mês da aula escolhida
   const compAula = slot.date.slice(0, 7);
   if ((await reposicoesNoMes(client, compAula)) >= REPO_MAX_MES)
@@ -6363,7 +6371,7 @@ app.post("/api/clients/:id/makeup-book", wrap(async (req, res) => {
   const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   try {
-    res.json(await marcarReposicao(client, req.body?.slotId, { forcar: !!req.body?.forcar }));
+    res.json(await marcarReposicao(client, req.body?.slotId, { forcar: !!req.body?.forcar, painel: true }));
   } catch (e) {
     res.status(e.code || 500).json({ error: e.message, codigo: e.codigo });
   }

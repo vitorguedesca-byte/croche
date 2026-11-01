@@ -7,7 +7,7 @@ import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
 import Agendamentos from "./Agendamentos.jsx";
-import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, compPorExtenso, PLANOS_MENSALISTA, valorPlanoMeta, aulasSeChocam, janelaEscala, aulasDoPacote, PGTO_PRESENTE } from "./helpers.js";
+import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, compPorExtenso, PLANOS_MENSALISTA, valorPlanoMeta, aulasSeChocam, janelaEscala, aulasDoPacote, dowMon, PGTO_PRESENTE } from "./helpers.js";
 
 const CPF_KEY = "fqc_portal_cpf";
 // WhatsApp da escola: (31) 98496-6403 — sem o "55", que o waLink já acrescenta
@@ -488,6 +488,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
           modo={modo}
           presenteAte={data.presentes ? data.presentes.ate : null}
           saldo={(data.makeup && data.makeup.saldo) || 0}
+          semSabado={!!(data.makeup && data.makeup.regras && data.makeup.regras.semSabado)}
           onBook={doBook}
           onSairModo={() => setModo("normal")}
         />
@@ -681,7 +682,7 @@ function PaymentScreen({ booking, phone, meta, onBack, onPago, flash }) {
 /* Calendário do portal: consulta e marcação no mesmo lugar.
    Cada dia mostra se ela tem aula e se sobrou vaga; ao tocar no dia, aparecem
    as aulas dela e os horários livres para marcar. */
-function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarcarNormal, busy, modo, presenteAte, saldo, onBook, onSairModo }) {
+function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarcarNormal, busy, modo, presenteAte, saldo, semSabado, onBook, onSairModo }) {
   const t = todayISO();
   const [off, setOff] = useState(0);
   const [dia, setDia] = useState(null);
@@ -694,6 +695,8 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
   const foraDoPlano = repondo || extrando || presenteando;
   // O presente vale até uma data: depois dela o dia não oferece vaga.
   const passouDoPresente = (date) => presenteando && !!presenteAte && date > presenteAte;
+  // Fixa de semana não repõe no sábado: o dia não oferece vaga para reposição.
+  const sabadoFechado = (date) => repondo && semSabado && dowMon(date) === 5;
   const janelaGeral = (regras && regras.janela) || { aberta: true, motivo: "" };
   const janelaFechadaGeral = !foraDoPlano && regras && regras.tipo === "escala" && !janelaGeral.aberta;
 
@@ -721,7 +724,7 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
     const out = dd.getMonth() !== m;
     // dias de outro mês ficam só de enfeite na grade: sem marca e sem clique
     const minhas = out ? null : aulasPorDia[date];
-    const vagas = !out && date >= t && !passouDoPresente(date) ? vagasPorDia[date] : null;
+    const vagas = !out && date >= t && !passouDoPresente(date) && !sabadoFechado(date) ? vagasPorDia[date] : null;
     const clicavel = !!(minhas || vagas);
     const titulo = [
       minhas ? `Sua aula: ${minhas.map((b) => b.time).join(", ")}` : "",
@@ -745,7 +748,7 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
   }
   const label = base.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
   const minhasDoDia = dia ? aulasPorDia[dia] || [] : [];
-  const vagasDoDia = dia && dia >= t && !passouDoPresente(dia) ? vagasPorDia[dia] || [] : [];
+  const vagasDoDia = dia && dia >= t && !passouDoPresente(dia) && !sabadoFechado(dia) ? vagasPorDia[dia] || [] : [];
 
   const tetoEscala = regras && regras.tetoEscala;
   const compDia = dia ? dia.slice(0, 7) : "";
@@ -789,6 +792,7 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
       {repondo && (
         <div className="mini-repo-aviso">
           🔁 Escolhendo a sua <b>aula de reposição</b> — você tem {saldo} crédito{saldo === 1 ? "" : "s"}.
+          {semSabado && <> Como você faz aula durante a semana, a reposição é de <b>segunda a sexta</b>.</>}
           <button className="pt-link" onClick={onSairModo}>Deixar para depois</button>
         </div>
       )}
@@ -1607,6 +1611,7 @@ function RepoCard({ makeup, onRepor }) {
           <li>Para o seu aviso virar crédito: avise com no mínimo <b>{regras.horasMin} horas</b> de antecedência. Se a aula for de manhã (antes das {regras.manhaAte}), avise até <b>23:59 do dia anterior</b>.</li>
           <li>São até <b>{regras.maxPorMes} reposições por mês</b>: no máximo {regras.maxPorMes} créditos por mês e no máximo {regras.maxPorMes} aulas de reposição marcadas dentro do mesmo mês.</li>
           <li>O crédito vale até o <b>fim do mês seguinte</b> ao da aula que você liberou.</li>
+          {regras.semSabado && <li>Como você faz aula durante a semana, a reposição é de <b>segunda a sexta</b>, sem marcação no sábado.</li>}
           <li>A reposição é marcada <b>depois que a data da aula liberada passa</b> — repor é remarcar uma aula que deixou de acontecer, não adiantar a próxima.</li>
           <li><b>Não se repõe a reposição:</b> se você liberar a sua aula de reposição, o crédito se encerra ali.</li>
           {regras.atrasoBloqueia && (

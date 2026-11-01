@@ -8,6 +8,7 @@ import {
   primeiroPagamento, mensalidadeDoPagamento,
   prazoLiberacao, liberouATempo, REPO_HORAS_MIN, motivoSemCredito,
   contaNoTeto, PGTO_PRESENTE, PRESENTE_VALIDADE_DIAS, validadePresente, situacaoPresente, presenteParaAula,
+  ehSabado, fixaSemSabado, PGTO_REPOSICAO,
 } from "./src/regrasAula.js";
 
 let falhas = 0;
@@ -43,6 +44,22 @@ console.log("\n— sábado faz parte do plano (regra removida) —");
 ok(c(fixo, { date: "2026-08-22", time: "10:00" }).ok === true, "fixo: sábado passa");
 ok(c(escala, { date: "2026-08-22", time: "09:00" }, { ignorarJanela: true }).ok === true, "escala: sábado passa");
 ok(c(fixo, { date: "2026-08-22", time: "19:00" }).ok === true, "fixo: sábado à noite passa");
+
+/* Regra de 31/10/2026: a fixa de semana não repõe no sábado. Só o destino da
+   reposição muda: os casos acima continuam valendo. 24/08 = segunda, 22/08 e 29/08 = sábado. */
+console.log("\n— reposição da fixa de semana não vai para o sábado —");
+const plano = (date) => ({ date, time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO });
+ok(ehSabado("2026-08-22") === true && ehSabado("2026-08-21") === false && ehSabado("2026-08-23") === false, "ehSabado: só o sábado");
+ok(fixaSemSabado(fixo, [plano("2026-08-24")]) === true, "fixa só de semana: sem sábado");
+ok(fixaSemSabado(fixo, [plano("2026-08-24"), plano("2026-08-29")]) === false, "fixa com semana e sábado na grade: pode");
+ok(fixaSemSabado(fixo, [plano("2026-08-29")]) === false, "fixa só de sábado: pode");
+ok(fixaSemSabado(fixo, []) === false, "fixa sem grade pela frente: não barra");
+ok(fixaSemSabado(escala, [plano("2026-08-24")]) === false, "escala: sem trava");
+ok(fixaSemSabado(avulsa, [plano("2026-08-24")]) === false, "avulsa: sem trava");
+ok(fixaSemSabado(fixo, [plano("2026-08-24"), { ...plano("2026-08-29"), paymentMethod: PGTO_REPOSICAO }]) === true,
+  "reposição marcada no sábado não põe o sábado na grade");
+ok(fixaSemSabado(fixo, [plano("2026-08-24"), { ...plano("2026-08-29"), status: "cancelada" }]) === true,
+  "aula cancelada de sábado não põe o sábado na grade");
 
 console.log("\n— avulsa (fora do plano de mensalista) —");
 ok(c(avulsa, { date: "2026-08-22", time: "19:00" }).ok === true, "avulsa: sábado à noite passa");
