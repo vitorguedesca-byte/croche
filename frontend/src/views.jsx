@@ -683,9 +683,9 @@ export function Clientes({ params, go }) {
   list = [...list].sort((a, b) => sortBy === "aulas" ? cntOf(b) - cntOf(a) : a.name.localeCompare(b.name));
 
   const resetPin = async (c) => {
-    if (!(await confirmModal({ title: "Gerar código de acesso", message: `Gerar um código para ${c.name}? O PIN atual e as sessões do portal serão encerrados. Entregue o código somente à própria aluna após conferir sua identidade.`, confirmLabel: "Gerar código", tone: "danger" }))) return;
-    const result = await run(api.resetPin(c.id));
-    await confirmModal({ title: "Código de acesso da aluna", message: `Código de ${c.name}: ${result.activationCode}\n\nVálido por 24 horas e para um único uso. Reiniciar o servidor invalida o código. A aluna informa este código ao criar o PIN no portal.`, confirmLabel: "Entendi" });
+    if (!(await confirmModal({ title: "Redefinir PIN", message: `Redefinir o PIN de ${c.name}? O PIN atual será apagado e as sessões do portal serão encerradas. Oriente a aluna a informar seu CPF no portal para criar um novo PIN.`, confirmLabel: "Redefinir PIN", tone: "danger" }))) return;
+    await run(api.resetPin(c.id));
+    toast("PIN redefinido. A aluna já pode criar um novo no portal.");
   };
 
   /* Inativar e reativar dizem, nas duas pontas, o que acontece com a COBRANÇA:
@@ -898,7 +898,7 @@ export function Clientes({ params, go }) {
                             ✓ Baixar
                           </button>
                         )}
-                        <button data-access="alunos:2" className="btn sec sm" onClick={() => resetPin(c)}>🔒 {c.hasPin ? "Redefinir PIN" : "Gerar acesso"}</button>
+                        {c.hasPin && <button data-access="alunos:2" className="btn sec sm" onClick={() => resetPin(c)}>🔒 Redefinir PIN</button>}
                         <button data-access="alunos:2" className="btn sec sm" onClick={() => open(<ClientProfile client={c} initialTab="editar" />)}>Editar</button>
                         <button data-access="alunos:2" className="btn ghost sm" style={{ color: "var(--danger)" }} title="Inativar aluna (limpar grade e mover para Ex-Alunos)" onClick={() => inativarAluna(c)}>
                           🚫 Inativar

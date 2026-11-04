@@ -43,7 +43,6 @@ function LoginFlow({ onAuth }) {
   const [phone, setPhone] = useState("");
   const [pin, setPin] = useState("");
   const [pinConfirm, setPinConfirm] = useState("");
-  const [activationCode, setActivationCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
@@ -65,7 +64,7 @@ function LoginFlow({ onAuth }) {
     if (pin !== pinConfirm) { setErr("Os PINs não coincidem."); setPinConfirm(""); return; }
     setLoading(true);
     try {
-      const r = await api.auth.setPin(phone.replace(/\D/g, ""), pin, activationCode);
+      const r = await api.auth.setPin(phone.replace(/\D/g, ""), pin);
       onAuth(r.client);
     } catch (e) { setErr(e.message); }
     finally { setLoading(false); }
@@ -109,10 +108,8 @@ function LoginFlow({ onAuth }) {
         {step === "create" && (
           <div className="panel">
             <p style={{ marginBottom: "1rem", color: "var(--muted)", textAlign: "center" }}>
-              Solicite à escola um código de acesso, válido por 24 horas, para criar seu PIN.
+              Crie um PIN de 4 números para acessar o portal nas próximas vezes.
             </p>
-            <label>Código de acesso da escola</label>
-            <input inputMode="numeric" autoComplete="one-time-code" maxLength={8} value={activationCode} onChange={e => setActivationCode(e.target.value.replace(/\D/g, ""))} />
             <label style={{ display: "block", marginBottom: ".5rem", fontWeight: 600, fontSize: ".9rem", textAlign: "center" }}>Escolha seu PIN</label>
             <PinInput value={pin} onChange={setPin} />
             <label style={{ display: "block", margin: "1rem 0 .5rem", fontWeight: 600, fontSize: ".9rem", textAlign: "center" }}>Confirme o PIN</label>

@@ -69,7 +69,6 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
   const [authStep, setAuthStep] = useState("phone"); // phone | create | enter
   const [pin, setPin] = useState("");
   const [pinConfirm, setPinConfirm] = useState("");
-  const [activationCode, setActivationCode] = useState("");
   const sessionEpoch = useRef(0);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
@@ -150,7 +149,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
     if (pin !== pinConfirm) { setErr("Os PINs não conferem."); setPinConfirm(""); return; }
     setLoading(true); setErr("");
     const epoch = sessionEpoch.current;
-    try { const r = await api.auth.setPin(input.replace(/\D/g, ""), pin, activationCode); if (epoch === sessionEpoch.current) await load(portalKey(r.client)); }
+    try { const r = await api.auth.setPin(input.replace(/\D/g, ""), pin); if (epoch === sessionEpoch.current) await load(portalKey(r.client)); }
     catch (e) { if (epoch === sessionEpoch.current) { setErr(e.message); setLoading(false); } }
   };
   const enterPin = async () => {
@@ -165,7 +164,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
     api.auth.logout().catch(() => {});
     try { localStorage.removeItem(CPF_KEY); } catch {}
     setPhone(""); setData(null); setScreen("home"); setInput("");
-    setAuthStep("phone"); setPin(""); setPinConfirm(""); setActivationCode(""); setErr(""); setLiberadasAgora({});
+    setAuthStep("phone"); setPin(""); setPinConfirm(""); setErr(""); setLiberadasAgora({});
     setLoading(false);
   };
   useEffect(() => {
@@ -236,9 +235,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
             <p className="pt-hint">É a sua primeira vez? Toque em <b>Agendar aula</b> na página inicial. 💚</p>
           </>)}
           {authStep === "create" && (<>
-            <p className="pt-sub">Solicite à escola um código de acesso. Ele vale por 24 horas e permite criar seu PIN uma única vez.</p>
-            <label className="pt-label">Código de acesso da escola</label>
-            <input className="pt-input" inputMode="numeric" autoComplete="one-time-code" maxLength={8} value={activationCode} onChange={e => setActivationCode(e.target.value.replace(/\D/g, ""))} />
+            <p className="pt-sub">Crie um PIN de 4 números para acessar o portal com seu CPF nas próximas vezes.</p>
             <label className="pt-label" style={{ textAlign: "center" }}>Escolha o seu PIN</label>
             <PinBoxes value={pin} onChange={setPin} idp="a" />
             <label className="pt-label" style={{ textAlign: "center", marginTop: "1rem" }}>Confirme o PIN</label>
@@ -252,7 +249,14 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
             <PinBoxes value={pin} onChange={setPin} idp="a" />
             {err && <div className="pt-err">{err}</div>}
             <button className="pt-btn" onClick={enterPin} disabled={loading}>{loading ? "Entrando…" : "Entrar"}</button>
-            <button className="pt-link" style={{ marginTop: ".6rem" }} onClick={disconnect}>← Trocar CPF</button>
+            <p className="pt-hint">
+              {kiosk ? "Esqueceu o PIN? Peça à administração da escola para redefinir seu acesso." : (
+                <a className="pt-link" href={waLink(WA_ESCOLA, "Olá! Esqueci o PIN do Portal da Aluna e gostaria de solicitar a redefinição.")} target="_blank" rel="noreferrer">
+                  Esqueci meu PIN. Solicitar redefinição à escola
+                </a>
+              )}
+            </p>
+            <button className="pt-link" style={{ marginTop: ".6rem" }} onClick={disconnect}>← Voltar ao CPF</button>
           </>)}
           {!kiosk && <a className="pt-link" href="/landing.html" style={{ display: "block", marginTop: "1.2rem" }}>← Voltar ao site</a>}
         </div>

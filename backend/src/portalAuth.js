@@ -5,17 +5,15 @@ import { can } from "./accessPolicy.js";
 import { bindPortalBookingScope } from "./portalBookingScope.js";
 
 const SESSION_MS = 12 * 60 * 60 * 1000;
-const ACTIVATION_MS = 24 * 60 * 60 * 1000;
 const ATTEMPT_MS = 15 * 60 * 1000;
 const MAX_ENTRIES = 20000;
 const digits = value => typeof value === "string" ? value.replace(/\D/g, "") : "";
 const digest = value => crypto.createHash("sha256").update(value).digest("hex");
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 
-// Como as sessões administrativas, estas credenciais ficam na memória do
-// processo. Reiniciar encerra sessões e códigos; a escola pode gerar outro.
+// Como as sessões administrativas, as sessões do portal ficam na memória do processo.
 export function createPortalAuth({ prisma, clientByCpf, canEnter, safeClient, now = Date.now }) {
-  const sessions = new Map(), activations = new Map(), attempts = new Map(), locks = new Map();
+  const sessions = new Map(), attempts = new Map(), locks = new Map();
   const router = express.Router();
   const cleanup = map => { for (const [key, value] of map) if (value.expiresAt <= now()) map.delete(key); };
   const room = map => { cleanup(map); if (map.size >= MAX_ENTRIES) fail(503, "Acesso temporariamente indisponível. Tente novamente em alguns minutos."); };
@@ -47,7 +45,6 @@ export function createPortalAuth({ prisma, clientByCpf, canEnter, safeClient, no
     return entry;
   };
   const invalidate = id => {
-    activations.delete(id);
     for (const [key, session] of sessions) if (session.clientId === id) sessions.delete(key);
   };
   const withClientLock = async (id, fn) => {
@@ -64,28 +61,21 @@ export function createPortalAuth({ prisma, clientByCpf, canEnter, safeClient, no
 
   router.post("/api/auth/set-pin", route(async (req, res) => {
     const ipAttempt = reserve(`ip:${req.ip}`, 30);
-    const { pin, activationCode } = req.body || {};
+    const { cpf, pin } = req.body || {};
     if (typeof pin !== "string" || !/^\d{4}$/.test(pin)) fail(400, "PIN de 4 dígitos é obrigatório.");
-    const client = await clientByCpf(req.body.cpf);
-    if (!client) fail(401, "Código de acesso inválido ou expirado. Solicite outro à escola.");
+    const client = await clientByCpf(cpf);
+    if (!client) fail(404, "CPF não cadastrado.");
     reserve(`client:${client.id}`);
     await withClientLock(client.id, async () => {
       const current = await prisma.client.findUnique({ where: { id: client.id } });
       eligible(current);
-      if (current.pin) fail(409, "PIN já cadastrado. Use o login normal.");
-      cleanup(activations);
-      const activation = activations.get(client.id);
-      if (!activation || typeof activationCode !== "string" || !/^\d{8}$/.test(activationCode) ||
-          !crypto.timingSafeEqual(Buffer.from(activation.hash, "hex"), Buffer.from(digest(activationCode), "hex"))) {
-        fail(401, "Código de acesso inválido ou expirado. Solicite outro à escola.");
-      }
-      // Consumo antes do hash; updateMany também impede sobrescrita concorrente.
-      activations.delete(client.id);
+      const retry = "O acesso foi alterado. Volte e informe seu CPF novamente.";
+      if (current.pin) fail(409, "PIN já cadastrado. Volte e informe seu CPF para entrar.");
       const hash = await bcrypt.hash(pin, 10);
-      const result = await prisma.client.updateMany({ where: { id: client.id, pin: null }, data: { pin: hash } });
-      if (result.count !== 1) fail(409, "O acesso foi alterado. Solicite outro código à escola.");
+      const result = await prisma.client.updateMany({ where: { id: client.id, pin: current.pin }, data: { pin: hash } });
+      if (result.count !== 1) fail(409, retry);
       const updated = await prisma.client.findUnique({ where: { id: client.id } });
-      if (!updated || updated.pin !== hash) fail(409, "O acesso foi alterado. Solicite outro código à escola.");
+      if (!updated || updated.pin !== hash) fail(409, retry);
       eligible(updated);
       ipAttempt.count--;
       attempts.delete(`client:${client.id}`);
@@ -124,14 +114,11 @@ export function createPortalAuth({ prisma, clientByCpf, canEnter, safeClient, no
     const client = await prisma.client.findUnique({ where: { id } });
     if (!client) fail(404, "Aluno não encontrado.");
     await withClientLock(id, async () => {
-      room(activations);
-      const activationCode = String(crypto.randomInt(10000000, 100000000));
       await prisma.client.update({ where: { id }, data: { pin: null } });
       invalidate(id);
-      activations.set(id, { hash: digest(activationCode), expiresAt: now() + ACTIVATION_MS });
       attempts.delete(`client:${id}`);
       res.set("Cache-Control", "no-store");
-      res.json({ ok: true, activationCode, expiresAt: new Date(now() + ACTIVATION_MS).toISOString() });
+      res.json({ ok: true });
     });
   }));
 

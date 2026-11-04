@@ -276,7 +276,7 @@ export const api = {
 
   auth: {
     check:  (cpf)       => req("POST", "/api/auth/check",   { cpf }),
-    setPin: (cpf, pin, activationCode) => portalLogin("/api/auth/set-pin", { cpf, pin, activationCode }),
+    setPin: (cpf, pin) => portalLogin("/api/auth/set-pin", { cpf, pin }),
     login:  (cpf, pin) => portalLogin("/api/auth/login", { cpf, pin }),
     logout: () => { const pending = req("POST", "/api/auth/logout"); PORTAL_TOKEN = null; PORTAL_GENERATION++; return pending; },
   },

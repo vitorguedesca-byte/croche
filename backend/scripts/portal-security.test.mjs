@@ -87,31 +87,22 @@ async function fixture(t) {
   };
   const setup = await request("POST", "/api/admin/setup", { username: "admin", password: "SenhaTeste123" });
   const admin = setup.data.token;
-  const code = async (id = 1) => {
-    const result = await request("DELETE", `/api/clients/${id}/pin`, null, null, admin);
-    assert.equal(result.status, 200); assert.match(result.data.activationCode, /^\d{8}$/);
-    return result.data.activationCode;
-  };
-  return { request, clients, admin, code, advance: ms => { clock += ms; }, mutations: () => mutations };
+  return { request, clients, prisma, admin, advance: ms => { clock += ms; }, mutations: () => mutations };
 }
 
-test("CPF sozinho não cadastra PIN; somente escola autorizada emite código", async t => {
+test("cadastro elegível sem PIN pode criar PIN pelo CPF e entrar", async t => {
   const f = await fixture(t);
-  assert.equal((await f.request("POST", "/api/auth/set-pin", { cpf: "12345678901", pin: "1234" })).status, 401);
+  assert.equal((await f.request("POST", "/api/auth/set-pin", { cpf: "00000000000", pin: "1234" })).status, 404);
+  assert.equal((await f.request("POST", "/api/auth/set-pin", { cpf: "11122233344", pin: "1234" })).status, 403);
+  assert.equal((await f.request("POST", "/api/auth/set-pin", { cpf: "12345678901", pin: "123" })).status, 400);
   assert.equal(f.clients.get(1).pin, null);
-  assert.equal((await f.request("DELETE", "/api/clients/1/pin")).status, 401);
-  const user = await f.request("POST", "/api/admin/users", { username: "instrutora", password: "SenhaTeste123", role: "instrutora" }, null, f.admin);
-  assert.equal(user.status, 201);
-  const login = await f.request("POST", "/api/admin/login", { username: "instrutora", password: "SenhaTeste123" });
-  assert.equal((await f.request("DELETE", "/api/clients/1/pin", null, null, login.data.token)).status, 403);
-  const activationCode = await f.code();
-  assert.equal((await f.request("POST", "/api/auth/set-pin", { cpf: "12345678901", pin: "1234", activationCode: [activationCode] })).status, 401);
-  const created = await f.request("POST", "/api/auth/set-pin", { cpf: "123.456.789-01", pin: "1234", activationCode });
+  const created = await f.request("POST", "/api/auth/set-pin", { cpf: "123.456.789-01", pin: "0123" });
   assert.equal(created.status, 200);
   assert.equal(created.data.client.pin, undefined);
-  assert.equal(await bcrypt.compare("1234", f.clients.get(1).pin), true);
+  assert.equal(await bcrypt.compare("0123", f.clients.get(1).pin), true);
   assert.equal((await f.request("GET", "/api/portal/12345678901", null, created.data.portalToken)).status, 200);
-  assert.equal((await f.request("POST", "/api/auth/set-pin", { cpf: "12345678901", pin: "0000", activationCode })).status, 409);
+  assert.equal((await f.request("POST", "/api/auth/set-pin", { cpf: "12345678901", pin: "0000" })).status, 409);
+  assert.equal((await f.request("POST", "/api/auth/login", { cpf: "12345678901", pin: "0123" })).status, 200);
 });
 
 test("sessão vincula conta em todos os aliases e operações; logout revoga", async t => {
@@ -136,21 +127,26 @@ test("sessão vincula conta em todos os aliases e operações; logout revoga", a
   assert.equal((await f.request("GET", "/api/portal/2", null, token)).status, 401);
 });
 
-test("reset revoga sessões e códigos anteriores; código expira e é de uso único", async t => {
+test("somente equipe autorizada redefine PIN; reset revoga sessões e libera nova criação", async t => {
   const f = await fixture(t);
+  assert.equal((await f.request("DELETE", "/api/clients/2/pin")).status, 401);
+  const user = await f.request("POST", "/api/admin/users", { username: "instrutora", password: "SenhaTeste123", role: "instrutora" }, null, f.admin);
+  assert.equal(user.status, 201);
+  const instructor = await f.request("POST", "/api/admin/login", { username: "instrutora", password: "SenhaTeste123" });
+  assert.equal((await f.request("DELETE", "/api/clients/2/pin", null, null, instructor.data.token)).status, 403);
+
   const login = await f.request("POST", "/api/auth/login", { cpf: "98765432100", pin: "5678" });
-  const old = await f.code(2);
+  assert.equal(login.status, 200);
+  const reset = await f.request("DELETE", "/api/clients/2/pin", null, null, f.admin);
+  assert.deepEqual(reset, { status: 200, data: { ok: true } });
+  assert.equal(f.clients.get(2).pin, null);
   assert.equal((await f.request("GET", "/api/portal/2", null, login.data.portalToken)).status, 401);
-  const fresh = await f.code(2);
-  assert.equal((await f.request("POST", "/api/auth/set-pin", { cpf: "98765432100", pin: "1234", activationCode: old })).status, 401);
-  const created = await f.request("POST", "/api/auth/set-pin", { cpf: "98765432100", pin: "1234", activationCode: fresh });
+  assert.equal((await f.request("POST", "/api/auth/login", { cpf: "98765432100", pin: "5678" })).status, 401);
+  const created = await f.request("POST", "/api/auth/set-pin", { cpf: "98765432100", pin: "1234" });
   assert.equal(created.status, 200);
-  const expiring = await f.code();
+  assert.equal((await f.request("GET", "/api/portal/2", null, created.data.portalToken)).status, 200);
   f.advance(12 * 60 * 60 * 1000);
   assert.equal((await f.request("GET", "/api/portal/2", null, created.data.portalToken)).status, 401);
-  f.advance(12 * 60 * 60 * 1000);
-  assert.equal((await f.request("POST", "/api/auth/set-pin", { cpf: "12345678901", pin: "1234", activationCode: expiring })).status, 401);
-  assert.equal(f.clients.get(1).pin, null);
 });
 
 test("tentativas de PIN são limitadas pela conta, inclusive com CPF formatado", async t => {
@@ -164,20 +160,41 @@ test("tentativas de PIN são limitadas pela conta, inclusive com CPF formatado",
   assert.equal((await f.request("POST", "/api/auth/login", { cpf: "11122233344", pin: "5678" })).status, 403);
 });
 
-test("concorrência não sobrescreve PIN; redefinição durante criação termina revogada", async t => {
+test("cadastros simultâneos não sobrescrevem o PIN", async t => {
   const f = await fixture(t);
-  const activationCode = await f.code();
-  const results = await Promise.all(["1234", "9876"].map(pin => f.request("POST", "/api/auth/set-pin", { cpf: "12345678901", pin, activationCode })));
+  const results = await Promise.all(["1234", "9876"].map(pin => f.request("POST", "/api/auth/set-pin", { cpf: "12345678901", pin })));
   assert.deepEqual(results.map(r => r.status).sort(), [200, 409]);
   const winner = results.findIndex(r => r.status === 200);
   assert.equal(await bcrypt.compare(["1234", "9876"][winner], f.clients.get(1).pin), true);
-  const nextCode = await f.code();
-  const pending = f.request("POST", "/api/auth/set-pin", { cpf: "12345678901", pin: "1234", activationCode: nextCode });
-  await new Promise(resolve => setTimeout(resolve, 10));
-  const reset = f.code();
-  const [created] = await Promise.all([pending, reset]);
+});
+
+test("reset iniciado durante a criação revoga a sessão recém-emitida", { timeout: 5000 }, async t => {
+  const f = await fixture(t);
+  let signalCreationReady, resumeCreation, signalResetReady;
+  const creationReady = new Promise(resolve => { signalCreationReady = resolve; });
+  const creationPaused = new Promise(resolve => { resumeCreation = resolve; });
+  const resetReady = new Promise(resolve => { signalResetReady = resolve; });
+  const { findUnique, updateMany } = f.prisma.client;
+  f.prisma.client.updateMany = async args => {
+    signalCreationReady();
+    await creationPaused;
+    return updateMany(args);
+  };
+  const creation = f.request("POST", "/api/auth/set-pin", { cpf: "12345678901", pin: "1234" });
+  await creationReady;
+  f.prisma.client.findUnique = async args => {
+    signalResetReady();
+    return findUnique(args);
+  };
+  const reset = f.request("DELETE", "/api/clients/1/pin", null, null, f.admin);
+  await resetReady;
+  resumeCreation();
+
+  const [created, resetResult] = await Promise.all([creation, reset]);
+  assert.equal(created.status, 200);
+  assert.equal(resetResult.status, 200);
   assert.equal(f.clients.get(1).pin, null);
-  if (created.status === 200) assert.equal((await f.request("GET", "/api/portal/1", null, created.data.portalToken)).status, 401);
+  assert.equal((await f.request("GET", "/api/portal/1", null, created.data.portalToken)).status, 401);
 });
 
 test("integração do servidor cobre todas as rotas antes de webhook e portal", () => {
