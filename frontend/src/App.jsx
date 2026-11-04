@@ -80,7 +80,7 @@ const TITLES = {
 };
 
 export default function App() {
-  const { data, error, reload } = useStore();
+  const { data, error, reload, refreshing } = useStore();
   const { open } = useModal();
   const [, accessChanged] = useState(0);
   const instrutora = isInstrutora();
@@ -154,7 +154,13 @@ export default function App() {
   // Token inválido/expirado (ex.: servidor reiniciado) → volta ao login
   if (mode === "admin" && error && /restrito|faça login/i.test(error)) { setToken(null); return <AdminLogin />; }
 
-  if (error) return <div className="empty" style={{ padding: "4rem" }}><div className="ic">🔌</div><p>Não consegui falar com o servidor.<br />Confira se o backend está rodando em <b>http://localhost:4000</b>.</p><p className="cli-sub">{error}</p></div>;
+  if (error) return (
+    <div className="empty" style={{ padding: "4rem" }}>
+      <div className="ic" aria-hidden="true">🔌</div>
+      <p role="status">{refreshing ? "Carregando o painel…" : "Não foi possível carregar o painel."}</p>
+      <button type="button" className="btn" onClick={reload} disabled={refreshing}>Tentar novamente</button>
+    </div>
+  );
   if (!data) return <div className="empty" style={{ padding: "4rem" }}><div className="ic">🧶</div><p>Carregando…</p></div>;
 
   const go = (v, params = {}) => {

@@ -10,16 +10,22 @@ export default function AdminLogin() {
   const [password2, setPassword2] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [tentativa, setTentativa] = useState(0);
 
   useEffect(() => {
+    let ativo = true;
     api.admin.exists()
-      .then((r) => setMode(r.exists ? "login" : "setup"))
+      .then((r) => { if (ativo) setMode(r.exists ? "login" : "setup"); })
       .catch(() => {
-        // Backend antigo/desligado: não tem o endpoint. Assume primeiro acesso e avisa.
-        setMode("setup");
-        setErr("Não consegui falar com o servidor. Reinicie o backend (npm run dev) e recarregue a página.");
+        if (ativo) setErr("Não foi possível verificar o acesso ao painel.");
       });
-  }, []);
+    return () => { ativo = false; };
+  }, [tentativa]);
+
+  function tentarNovamente() {
+    setErr("");
+    setTentativa(n => n + 1);
+  }
 
   async function submit(e) {
     e && e.preventDefault();
@@ -60,7 +66,14 @@ export default function AdminLogin() {
         </p>
 
         {mode === null ? (
-          <div style={{ color: "var(--muted)", padding: "1rem 0" }}>Carregando…</div>
+          err ? (
+            <>
+              <div style={S.err} role="alert">{err}</div>
+              <button type="button" style={S.btn} onClick={tentarNovamente}>Tentar novamente</button>
+            </>
+          ) : (
+            <div style={{ color: "var(--muted)", padding: "1rem 0" }}>Carregando…</div>
+          )
         ) : (
           <>
             <label style={S.label}>Usuário</label>
