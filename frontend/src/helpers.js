@@ -780,8 +780,9 @@ export function situacaoMensalidade(data, client, comp = compAtual()) {
    `ehSabadoISO` e as funções `motivoForaDaRegra` / `motivoForaDaRegraDow`, que
    avisavam a Inêz antes de mandar a requisição — sem regra de data, elas
    respondiam "" para tudo. Ver o cabeçalho de backend/src/regrasAula.js.
-   A exceção é o destino da reposição da fixa de semana, que não vai para o
-   sábado (31/10/2026): o servidor decide e manda em makeup.regras.semSabado.
+   A exceção é o destino da reposição da fixa de semana, que só vai para o
+   sábado se tiver sábado na grade ou aula a partir das 18h (05/11/2026): o
+   servidor decide e manda em makeup.regras.semSabado.
 
    Ajustes posteriores da aluna são sempre unitários. */
 export const tipoMensalista = (c) =>

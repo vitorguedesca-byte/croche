@@ -36,7 +36,7 @@ Para manter a organização das turmas e garantir oportunidades para todas, cada
 
 Além disso, essas reposições deverão ser agendadas e realizadas até, no máximo, o mês seguinte. Após esse período, elas não poderão mais ser utilizadas.
 
-Quem tem horário fixo durante a semana faz a reposição de segunda a sexta: não é possível marcá-la no sábado.
+Quem tem horário fixo durante a semana faz a reposição de segunda a sexta. Quem tem aula regular a partir das 18h ou já tem sábado na grade também pode repor no sábado, conforme a disponibilidade de vagas.
 
 Obs: válido somente para alunos(as) que estão em vigência com o curso e mensalidade em dia.
 

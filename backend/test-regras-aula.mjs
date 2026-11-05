@@ -8,7 +8,7 @@ import {
   primeiroPagamento, mensalidadeDoPagamento,
   prazoLiberacao, liberouATempo, REPO_HORAS_MIN, motivoSemCredito,
   contaNoTeto, PGTO_PRESENTE, PRESENTE_VALIDADE_DIAS, validadePresente, situacaoPresente, presenteParaAula,
-  ehSabado, fixaSemSabado, PGTO_REPOSICAO,
+  ehSabado, fixaSemSabado, PGTO_REPOSICAO, PGTO_EXTRA,
 } from "./src/regrasAula.js";
 
 let falhas = 0;
@@ -48,7 +48,7 @@ ok(c(fixo, { date: "2026-08-22", time: "19:00" }).ok === true, "fixo: sábado à
 /* Regra de 31/10/2026: a fixa de semana não repõe no sábado. Só o destino da
    reposição muda: os casos acima continuam valendo. 24/08 = segunda, 22/08 e 29/08 = sábado. */
 console.log("\n— reposição da fixa de semana não vai para o sábado —");
-const plano = (date) => ({ date, time: "09:00", status: "confirmada", paymentMethod: PGTO_PLANO });
+const plano = (date, time = "09:00") => ({ date, time, status: "confirmada", paymentMethod: PGTO_PLANO });
 ok(ehSabado("2026-08-22") === true && ehSabado("2026-08-21") === false && ehSabado("2026-08-23") === false, "ehSabado: só o sábado");
 ok(fixaSemSabado(fixo, [plano("2026-08-24")]) === true, "fixa só de semana: sem sábado");
 ok(fixaSemSabado(fixo, [plano("2026-08-24"), plano("2026-08-29")]) === false, "fixa com semana e sábado na grade: pode");
@@ -60,6 +60,22 @@ ok(fixaSemSabado(fixo, [plano("2026-08-24"), { ...plano("2026-08-29"), paymentMe
   "reposição marcada no sábado não põe o sábado na grade");
 ok(fixaSemSabado(fixo, [plano("2026-08-24"), { ...plano("2026-08-29"), status: "cancelada" }]) === true,
   "aula cancelada de sábado não põe o sábado na grade");
+
+// Exceção de 05/11/2026: horário regular de semana a partir das 18h libera sábado.
+ok(fixaSemSabado(fixo, [plano("2026-08-24", "17:59")]) === true, "fixa às 17:59: sábado continua bloqueado");
+ok(fixaSemSabado(fixo, [plano("2026-08-24", "18:00")]) === false, "fixa às 18:00: pode repor no sábado");
+ok(fixaSemSabado(fixo, [plano("2026-08-24", "19:30")]) === false, "fixa após as 18h: pode repor no sábado");
+ok(fixaSemSabado(fixo, [plano("2026-08-24", "18:00 as 20:00")]) === false, "faixa das 18h às 20h: pode repor no sábado");
+ok(fixaSemSabado(fixo, [plano("2026-08-24", "16:00 as 18:00")]) === true, "aula que termina às 18h: sábado continua bloqueado");
+ok(fixaSemSabado(fixo, [plano("2026-08-24", "9:00")]) === true, "horário sem zero à esquerda não libera sábado");
+ok(fixaSemSabado(fixo, [plano("2026-08-24"), plano("2026-08-26", "18:00")]) === false,
+  "grade mista de manhã e noite: pode repor no sábado");
+ok(fixaSemSabado(fixo, [plano("2026-08-24"), { ...plano("2026-08-26", "18:00"), status: "cancelada" }]) === true,
+  "aula noturna cancelada não libera sábado");
+for (const paymentMethod of [PGTO_REPOSICAO, PGTO_EXTRA, PGTO_PRESENTE]) {
+  ok(fixaSemSabado(fixo, [plano("2026-08-24"), { ...plano("2026-08-26", "18:00"), paymentMethod }]) === true,
+    `${paymentMethod} à noite não altera o horário regular nem libera sábado`);
+}
 
 console.log("\n— avulsa (fora do plano de mensalista) —");
 ok(c(avulsa, { date: "2026-08-22", time: "19:00" }).ok === true, "avulsa: sábado à noite passa");

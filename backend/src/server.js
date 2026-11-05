@@ -723,7 +723,7 @@ async function marcarReposicao(client, slotId, { forcar = false, painel = false 
 
   // A reposição não é aula do plano: não ocupa vaga do teto semanal 1x/2x.
   await exigirRegras(client, slot, { forcar, ignorarTeto: true });
-  // Fixa de semana não repõe no sábado (ver fixaSemSabado). O painel não passa por aqui.
+  // Fixa de semana antes das 18h não repõe no sábado (ver fixaSemSabado). O painel não passa por aqui.
   if (!painel && ehSabado(slot.date) && fixaSemSabado(client, await aulasAtivasDe(client, t)))
     throw Object.assign(new Error(MOTIVO_REPOSICAO_SABADO), { code: 409, codigo: "sabado" });
   // Teto de reposições dentro do mês da aula escolhida

@@ -257,8 +257,9 @@ export const liberouATempo = (date, time, agora) => agora <= prazoLiberacao(date
 
 /* ===================== REPOSIÇÃO DA FIXA DE SEMANA NÃO VAI PARA O SÁBADO =====================
    Vitor, 31/10/2026: a mensalista fixa que faz aula durante a semana não pode
-   marcar reposição no sábado. A fixa com sábado na grade continua podendo, e a
-   escala não tem essa trava (ela já marca o pacote em qualquer turma).
+   marcar reposição no sábado. Exceção de 05/11/2026: quem tem aula regular
+   durante a semana a partir das 18:00 também pode repor no sábado. A fixa com
+   sábado na grade continua podendo, e a escala não tem essa trava.
 
    Não é a regra "sábado não faz parte do plano" removida em 30/08/2026 — sábado
    continua na grade e checarRegras() não barra data nenhuma. Aqui é só o destino
@@ -276,11 +277,14 @@ export function fixaSemSabado(client, aulasFuturas) {
   if (tipoMensalista(client) !== "fixo") return false;
   const grade = (aulasFuturas || []).filter(contaNoTeto);
   const dow = (b) => new Date(`${b.date}T00:00Z`).getUTCDay();
-  return grade.some((b) => dow(b) >= 1 && dow(b) <= 5) && !grade.some((b) => ehSabado(b.date));
+  const gradeSemana = grade.filter((b) => dow(b) >= 1 && dow(b) <= 5);
+  return gradeSemana.length > 0
+    && !grade.some((b) => ehSabado(b.date))
+    && !gradeSemana.some((b) => hhmm(b.time) >= "18:00");
 }
 
 export const MOTIVO_REPOSICAO_SABADO =
-  "Quem faz aula durante a semana marca a reposição de segunda a sexta. Escolha outro dia. 💚";
+  "Quem tem horário fixo durante a semana antes das 18h marca a reposição de segunda a sexta. Quem tem aula regular a partir das 18h também pode repor no sábado. Escolha outro dia. 💚";
 
 /* Por que uma aula liberada NÃO vira crédito — a parte da decisão que não
    precisa do banco. `concederCredito` no server.js consulta esta função antes

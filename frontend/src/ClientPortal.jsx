@@ -699,7 +699,7 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
   const foraDoPlano = repondo || extrando || presenteando;
   // O presente vale até uma data: depois dela o dia não oferece vaga.
   const passouDoPresente = (date) => presenteando && !!presenteAte && date > presenteAte;
-  // Fixa de semana não repõe no sábado: o dia não oferece vaga para reposição.
+  // O servidor libera sábado para a fixa com sábado na grade ou aula a partir das 18h.
   const sabadoFechado = (date) => repondo && semSabado && dowMon(date) === 5;
   const janelaGeral = (regras && regras.janela) || { aberta: true, motivo: "" };
   const janelaFechadaGeral = !foraDoPlano && regras && regras.tipo === "escala" && !janelaGeral.aberta;
@@ -796,7 +796,7 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
       {repondo && (
         <div className="mini-repo-aviso">
           🔁 Escolhendo a sua <b>aula de reposição</b> — você tem {saldo} crédito{saldo === 1 ? "" : "s"}.
-          {semSabado && <> Como você faz aula durante a semana, a reposição é de <b>segunda a sexta</b>.</>}
+          {semSabado && <> Como seus horários regulares são durante a semana antes das 18h, a reposição é de <b>segunda a sexta</b>.</>}
           <button className="pt-link" onClick={onSairModo}>Deixar para depois</button>
         </div>
       )}
@@ -1615,7 +1615,7 @@ function RepoCard({ makeup, onRepor }) {
           <li>Para o seu aviso virar crédito: avise com no mínimo <b>{regras.horasMin} horas</b> de antecedência. Se a aula for de manhã (antes das {regras.manhaAte}), avise até <b>23:59 do dia anterior</b>.</li>
           <li>São até <b>{regras.maxPorMes} reposições por mês</b>: no máximo {regras.maxPorMes} créditos por mês e no máximo {regras.maxPorMes} aulas de reposição marcadas dentro do mesmo mês.</li>
           <li>O crédito vale até o <b>fim do mês seguinte</b> ao da aula que você liberou.</li>
-          {regras.semSabado && <li>Como você faz aula durante a semana, a reposição é de <b>segunda a sexta</b>, sem marcação no sábado.</li>}
+          {regras.semSabado && <li>Como seus horários regulares são durante a semana antes das 18h, a reposição é de <b>segunda a sexta</b>, sem marcação no sábado.</li>}
           <li>A reposição é marcada <b>depois que a data da aula liberada passa</b> — repor é remarcar uma aula que deixou de acontecer, não adiantar a próxima.</li>
           <li><b>Não se repõe a reposição:</b> se você liberar a sua aula de reposição, o crédito se encerra ali.</li>
           {regras.atrasoBloqueia && (
