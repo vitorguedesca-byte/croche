@@ -514,11 +514,13 @@ async function elegivelReposicao(client) {
   return { ok: true, codigo: "", motivo: "" };
 }
 
-/* Crédito pronto para usar: não gasto, dentro da validade e — a regra nova — com
-   a aula de origem JÁ passada. Antes disso ele existe, mas fica "aguardando":
-   a aluna vê o crédito na tela e sabe a partir de quando pode marcar. */
-const creditoValido = (t) => ({ usedBookingId: null, expiresOn: { gte: t }, originDate: { lt: t } });
-// A partir de quando o crédito pode ser usado (dia seguinte ao da aula liberada)
+/* Crédito pronto para usar: não gasto e dentro da validade. Ele vale assim que
+   nasce — a aluna marca a reposição na hora, sem esperar a aula liberada passar.
+   O que continua valendo é a DATA da reposição: sempre depois da aula liberada
+   (ver marcarReposicao). Até 07/11/2026 o crédito ficava "aguardando" até o dia
+   seguinte ao da aula de origem, e a aluna não conseguia nem escolher. */
+const creditoValido = (t) => ({ usedBookingId: null, expiresOn: { gte: t } });
+// Primeiro dia em que a reposição deste crédito pode acontecer (dia seguinte ao da aula liberada)
 const creditoLiberaEm = (c) => addDays(c.originDate, 1);
 
 /* ============ O CRÉDITO MORRE SE A AULA DE ORIGEM VOLTAR ============
@@ -589,23 +591,23 @@ async function resumoReposicao(client) {
   const voltaram = await creditosComAulaDeVolta(client, creditos);
   const marcados = creditos.map((c) => ({
     ...c,
-    // "aguardando" = a aula liberada ainda não chegou; vira "disponivel" no dia seguinte
+    // O crédito vale desde que nasce; a aula liberada ainda no futuro só limita a DATA da reposição.
     situacao: c.usedBookingId ? "usado"
       : voltaram.has(c.id) ? "revogado"
       : c.expiresOn < t ? "expirado"
-      : c.originDate >= t ? "aguardando"
       : "disponivel",
     liberaEm: creditoLiberaEm(c),
   }));
-  const aguardando = marcados.filter((c) => c.situacao === "aguardando");
+  const disponiveis = marcados.filter((c) => c.situacao === "disponivel");
   return {
     elegivel: eleg.ok,
     motivo: eleg.motivo,
     codigo: eleg.codigo,
-    saldo: marcados.filter((c) => c.situacao === "disponivel").length,
-    // créditos que existem mas ainda não podem ser usados, e quando o 1º libera
-    aguardando: aguardando.length,
-    aguardandoDesde: aguardando.map((c) => c.liberaEm).sort()[0] || null,
+    saldo: disponiveis.length,
+    /* Primeiro dia que a reposição pode acontecer: o dia seguinte à aula liberada
+       mais antiga entre os créditos disponíveis. O calendário do portal só oferece
+       horário a partir daqui; marcarReposicao confere de novo, crédito a crédito. */
+    reporAPartirDe: disponiveis.map((c) => c.liberaEm).sort()[0] || null,
     creditos: marcados,
     // teto do mês corrente, para a tela avisar antes de a aluna tentar marcar
     mes: {
@@ -678,6 +680,11 @@ async function marcarReposicao(client, slotId, { forcar = false, painel = false 
   const eleg = await elegivelReposicao(client);
   if (!eleg.ok) throw Object.assign(new Error(eleg.motivo), { code: 403 });
   const t = todayISO();
+  // O horário vem primeiro: é a data dele que decide qual crédito pode pagar a reposição.
+  const slot = await prisma.slot.findUnique({ where: { id: Number(slotId) } });
+  if (!slot) throw Object.assign(new Error("Horário não encontrado."), { code: 404 });
+  if (slot.date < t) throw Object.assign(new Error("Não dá para repor em uma aula que já passou."), { code: 400 });
+
   const candidatos = await prisma.makeupCredit.findMany({
     where: { clientId: client.id, ...creditoValido(t) },
     orderBy: { expiresOn: "asc" }, // gasta primeiro o que vence antes
@@ -686,43 +693,27 @@ async function marcarReposicao(client, slotId, { forcar = false, painel = false 
      Filtrar aqui, e não na cláusula acima, é o que garante que nenhuma porta
      nova de criação de aula escape da regra — ver creditosComAulaDeVolta. */
   const revogados = await creditosComAulaDeVolta(client, candidatos);
-  const credito = candidatos.find((c) => !revogados.has(c.id)) || null;
-  if (!credito) {
-    // Distingue "não tem crédito" de "tem, mas a aula liberada ainda não chegou" —
-    // são situações bem diferentes para quem está olhando a tela.
-    const futuros = await prisma.makeupCredit.findMany({
-      where: { clientId: client.id, usedBookingId: null, expiresOn: { gte: t }, originDate: { gte: t } },
-      orderBy: { originDate: "asc" },
-    });
-    const futurosRevogados = await creditosComAulaDeVolta(client, futuros);
-    const esperando = futuros.find((c) => !futurosRevogados.has(c.id)) || null;
-    if (esperando)
-      throw Object.assign(
-        new Error(`Sua aula de ${fmtDiaBR(esperando.originDate)} ainda não aconteceu. A reposição pode ser marcada a partir de ${fmtDiaBR(creditoLiberaEm(esperando))}. 💚`),
-        { code: 409 }
-      );
+  const vivos = candidatos.filter((c) => !revogados.has(c.id));
+  if (!vivos.length)
     throw Object.assign(new Error("Você não tem crédito de reposição disponível."), { code: 409 });
-  }
-
-  const slot = await prisma.slot.findUnique({ where: { id: Number(slotId) } });
-  if (!slot) throw Object.assign(new Error("Horário não encontrado."), { code: 404 });
-  if (slot.date < t) throw Object.assign(new Error("Não dá para repor em uma aula que já passou."), { code: 400 });
 
   /* A REPOSIÇÃO VEM SEMPRE DEPOIS DA AULA LIBERADA — nunca antes.
      Repor é remarcar uma aula que deixou de acontecer; escolher uma data
      anterior à da aula cancelada seria adiantar a próxima e ainda ficar com o
-     direito de faltar na original. O filtro `creditoValido` já não entrega
-     crédito de aula futura, então na prática isto nunca dispara — está escrito
-     aqui porque a regra tem que estar visível no lugar onde a aula nasce, e não
-     só implícita numa cláusula de busca três funções acima. */
-  if (slot.date <= credito.originDate)
+     direito de faltar na original. O crédito vale desde que nasce (a aluna
+     escolhe na hora), então é AQUI que a regra segura: só serve o crédito cuja
+     aula liberada é de uma data anterior à do horário escolhido. */
+  const credito = vivos.find((c) => c.originDate < slot.date) || null;
+  if (!credito) {
+    const primeiro = vivos.reduce((a, c) => (c.originDate < a.originDate ? c : a));
     throw Object.assign(
       new Error(
-        `A reposição precisa ser em uma data POSTERIOR à aula que você liberou (${fmtDiaBR(credito.originDate)}). ` +
-        `Escolha um horário a partir de ${fmtDiaBR(creditoLiberaEm(credito))}. 💚`
+        `A reposição precisa ser em uma data POSTERIOR à aula que você liberou (${fmtDiaBR(primeiro.originDate)}). ` +
+        `Escolha um horário a partir de ${fmtDiaBR(creditoLiberaEm(primeiro))}. 💚`
       ),
       { code: 409 }
     );
+  }
 
   // A reposição não é aula do plano: não ocupa vaga do teto semanal 1x/2x.
   await exigirRegras(client, slot, { forcar, ignorarTeto: true });

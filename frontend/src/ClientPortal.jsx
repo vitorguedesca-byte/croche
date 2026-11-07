@@ -492,6 +492,7 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
           modo={modo}
           presenteAte={data.presentes ? data.presentes.ate : null}
           saldo={(data.makeup && data.makeup.saldo) || 0}
+          repoAPartirDe={(data.makeup && data.makeup.reporAPartirDe) || null}
           semSabado={!!(data.makeup && data.makeup.regras && data.makeup.regras.semSabado)}
           onBook={doBook}
           onSairModo={() => setModo("normal")}
@@ -686,7 +687,7 @@ function PaymentScreen({ booking, phone, meta, onBack, onPago, flash }) {
 /* Calendário do portal: consulta e marcação no mesmo lugar.
    Cada dia mostra se ela tem aula e se sobrou vaga; ao tocar no dia, aparecem
    as aulas dela e os horários livres para marcar. */
-function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarcarNormal, busy, modo, presenteAte, saldo, semSabado, onBook, onSairModo }) {
+function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarcarNormal, busy, modo, presenteAte, saldo, repoAPartirDe, semSabado, onBook, onSairModo }) {
   const t = todayISO();
   const [off, setOff] = useState(0);
   const [dia, setDia] = useState(null);
@@ -701,6 +702,8 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
   const passouDoPresente = (date) => presenteando && !!presenteAte && date > presenteAte;
   // O servidor libera sábado para a fixa com sábado na grade ou aula a partir das 18h.
   const sabadoFechado = (date) => repondo && semSabado && dowMon(date) === 5;
+  // Reposição só depois da aula liberada: antes disso o dia não oferece vaga (o servidor também barra).
+  const antesDaLiberada = (date) => repondo && !!repoAPartirDe && date < repoAPartirDe;
   const janelaGeral = (regras && regras.janela) || { aberta: true, motivo: "" };
   const janelaFechadaGeral = !foraDoPlano && regras && regras.tipo === "escala" && !janelaGeral.aberta;
 
@@ -728,7 +731,7 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
     const out = dd.getMonth() !== m;
     // dias de outro mês ficam só de enfeite na grade: sem marca e sem clique
     const minhas = out ? null : aulasPorDia[date];
-    const vagas = !out && date >= t && !passouDoPresente(date) && !sabadoFechado(date) ? vagasPorDia[date] : null;
+    const vagas = !out && date >= t && !passouDoPresente(date) && !sabadoFechado(date) && !antesDaLiberada(date) ? vagasPorDia[date] : null;
     const clicavel = !!(minhas || vagas);
     const titulo = [
       minhas ? `Sua aula: ${minhas.map((b) => b.time).join(", ")}` : "",
@@ -752,7 +755,7 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
   }
   const label = base.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
   const minhasDoDia = dia ? aulasPorDia[dia] || [] : [];
-  const vagasDoDia = dia && dia >= t && !passouDoPresente(dia) && !sabadoFechado(dia) ? vagasPorDia[dia] || [] : [];
+  const vagasDoDia = dia && dia >= t && !passouDoPresente(dia) && !sabadoFechado(dia) && !antesDaLiberada(dia) ? vagasPorDia[dia] || [] : [];
 
   const tetoEscala = regras && regras.tetoEscala;
   const compDia = dia ? dia.slice(0, 7) : "";
@@ -796,6 +799,7 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
       {repondo && (
         <div className="mini-repo-aviso">
           🔁 Escolhendo a sua <b>aula de reposição</b> — você tem {saldo} crédito{saldo === 1 ? "" : "s"}.
+          {repoAPartirDe && repoAPartirDe > t && <> Escolha um dia a partir de <b>{fmtDate(repoAPartirDe)}</b>, depois da aula que você liberou.</>}
           {semSabado && <> Como seus horários regulares são durante a semana antes das 18h, a reposição é de <b>segunda a sexta</b>.</>}
           <button className="pt-link" onClick={onSairModo}>Deixar para depois</button>
         </div>
@@ -1569,8 +1573,8 @@ function RepoCard({ makeup, onRepor }) {
   const { saldo, elegivel, motivo, regras } = makeup;
   const disponiveis = (makeup.creditos || []).filter((c) => c.situacao === "disponivel");
   const proximo = disponiveis.map((c) => c.expiresOn).sort()[0];
-  // Créditos que já existem mas cuja aula ainda não chegou: só valem depois dela.
-  const aguardando = makeup.aguardando || 0;
+  // O crédito vale na hora, mas a reposição só pode cair depois da aula liberada.
+  const aPartirDe = makeup.reporAPartirDe && makeup.reporAPartirDe > todayISO() ? makeup.reporAPartirDe : null;
   // Mesmo com crédito na mão, são no máximo 2 reposições dentro do mesmo mês.
   const mes = makeup.mes || {};
   const noLimite = (mes.restantes ?? regras.maxPorMes) <= 0;
@@ -1588,11 +1592,8 @@ function RepoCard({ makeup, onRepor }) {
               : motivo}
           </div>
           {elegivel && proximo && <div className="pt-sub2">Usar até <b>{fmtDate(proximo)}</b>.</div>}
-          {elegivel && aguardando > 0 && (
-            <div className="pt-sub2">
-              ⏳ {aguardando === 1 ? "Mais 1 crédito seu ainda está esperando" : `Mais ${aguardando} créditos seus ainda estão esperando`} a aula acontecer
-              {makeup.aguardandoDesde ? <> — dá para marcar a partir de <b>{fmtDate(makeup.aguardandoDesde)}</b>.</> : "."}
-            </div>
+          {elegivel && saldo > 0 && aPartirDe && (
+            <div className="pt-sub2">Já dá para marcar: escolha uma aula a partir de <b>{fmtDate(aPartirDe)}</b>, depois da aula que você liberou.</div>
           )}
           {elegivel && saldo > 0 && noLimite && (
             <div className="pt-sub2">Você já marcou as <b>{regras.maxPorMes} reposições deste mês</b>. Guarde o crédito para o mês que vem ou chame a gente no WhatsApp. 💚</div>
@@ -1616,7 +1617,7 @@ function RepoCard({ makeup, onRepor }) {
           <li>São até <b>{regras.maxPorMes} reposições por mês</b>: no máximo {regras.maxPorMes} créditos por mês e no máximo {regras.maxPorMes} aulas de reposição marcadas dentro do mesmo mês.</li>
           <li>O crédito vale até o <b>fim do mês seguinte</b> ao da aula que você liberou.</li>
           {regras.semSabado && <li>Como seus horários regulares são durante a semana antes das 18h, a reposição é de <b>segunda a sexta</b>, sem marcação no sábado.</li>}
-          <li>A reposição é marcada <b>depois que a data da aula liberada passa</b> — repor é remarcar uma aula que deixou de acontecer, não adiantar a próxima.</li>
+          <li>Você já pode marcar a reposição assim que libera a aula, mas ela precisa ser <b>em uma data depois da aula liberada</b>: repor é remarcar uma aula que deixou de acontecer, não adiantar a próxima.</li>
           <li><b>Não se repõe a reposição:</b> se você liberar a sua aula de reposição, o crédito se encerra ali.</li>
           {regras.atrasoBloqueia && (
             <li>Vale só com a <b>mensalidade em dia</b>: aula liberada com mensalidade em atraso não gera crédito, <b>nem depois do pagamento</b>.</li>
