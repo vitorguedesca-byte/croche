@@ -76,6 +76,21 @@ async function req(method, url, body) {
     let msg = "Erro na requisição";
     let corpo = null;
     try { corpo = await res.json(); msg = corpo.error || msg; } catch {}
+    if (res.status === 400 && corpo?.code === "AUDIT_REASON_REQUIRED") {
+      const { promptModal, toast } = await import("./toast.jsx");
+      let motivo;
+      do {
+        motivo = await promptModal({
+          title: "Motivo da alteração",
+          message: "Explique o motivo. Ele ficará no histórico junto com seu usuário e a data da alteração.",
+          label: "Motivo", placeholder: "Ex.: novo prazo combinado com a aluna",
+          required: true, minLength: 3, maxLength: 500, confirmLabel: "Salvar alteração",
+        });
+        if (motivo === null) throw new Error("Alteração cancelada. Nenhum dado foi salvo nesta solicitação.");
+        if (motivo.trim().length < 3 || motivo.trim().length > 500) toast("Informe um motivo de 3 a 500 caracteres.", "error");
+      } while (motivo.trim().length < 3 || motivo.trim().length > 500);
+      return req(method, url, { ...body, motivo: motivo.trim() });
+    }
     const err = new Error(msg);
     if (res.status === 401 && portalRequest && sentPortalToken && sentPortalToken === PORTAL_TOKEN) {
       PORTAL_TOKEN = null;
@@ -103,6 +118,13 @@ async function portalLogin(path, body) {
 
 export const api = {
   getState: () => req("GET", "/api/state"),
+  getDataAudit: (clientId, before, filters = {}) => {
+    const query = new URLSearchParams();
+    if (before) query.set("before", before);
+    if (filters.search) query.set("search", filters.search);
+    if (filters.entity) query.set("entity", filters.entity);
+    return req("GET", `${clientId ? `/api/clients/${clientId}/audit` : "/api/data-audit"}${query.size ? `?${query}` : ""}`);
+  },
 
   createSlot: (data) => req("POST", "/api/slots", data),
   // `lote` (padrão do painel): a alteração alcança as ocorrências futuras

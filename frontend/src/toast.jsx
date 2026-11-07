@@ -121,7 +121,11 @@ export function ToastHost() {
                     placeholder={dialog.placeholder || ""}
                     rows={3}
                     autoFocus
+                    required={dialog.required}
+                    minLength={dialog.minLength}
+                    maxLength={dialog.maxLength}
                   />
+                  {dialog.required && <div className="help">{dialog.minLength ? `Informe ao menos ${dialog.minLength} caracteres.` : "Preenchimento obrigatório."}</div>}
                 </div>
               )}
             </div>
@@ -138,6 +142,7 @@ export function ToastHost() {
                 className={`btn ${dialog.tone === "danger" ? "danger" : ""}`}
                 onClick={() => closeDialog(dialog.prompt ? promptText : true)}
                 autoFocus={!dialog.prompt}
+                disabled={dialog.prompt && dialog.required && promptText.trim().length < (dialog.minLength || 1)}
               >
                 {dialog.confirmLabel || "Confirmar"}
               </button>

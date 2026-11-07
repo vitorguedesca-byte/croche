@@ -1,0 +1,14 @@
+.data-audit-controls { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; }
+.data-audit-controls input { flex: 1 1 200px; min-width: 0; }
+.data-audit-controls input, .data-audit-controls select { padding: .5rem .65rem; border: 1px solid var(--line, #ddd); border-radius: 8px; background: var(--white, #fff); color: inherit; font: inherit; font-size: .85rem; }
+.data-audit-controls select { max-width: 100%; }
+.data-audit-event { border: 1px solid var(--line, #ddd); border-radius: 10px; padding: .85rem; margin-bottom: .75rem; overflow-wrap: anywhere; }
+.data-audit-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .35rem; margin-bottom: .35rem; }
+.data-audit-heading time { color: var(--muted); font-size: .8rem; }
+.data-audit-reason { margin: .6rem 0; white-space: pre-wrap; }
+.data-audit-changes { margin: .6rem 0 0; }
+.data-audit-changes > div { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(0, 2fr); gap: .6rem; padding: .25rem 0; }
+.data-audit-changes dt { color: var(--muted); }
+.data-audit-changes dd { margin: 0; }
+.data-audit-error { color: var(--danger); }
+@media (max-width: 480px) { .data-audit-changes > div { grid-template-columns: 1fr; gap: .1rem; } }

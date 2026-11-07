@@ -1,7 +1,8 @@
 import { PrismaClient } from "@prisma/client";
+import { createAuditedPrisma } from "./dataAudit.js";
 
 // Instância única do Prisma reutilizada por toda a aplicação.
-export const prisma = new PrismaClient();
+export const prisma = createAuditedPrisma(new PrismaClient());
 
 export const UNITS = ["Ipatinga", "Timóteo"];
 export const PROFS = ["Equipe FQC"];

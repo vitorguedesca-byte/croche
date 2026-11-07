@@ -70,6 +70,8 @@ Pronto! Abra **http://localhost:5173**. O Vite já redireciona as chamadas `/api
 
 ## Comandos úteis (backend)
 
+A auditoria das mensalidades e dos campos de cadastro que afetam cobrança está documentada em [backend/AUDITORIA.md](backend/AUDITORIA.md), incluindo cobertura, permissões, instalação e testes locais.
+
 | Comando | O que faz |
 |---|---|
 | `npm run dev` | Sobe a API com auto-reload |

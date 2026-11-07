@@ -2,9 +2,10 @@ import { useState, useEffect, useRef, Fragment } from "react";
 import { toast, confirmModal } from "./toast.jsx";
 import { useStore } from "./store.jsx";
 import { useModal, StatusBadge, Select } from "./ui.jsx";
-import { api } from "./api.js";
+import { api, canAccess } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import Agendamentos from "./Agendamentos.jsx";
+import { DataAuditModal } from "./DataAudit.jsx";
 import { FiltroUnidade, unidadesDe } from "./Relatorios.jsx";
 import {
   SlotCard, DayModal, ManageBooking, ClientProfile, SlotDetail, TurmaView, AlterarMensalidade, FeriadoAulas,
@@ -1866,6 +1867,7 @@ function FinanceiroTotal({ go, unit }) {
 /* ----------------- COMPONENTE PRINCIPAL FINANCEIRO ----------------- */
 export function Financeiro({ go, params }) {
   const { data } = useStore();
+  const { open } = useModal();
   const [tab, setTab] = useState(params?.tab || "operacao");
   const [unit, setUnit] = useState("Todas");
   const unidades = unidadesDe(data.meta, data.clients.filter((c) => c.plan === "mensalista").map((c) => c.unit || "Sem unidade"));
@@ -1888,6 +1890,7 @@ export function Financeiro({ go, params }) {
             💰 Total financeiro
           </button>
         </div>
+        {canAccess("financeiro") && <button className="btn ghost sm" onClick={() => open(<DataAuditModal />)}>🕒 Histórico de alterações</button>}
         {unidades.length > 1 && <FiltroUnidade unidades={unidades} unit={unit} setUnit={setUnit} />}
       </div>
 

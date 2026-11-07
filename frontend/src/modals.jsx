@@ -3,6 +3,7 @@ import { Modal, useModal, StatusBadge, Select } from "./ui.jsx";
 import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
 import Agendamentos from "./Agendamentos.jsx";
+import { DataAudit } from "./DataAudit.jsx";
 import { useStore } from "./store.jsx";
 import { api, canAccess } from "./api.js";
 import { toast, confirmModal, promptModal } from "./toast.jsx";
@@ -1743,6 +1744,7 @@ export function AlterarMensalidade({ client, compInicial }) {
 
   const salvar = async () => {
     if (!valido) return toast("Informe um valor válido.", "error");
+    if (motivo.trim().length < 3) return toast("Informe o motivo da alteração (ao menos 3 caracteres).", "error");
     if ((escopo === "competencias") && !marcados.length) return toast("Marque ao menos um mês.", "error");
 
     // Confirmação em números: alterar valor mexe em cobrança, e o que a tela
@@ -1919,8 +1921,8 @@ export function AlterarMensalidade({ client, compInicial }) {
       )}
 
       <div className="field">
-        <label>Motivo <span style={{ color: "var(--muted)", fontWeight: 400 }}>(opcional)</span></label>
-        <input value={motivo} onChange={(e) => setMotivo(e.target.value)} placeholder="ex.: indicou uma amiga, promoção de aniversário" />
+        <label>Motivo da alteração (obrigatório)</label>
+        <input value={motivo} maxLength={500} onChange={(e) => setMotivo(e.target.value)} placeholder="ex.: indicou uma amiga, promoção de aniversário" required />
       </div>
 
       {/* Prévia: o que vai acontecer, mês a mês */}
@@ -2179,15 +2181,18 @@ export async function baixarMensalidade(inv, run, nome = "", clientInvoices = []
       `A mensalidade do próximo mês será gerada normalmente com Pix.`;
   }
 
-  const ok = await confirmModal({
+  const motivo = await promptModal({
     title: "Dar baixa na mensalidade",
     message: msg,
+    label: "Motivo / forma do recebimento",
+    placeholder: "Ex.: recebido em dinheiro na escola",
+    required: true, minLength: 3, maxLength: 500,
     confirmLabel: "✓ Dar baixa",
     cancelLabel: "Voltar",
   });
-  if (!ok) return false;
+  if (motivo === null) return false;
   try {
-    await run(api.payInvoice(inv.id));
+    await run(api.payInvoice(inv.id, { motivo }));
     toast(`Baixa registrada com sucesso para a mensalidade de ${compLabel(comp)}.`, "success");
     return true;
   } catch {
@@ -2200,14 +2205,16 @@ export function AlterarVencimentoModal({ invoice, clientName }) {
   const { run } = useStore();
   const { close } = useModal();
   const [dueDate, setDueDate] = useState(invoice?.dueDate || todayISO());
+  const [motivo, setMotivo] = useState("");
   const [busy, setBusy] = useState(false);
 
   const save = async (e) => {
     e?.preventDefault();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return toast("Informe uma data de vencimento válida (AAAA-MM-DD).", "error");
+    if (motivo.trim().length < 3) return toast("Informe o motivo da alteração (ao menos 3 caracteres).", "error");
     setBusy(true);
     try {
-      await run(api.updateInvoice(invoice.id, { dueDate }));
+      await run(api.updateInvoice(invoice.id, { dueDate, motivo }));
       toast("Data de vencimento atualizada com sucesso!", "success");
       close();
     } catch {
@@ -2232,6 +2239,10 @@ export function AlterarVencimentoModal({ invoice, clientName }) {
         <div className="help" style={{ marginTop: ".45rem" }}>
           Ao alterar a data para hoje ou uma data futura, o boleto sai do estado de atraso e os encargos (multa/juros) são recalculados automaticamente.
         </div>
+      </div>
+      <div className="field">
+        <label>Motivo da alteração (obrigatório)</label>
+        <textarea value={motivo} onChange={e => setMotivo(e.target.value)} maxLength={500} rows={3} required placeholder="Ex.: novo prazo combinado com a aluna" />
       </div>
     </Modal>
   );
@@ -2397,6 +2408,7 @@ export function ClientProfile({ client, initialTab }) {
     { k: "principal", ic: "⭐", label: "Principal", n: null },
     { k: "aulas", ic: "📋", label: "Aulas", n: hist.length },
     ...(ehMensalista && (canAccess("financeiro") || canAccess("relatorios")) ? [{ k: "mens", ic: "🧾", label: "Mensalidades", n: pendentes || null }] : []),
+    ...(canAccess("financeiro") ? [{ k: "auditoria", ic: "🕒", label: "Alterações", n: null }] : []),
     ...(ehMensalista || temMatricula ? [{ k: "repo", ic: "🔁", label: "Reposição", n: null }] : []),
     { k: "presentes", ic: "🎁", label: "Presentes", n: presentesDisp || null },
     ...(canAccess("alunos", 2) ? [{ k: "editar", ic: "✏️", label: "Editar", n: null }] : []),
@@ -2602,6 +2614,7 @@ export function ClientProfile({ client, initialTab }) {
       )}
 
       {tab === "mens" && <MensalidadesPanel client={c} />}
+      {tab === "auditoria" && <DataAudit clientId={c.id} />}
 
       {tab === "repo" && (
         <div className="prof-panel">

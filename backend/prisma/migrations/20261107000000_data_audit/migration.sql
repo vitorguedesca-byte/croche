@@ -1,0 +1,22 @@
+CREATE TABLE `DataAudit` (
+  `id` INTEGER NOT NULL AUTO_INCREMENT,
+  `actorId` INTEGER NULL,
+  `actor` VARCHAR(120) NOT NULL,
+  `actorName` VARCHAR(120) NULL,
+  `source` VARCHAR(30) NOT NULL,
+  `requestId` VARCHAR(36) NOT NULL,
+  `route` VARCHAR(160) NULL,
+  `entity` VARCHAR(30) NOT NULL,
+  `entityId` INTEGER NOT NULL,
+  `clientId` INTEGER NULL,
+  `clientName` VARCHAR(255) NULL,
+  `competencia` VARCHAR(7) NULL,
+  `action` VARCHAR(20) NOT NULL,
+  `changes` JSON NOT NULL,
+  `reason` VARCHAR(500) NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX `DataAudit_clientId_id_idx` (`clientId`, `id`),
+  INDEX `DataAudit_entity_entityId_id_idx` (`entity`, `entityId`, `id`),
+  INDEX `DataAudit_createdAt_idx` (`createdAt`),
+  PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

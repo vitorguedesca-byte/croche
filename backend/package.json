@@ -9,7 +9,8 @@
     "seed": "node prisma/seed.js",
     "migrate": "prisma migrate dev --name init",
     "generate": "prisma generate",
-    "studio": "prisma studio"
+    "studio": "prisma studio",
+    "test:audit": "node scripts/prepare-data-audit-test.mjs && node --test scripts/data-audit.test.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

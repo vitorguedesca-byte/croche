@@ -1,5 +1,6 @@
 import express from "express";
 import { createAccessControl } from "./accessControl.js";
+import { auditRequestContext, createDataAuditRoutes, DATA_AUDIT_TABLE_SQL } from "./dataAudit.js";
 import { filterState } from "./accessPolicy.js";
 import { createPortalAuth } from "./portalAuth.js";
 import { bookingWhere, ownsPortalBooking } from "./portalBookingScope.js";
@@ -178,6 +179,7 @@ app.use(cors());
 // Antes do parser geral e de qualquer efeito colateral do webhook.
 app.post("/api/wa/webhook", ...waWebhookJson());
 app.use(express.json());
+app.use(auditRequestContext);
 // Garantir UTF-8 em todas as respostas JSON da API
 app.use("/api", (_req, res, next) => { res.setHeader("Content-Type", "application/json; charset=utf-8"); next(); });
 
@@ -244,6 +246,7 @@ function soMatriculaPelaPortaPublica(req, res, booking) {
 const access = createAccessControl({ prisma, isPublicApi });
 app.use(access.middleware);
 app.use(access.router);
+app.use(createDataAuditRoutes(prisma));
 const portalAuth = createPortalAuth({ prisma, clientByCpf, canEnter: clientPodeAcessarPortal, safeClient: c => safeClient(c) });
 app.use(portalAuth.router);
 app.use("/api/portal/:key", portalAuth.requireSession);
@@ -1086,7 +1089,7 @@ async function devolverCredito(bookingId) {
 const wrap = (fn) => (req, res) =>
   Promise.resolve(fn(req, res)).catch((e) => {
     console.error(e);
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json({ error: e.message, ...(e.code === "AUDIT_REASON_REQUIRED" ? { code: e.code } : {}) });
   });
 
 /* ---------- configurações (linha única id=1, cache em memória) ---------- */
@@ -8522,15 +8525,14 @@ app.patch(
        Por isso o nome novo desce junto para as aulas e a lista de espera, tudo
        na mesma transação: ou tudo muda, ou nada muda. */
     const trocouNome = data.name !== undefined && data.name && data.name !== antes.name;
-    const [client] = await prisma.$transaction([
-      prisma.client.update({ where: { id }, data }),
-      ...(trocouNome
-        ? [
-            prisma.booking.updateMany({ where: { clientName: antes.name }, data: { clientName: data.name } }),
-            prisma.waitlist.updateMany({ where: { name: antes.name }, data: { name: data.name } }),
-          ]
-        : []),
-    ]);
+    const client = await prisma.$transaction(async tx => {
+      const updated = await tx.client.update({ where: { id }, data });
+      if (trocouNome) {
+        await tx.booking.updateMany({ where: { clientName: antes.name }, data: { clientName: data.name } });
+        await tx.waitlist.updateMany({ where: { name: antes.name }, data: { name: data.name } });
+      }
+      return updated;
+    });
     if (trocouNome) console.log(`[nome] "${antes.name}" → "${data.name}" (aulas e lista de espera atualizadas)`);
 
     /* Virou INATIVA agora: a agenda e a cobrança dela param junto. Sem isso, a
@@ -10301,6 +10303,7 @@ const TABELAS_ESPERADAS = [
 ];
 
 async function ensureSchema() {
+  await prisma.$executeRawUnsafe(DATA_AUDIT_TABLE_SQL);
   for (const [tabela, sql] of TABELAS_ESPERADAS) {
     await prisma.$executeRawUnsafe(sql);
     void tabela;

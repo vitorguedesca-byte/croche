@@ -421,6 +421,30 @@ model AccessAudit {
   createdAt DateTime @default(now())
 }
 
+// Sem relações em cascata: excluir a aluna nunca apaga o histórico.
+model DataAudit {
+  id          Int      @id @default(autoincrement())
+  actorId     Int?
+  actor       String   @db.VarChar(120)
+  actorName   String?  @db.VarChar(120)
+  source      String   @db.VarChar(30)
+  requestId   String   @db.VarChar(36)
+  route       String?  @db.VarChar(160)
+  entity      String   @db.VarChar(30)
+  entityId    Int
+  clientId    Int?
+  clientName  String?  @db.VarChar(255)
+  competencia String?  @db.VarChar(7)
+  action      String   @db.VarChar(20)
+  changes     Json
+  reason      String?  @db.VarChar(500)
+  createdAt   DateTime @default(now())
+
+  @@index([clientId, id])
+  @@index([entity, entityId, id])
+  @@index([createdAt])
+}
+
 /* Feriado cadastrado na mão pela Inêz (Configurações).
    Os feriados NACIONAIS não moram aqui: são calculados em src/feriados.js, os
    móveis inclusive. Esta tabela é para o que só a escola sabe — o feriado
