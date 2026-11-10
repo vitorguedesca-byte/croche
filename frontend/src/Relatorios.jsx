@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, Fragment } from "react";
 import { useStore } from "./store.jsx";
-import { useModal } from "./ui.jsx";
+import { useModal, Select } from "./ui.jsx";
 import { api } from "./api.js";
 import { ClientProfile, SlotDetail } from "./modals.jsx";
 import { exportCsv, exportAlunosLeadsCsv } from "./exports.js";
@@ -1233,13 +1233,13 @@ export function RelatorioAlunosLeads() {
   ];
 
   const ETAPAS_OPCOES = [
-    { k: "todas", l: "Todas as etapas" },
-    { k: "contato", l: "💬 Primeiro contato" },
-    { k: "cadastro", l: "📝 Cadastro feito" },
-    { k: "marcada", l: "🗓️ 1ª aula marcada" },
-    { k: "aula", l: "🧶 Depois da aula avulsa" },
-    { k: "matriculada", l: "🎓 Matriculada" },
-    { k: "perdida", l: "✖ Perdida" },
+    { value: "todas", label: "Todas as etapas", icon: "🎯" },
+    { value: "contato", label: "Primeiro contato", icon: "💬" },
+    { value: "cadastro", label: "Cadastro feito", icon: "📝" },
+    { value: "marcada", label: "1ª aula marcada", icon: "🗓️" },
+    { value: "aula", label: "Depois da aula avulsa", icon: "🧶" },
+    { value: "matriculada", label: "Matriculada", icon: "🎓" },
+    { value: "perdida", label: "Perdida", icon: "✖" },
   ];
 
   return (
@@ -1330,7 +1330,7 @@ export function RelatorioAlunosLeads() {
       {/* Painel da Tabela e Filtros */}
       <div className="panel">
         {/* Abas de Categorias */}
-        <div className="ag-views" style={{ marginBottom: "1rem" }}>
+        <div className="seg seg-tabs" style={{ marginBottom: "1rem" }}>
           {CATEGORIAS.map((c) => (
             <button
               key={c.k}
@@ -1340,47 +1340,49 @@ export function RelatorioAlunosLeads() {
                 if (c.k === "ativo" || c.k === "ex-aluno") setEtapaFiltro("todas");
               }}
             >
-              {c.l} ({c.n})
+              {c.l} <span className="seg-count">{c.n}</span>
             </button>
           ))}
         </div>
 
-        {/* Filtros: Unidade, Etapa, Busca */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: ".8rem", alignItems: "center", marginBottom: "1rem" }}>
-          <FiltroUnidade unidades={unidades} unit={unidadeFiltro} setUnit={setUnidadeFiltro} />
-
-          {(categoriaFiltro === "lead" || categoriaFiltro === "todos") && (
-            <div style={{ display: "flex", alignItems: "center", gap: ".3rem" }}>
-              <span style={{ fontSize: ".76rem", color: "var(--muted)", fontWeight: 700 }}>Etapa:</span>
-              <select
-                value={etapaFiltro}
-                onChange={(e) => setEtapaFiltro(e.target.value)}
-                style={{ padding: ".3rem .5rem", fontSize: ".85rem", borderRadius: "6px" }}
-              >
-                {ETAPAS_OPCOES.map((ep) => (
-                  <option key={ep.k} value={ep.k}>
-                    {ep.l} {ep.k !== "todas" && totais.leadsPorEtapa?.[ep.k] ? `(${totais.leadsPorEtapa[ep.k]})` : ""}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
+        {/* Filtros padronizados */}
+        <div className="filters">
           <input
             className="grow"
             placeholder="🔍 Buscar por nome, telefone, e-mail, CPF, unidade..."
             value={busca}
             onChange={(e) => setBusca(e.target.value)}
-            style={{ minWidth: 220 }}
           />
+          <Select
+            compact
+            value={unidadeFiltro}
+            onChange={setUnidadeFiltro}
+            options={[
+              { value: "Todas", label: "Todas as unidades", icon: "📍" },
+              ...unidades.map((u) => ({ value: u, label: u, icon: "📍" })),
+            ]}
+          />
+          {(categoriaFiltro === "lead" || categoriaFiltro === "todos") && (
+            <Select
+              compact
+              value={etapaFiltro}
+              onChange={setEtapaFiltro}
+              options={ETAPAS_OPCOES.map((ep) => ({
+                ...ep,
+                label:
+                  ep.value !== "todas" && totais.leadsPorEtapa?.[ep.value]
+                    ? `${ep.label} (${totais.leadsPorEtapa[ep.value]})`
+                    : ep.label,
+              }))}
+            />
+          )}
           {busca && (
             <button className="btn ghost sm" onClick={() => setBusca("")}>
               Limpar busca
             </button>
           )}
-
-          <span className="count" style={{ marginLeft: "auto" }}>
-            {listaFiltrada.length} contato(s) listado(s)
+          <span className="count">
+            {listaFiltrada.length} de {listaBase.length}
           </span>
         </div>
 
