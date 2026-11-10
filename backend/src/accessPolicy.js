@@ -46,6 +46,7 @@ export function requirement(method, path) {
   if (path.startsWith("/api/admin/") || path.startsWith("/api/undo")) return [["admin", 2]];
   if (path === "/api/data-audit" || /^\/api\/clients\/\d+\/audit$/.test(path)) return method === "GET" ? [["financeiro", 1]] : [["admin", 2]];
   if (/^\/api\/(invoices|mensalidades|pix-alertas|sicredi)(\/|$)/.test(path) || /^\/api\/bookings\/\d+\/(pay|invoice)$/.test(path) || /^\/api\/clients\/\d+\/(invoice|mensalidade-valor|matricula\/refund)$/.test(path)) return [["financeiro", level]];
+  if (path.startsWith("/api/relatorios/alunos-leads")) return [["alunos", 1]];
   if (path.startsWith("/api/relatorios/")) return [["relatorios", 1]];
   if (path.startsWith("/api/wa/")) return [["whatsapp", level]];
   if (path.startsWith("/api/funil")) return [["funil", level]];
@@ -58,6 +59,9 @@ export function requirement(method, path) {
 }
 export function allowed(user, method, path) {
   if (user.role === "admin" && user.active !== false) return true;
+  if (path.startsWith("/api/relatorios/alunos-leads")) {
+    return can(user, "relatorios") || can(user, "alunos") || can(user, "funil");
+  }
   return requirement(method, path).every(([module, level]) => module !== "admin" && can(user, module, level));
 }
 

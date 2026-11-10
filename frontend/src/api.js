@@ -278,6 +278,29 @@ export const api = {
   // Financeiro › Vendas: o que entrou no período, linha a linha (a tela soma por unidade)
   relatorioVendas: (de, ate) => req("GET", `/api/relatorios/vendas?de=${de}&ate=${ate}`),
 
+  // Relatório geral: alunos ativos, ex-alunos e leads em todas as etapas (dados e extração Excel)
+  relatorioAlunosLeads: () => req("GET", "/api/relatorios/alunos-leads"),
+  downloadAlunosLeadsExcel: async () => {
+    const res = await fetch("/api/relatorios/alunos-leads/excel", {
+      headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {},
+    });
+    if (!res.ok) {
+      let msg = "Erro ao baixar relatório em Excel.";
+      try { msg = (await res.json()).error || msg; } catch {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const hoje = new Date().toISOString().slice(0, 10);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `fios-relatorio-alunos-e-leads-${hoje}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+
   availableSlots: (unit) => req("GET", `/api/slots/available${unit ? `?unit=${encodeURIComponent(unit)}` : ""}`),
 
   resetPin: (clientId) => req("DELETE", `/api/clients/${clientId}/pin`),

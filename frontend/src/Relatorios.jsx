@@ -3,10 +3,12 @@ import { useStore } from "./store.jsx";
 import { useModal } from "./ui.jsx";
 import { api } from "./api.js";
 import { ClientProfile, SlotDetail } from "./modals.jsx";
-import { exportCsv } from "./exports.js";
+import { exportCsv, exportAlunosLeadsCsv } from "./exports.js";
+import { toast } from "./toast.jsx";
+import { WaIcon } from "./icons.jsx";
 import {
   todayISO, addDays, weekStart, fmtDate, fmtDateLong, money, capitalize, hhmm, unitColor,
-  slotCapacity, slotWaitlist, contemBusca, bookingKindDe, dowMon, WEEKDAYS_PT, WEEKDAYS_SHORT, classifyClient,
+  slotCapacity, slotWaitlist, contemBusca, bookingKindDe, dowMon, WEEKDAYS_PT, WEEKDAYS_SHORT, classifyClient, waLink,
 } from "./helpers.js";
 
 /* ============================================================
@@ -1102,6 +1104,406 @@ export function RelatorioPresentes() {
           )}
         </div>
       )}
+    </>
+  );
+}
+
+/* ============================= ALUNOS E LEADS ============================= */
+export function RelatorioAlunosLeads() {
+  const { data } = useStore();
+  const { open } = useModal();
+  const [dados, setDados] = useState(null);
+  const [carregando, setCarregando] = useState(true);
+  const [baixandoExcel, setBaixandoExcel] = useState(false);
+  const [erro, setErro] = useState("");
+
+  const [categoriaFiltro, setCategoriaFiltro] = useState("todos"); // todos | ativo | ex-aluno | lead
+  const [etapaFiltro, setEtapaFiltro] = useState("todas");
+  const [unidadeFiltro, setUnidadeFiltro] = useState("Todas");
+  const [busca, setBusca] = useState("");
+
+  const carregar = async () => {
+    setCarregando(true);
+    setErro("");
+    try {
+      const res = await api.relatorioAlunosLeads();
+      setDados(res);
+    } catch (e) {
+      setErro(e.message || "Erro ao carregar dados do relatório.");
+    } finally {
+      setCarregando(false);
+    }
+  };
+
+  useEffect(() => {
+    carregar();
+  }, []);
+
+  const exportarExcel = async () => {
+    setBaixandoExcel(true);
+    try {
+      await api.downloadAlunosLeadsExcel();
+      toast("Planilha Excel (.xlsx) baixada com sucesso! 📊", "success");
+    } catch (e) {
+      toast("Não foi possível baixar o Excel: " + e.message, "error");
+    } finally {
+      setBaixandoExcel(false);
+    }
+  };
+
+  const totais = dados?.totais || {
+    totalConsolidado: 0,
+    alunosAtivos: 0,
+    exAlunos: 0,
+    leadsTotal: 0,
+    leadsAbertas: 0,
+    leadsMatriculadas: 0,
+    leadsPerdidas: 0,
+    leadsPorEtapa: {},
+  };
+
+  const listaBase = useMemo(() => {
+    if (!dados) return [];
+    if (categoriaFiltro === "ativo") return dados.alunosAtivos || [];
+    if (categoriaFiltro === "ex-aluno") return dados.exAlunos || [];
+    if (categoriaFiltro === "lead") return dados.leadsLista || [];
+    return dados.contatosConsolidados || [];
+  }, [dados, categoriaFiltro]);
+
+  const unidades = useMemo(() => {
+    if (!dados) return [];
+    const setU = new Set();
+    (dados.contatosConsolidados || []).forEach((c) => {
+      if (c.unidade && c.unidade !== "Sem unidade") setU.add(c.unidade);
+    });
+    return Array.from(setU).sort();
+  }, [dados]);
+
+  const listaFiltrada = useMemo(() => {
+    let res = listaBase;
+
+    if (unidadeFiltro !== "Todas") {
+      res = res.filter((x) => x.unidade === unidadeFiltro);
+    }
+
+    if (etapaFiltro !== "todas") {
+      res = res.filter((x) => x.etapa === etapaFiltro);
+    }
+
+    if (busca.trim()) {
+      const b = busca.trim();
+      res = res.filter((x) =>
+        contemBusca(
+          [
+            x.nome,
+            x.telefone,
+            x.telefoneFormatado,
+            x.email,
+            x.cpf,
+            x.unidade,
+            x.plano,
+            x.situacao,
+            x.etapaTexto,
+            x.origem,
+            x.detalhe,
+            x.observacoes,
+          ],
+          b
+        )
+      );
+    }
+
+    return res;
+  }, [listaBase, unidadeFiltro, etapaFiltro, busca]);
+
+  const exportarCsvFiltrado = () => {
+    exportAlunosLeadsCsv(listaFiltrada);
+  };
+
+  const abrirFicha = (clientId, fallbackNome) => {
+    const client = data?.clients?.find((c) => c.id === clientId) || { id: clientId, name: fallbackNome };
+    open(<ClientProfile client={client} />);
+  };
+
+  const CATEGORIAS = [
+    { k: "todos", l: "👥 Todos os Contatos", n: totais.totalConsolidado },
+    { k: "ativo", l: "👩‍🎓 Alunos Ativos", n: totais.alunosAtivos },
+    { k: "ex-aluno", l: "👋 Ex-Alunos", n: totais.exAlunos },
+    { k: "lead", l: "🎯 Leads", n: totais.leadsTotal },
+  ];
+
+  const ETAPAS_OPCOES = [
+    { k: "todas", l: "Todas as etapas" },
+    { k: "contato", l: "💬 Primeiro contato" },
+    { k: "cadastro", l: "📝 Cadastro feito" },
+    { k: "marcada", l: "🗓️ 1ª aula marcada" },
+    { k: "aula", l: "🧶 Depois da aula avulsa" },
+    { k: "matriculada", l: "🎓 Matriculada" },
+    { k: "perdida", l: "✖ Perdida" },
+  ];
+
+  return (
+    <>
+      <div className="panel">
+        <div className="panel-h" style={{ flexWrap: "wrap", gap: ".8rem" }}>
+          <div>
+            <h2>📋 Relatório de Alunos e Leads</h2>
+            <div className="muted-note" style={{ marginTop: ".2rem" }}>
+              Relação completa de todos os alunos ativos, ex-alunos e leads em todas as etapas do funil, com nomes e telefones para extração.
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: ".5rem", flexWrap: "wrap", alignItems: "center" }}>
+            <button
+              className="btn sec"
+              onClick={exportarExcel}
+              disabled={carregando || baixandoExcel}
+              title="Baixar planilha Excel (.xlsx) com abas: Visão Geral, Alunos Ativos, Ex-Alunos e Leads"
+            >
+              {baixandoExcel ? "⏳ Gerando Excel…" : "📊 ⬇ Extrair Excel (.xlsx)"}
+            </button>
+            <button
+              className="btn ghost sm"
+              onClick={exportarCsvFiltrado}
+              disabled={carregando || !listaFiltrada.length}
+              title="Baixar CSV compatível com Excel dos dados visíveis no filtro atual"
+            >
+              ⬇ Exportar CSV
+            </button>
+            <button
+              className="btn ghost sm"
+              onClick={carregar}
+              disabled={carregando}
+              title="Atualizar dados"
+            >
+              🔄
+            </button>
+          </div>
+        </div>
+
+        <div className="seg-hint" style={{ marginTop: ".5rem" }}>
+          💡 <b>Extração completa em Excel:</b> O arquivo <code>.xlsx</code> gerado possui 4 planilhas separadas: <b>Visão Geral (Todos)</b>, <b>Alunos Ativos</b>, <b>Ex-Alunos</b> e <b>Leads (Todas as Etapas)</b> com filtros automáticos e contatos formatados.
+        </div>
+
+        {/* Cartões de Indicadores */}
+        <div className="grid stats" style={{ marginTop: "1rem" }}>
+          <div
+            className={`card stat click ${categoriaFiltro === "todos" ? "active-chip" : ""}`}
+            onClick={() => setCategoriaFiltro("todos")}
+            title="Ver todos os contatos consolidados"
+          >
+            <div className="lbl">👥 Total de Contatos</div>
+            <div className="val">{totais.totalConsolidado}</div>
+            <div className="foot">contatos únicos no sistema</div>
+          </div>
+          <div
+            className={`card stat click ${categoriaFiltro === "ativo" ? "active-chip" : ""}`}
+            onClick={() => setCategoriaFiltro("ativo")}
+            title="Ver somente alunos ativos"
+          >
+            <div className="lbl">👩‍🎓 Alunos Ativos</div>
+            <div className="val terra">{totais.alunosAtivos}</div>
+            <div className="foot">mensalistas matriculadas</div>
+          </div>
+          <div
+            className={`card stat click ${categoriaFiltro === "ex-aluno" ? "active-chip" : ""}`}
+            onClick={() => setCategoriaFiltro("ex-aluno")}
+            title="Ver somente ex-alunos"
+          >
+            <div className="lbl">👋 Ex-Alunos</div>
+            <div className="val warn">{totais.exAlunos}</div>
+            <div className="foot">cadastros inativados / cancelados</div>
+          </div>
+          <div
+            className={`card stat click ${categoriaFiltro === "lead" ? "active-chip" : ""}`}
+            onClick={() => setCategoriaFiltro("lead")}
+            title="Ver leads do funil"
+          >
+            <div className="lbl">🎯 Leads no Funil</div>
+            <div className="val">{totais.leadsTotal}</div>
+            <div className="foot">
+              {totais.leadsAbertas} em aberto · {totais.leadsMatriculadas} matrículas · {totais.leadsPerdidas} perdidas
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Painel da Tabela e Filtros */}
+      <div className="panel">
+        {/* Abas de Categorias */}
+        <div className="ag-views" style={{ marginBottom: "1rem" }}>
+          {CATEGORIAS.map((c) => (
+            <button
+              key={c.k}
+              className={categoriaFiltro === c.k ? "on" : ""}
+              onClick={() => {
+                setCategoriaFiltro(c.k);
+                if (c.k === "ativo" || c.k === "ex-aluno") setEtapaFiltro("todas");
+              }}
+            >
+              {c.l} ({c.n})
+            </button>
+          ))}
+        </div>
+
+        {/* Filtros: Unidade, Etapa, Busca */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: ".8rem", alignItems: "center", marginBottom: "1rem" }}>
+          <FiltroUnidade unidades={unidades} unit={unidadeFiltro} setUnit={setUnidadeFiltro} />
+
+          {(categoriaFiltro === "lead" || categoriaFiltro === "todos") && (
+            <div style={{ display: "flex", alignItems: "center", gap: ".3rem" }}>
+              <span style={{ fontSize: ".76rem", color: "var(--muted)", fontWeight: 700 }}>Etapa:</span>
+              <select
+                value={etapaFiltro}
+                onChange={(e) => setEtapaFiltro(e.target.value)}
+                style={{ padding: ".3rem .5rem", fontSize: ".85rem", borderRadius: "6px" }}
+              >
+                {ETAPAS_OPCOES.map((ep) => (
+                  <option key={ep.k} value={ep.k}>
+                    {ep.l} {ep.k !== "todas" && totais.leadsPorEtapa?.[ep.k] ? `(${totais.leadsPorEtapa[ep.k]})` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <input
+            className="grow"
+            placeholder="🔍 Buscar por nome, telefone, e-mail, CPF, unidade..."
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            style={{ minWidth: 220 }}
+          />
+          {busca && (
+            <button className="btn ghost sm" onClick={() => setBusca("")}>
+              Limpar busca
+            </button>
+          )}
+
+          <span className="count" style={{ marginLeft: "auto" }}>
+            {listaFiltrada.length} contato(s) listado(s)
+          </span>
+        </div>
+
+        {carregando ? (
+          <div className="empty" style={{ padding: "3rem" }}>
+            <div className="ic">⏳</div>
+            <p>Carregando dados dos alunos e leads…</p>
+          </div>
+        ) : erro ? (
+          <div className="empty" style={{ padding: "3rem" }}>
+            <div className="ic">⚠️</div>
+            <p style={{ color: "var(--danger)" }}>{erro}</p>
+            <button className="btn sm" onClick={carregar}>Tentar novamente</button>
+          </div>
+        ) : listaFiltrada.length > 0 ? (
+          <div style={{ overflowX: "auto" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Nome</th>
+                  <th>Telefone / Contato</th>
+                  <th>Categoria</th>
+                  <th>Situação / Etapa</th>
+                  <th>Unidade</th>
+                  <th>Origem / Canal</th>
+                  <th>Entrada</th>
+                  <th>Detalhes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {listaFiltrada.map((item) => {
+                  const ehAtivo = item.tipo === "ativo" || item.categoria === "Aluno Ativo";
+                  const ehEx = item.tipo === "ex-aluno" || item.categoria === "Ex-Aluno";
+                  const ehLead = item.tipo === "lead" || item.categoria === "Lead";
+
+                  const badgeCategoria = ehAtivo ? "b-success" : ehEx ? "b-muted" : "b-terra";
+
+                  const wppNumero = (item.telefone || "").replace(/\D/g, "");
+                  const linkWa = wppNumero ? waLink(wppNumero) : null;
+
+                  return (
+                    <tr key={item.id}>
+                      <td className="cli-name c-main">
+                        {item.clientId ? (
+                          <span
+                            className="row-click"
+                            onClick={() => abrirFicha(item.clientId, item.nome)}
+                            title="Clique para abrir a ficha completa"
+                          >
+                            {item.nome}
+                          </span>
+                        ) : (
+                          item.nome
+                        )}
+                        {item.email && <div className="cli-sub">✉️ {item.email}</div>}
+                        {item.cpf && <div className="cli-sub">CPF: {item.cpf}</div>}
+                      </td>
+
+                      <td data-l="Telefone">
+                        <div style={{ display: "flex", alignItems: "center", gap: ".4rem" }}>
+                          <span style={{ fontWeight: 600 }}>{item.telefoneFormatado || item.telefone || "—"}</span>
+                          {linkWa && (
+                            <a
+                              href={linkWa}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="wa-btn-sm"
+                              title="Abrir no WhatsApp"
+                              style={{ display: "inline-flex", alignItems: "center", color: "#25D366" }}
+                            >
+                              <WaIcon />
+                            </a>
+                          )}
+                        </div>
+                        {item.proximoContato && (
+                          <div className="cli-sub" style={{ color: "var(--warn)" }}>
+                            ⏰ Retorno: {fmtDate(item.proximoContato)}
+                          </div>
+                        )}
+                      </td>
+
+                      <td data-l="Categoria">
+                        <span className={`badge ${badgeCategoria}`}>
+                          {ehAtivo ? "👩‍🎓 Aluno Ativo" : ehEx ? "👋 Ex-Aluno" : "🎯 Lead"}
+                        </span>
+                      </td>
+
+                      <td data-l="Situação">
+                        <div style={{ fontWeight: 600 }}>{item.situacao || item.etapaTexto || "—"}</div>
+                        {item.plano && <div className="cli-sub">{item.plano}</div>}
+                      </td>
+
+                      <td data-l="Unidade">
+                        <span style={{ color: unitColor(item.unidade), fontWeight: 600 }}>
+                          {item.unidade || "Sem unidade"}
+                        </span>
+                      </td>
+
+                      <td data-l="Origem">
+                        <div>{item.origem || item.canal || "—"}</div>
+                        {item.origemDetalhe && <div className="cli-sub">{item.origemDetalhe}</div>}
+                      </td>
+
+                      <td data-l="Entrada">
+                        {item.dataEntrada ? fmtDate(item.dataEntrada) : "—"}
+                      </td>
+
+                      <td data-l="Detalhes" className="cli-sub" style={{ maxWidth: 260 }}>
+                        {item.detalhe || item.observacoes || (item.motivoPerda ? `Motivo: ${item.motivoPerda}` : "—")}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty" style={{ padding: "3rem" }}>
+            <div className="ic">🔍</div>
+            <p>Nenhum aluno ou lead encontrado para os filtros selecionados.</p>
+          </div>
+        )}
+      </div>
     </>
   );
 }

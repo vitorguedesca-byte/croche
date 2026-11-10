@@ -8,6 +8,7 @@ import { waWebhookJson } from "./waWebhookAuth.js";
 import cors from "cors";
 import crypto from "crypto";
 import multer from "multer";
+import XLSX from "xlsx";
 import { fileURLToPath } from "url";
 import { dirname, join, extname } from "path";
 import { mkdirSync } from "fs";
@@ -4816,6 +4817,454 @@ app.get("/api/relatorios/vendas", wrap(async (req, res) => {
 
   itens.sort((a, b) => b.data.localeCompare(a.data) || a.aluna.localeCompare(b.aluna));
   res.json({ de, ate, itens, devolvidas });
+}));
+
+/* ============================================================
+   Relatório Geral: Alunos Ativos, Ex-Alunos e Leads (Todas as Etapas)
+   Extração para Excel (.xlsx) e consulta em tela
+   ============================================================ */
+
+async function carregarDadosAlunosLeads() {
+  await sincronizarFunilSePreciso(60_000).catch((e) => console.warn("[relatorio/alunos-leads] sync:", e.message));
+
+  const [clients, leads] = await Promise.all([
+    prisma.client.findMany({
+      orderBy: { name: "asc" },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        email: true,
+        cpf: true,
+        unit: true,
+        status: true,
+        plan: true,
+        weeklyFreq: true,
+        mensalistaTipo: true,
+        billingDay: true,
+        matriculaStatus: true,
+        matriculaAt: true,
+        matriculaPainelAt: true,
+        trialDate: true,
+        firstClass: true,
+        origem: true,
+        notes: true,
+        createdAt: true,
+      },
+    }),
+    prisma.lead.findMany({
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        nome: true,
+        phone: true,
+        phoneKey: true,
+        unit: true,
+        clientId: true,
+        canal: true,
+        origem: true,
+        origemDetalhe: true,
+        etapa: true,
+        etapaDesde: true,
+        detalhe: true,
+        marcouAt: true,
+        pagouAt: true,
+        ganhaAt: true,
+        proximoContato: true,
+        perdidaAt: true,
+        motivoPerda: true,
+        createdAt: true,
+      },
+    }),
+  ]);
+
+  const leadPorFichaId = new Map();
+  const leadPorChaveTel = new Map();
+  for (const l of leads) {
+    if (l.clientId) leadPorFichaId.set(l.clientId, l);
+    if (l.phoneKey && !leadPorChaveTel.has(l.phoneKey)) leadPorChaveTel.set(l.phoneKey, l);
+  }
+
+  const clientPorId = new Map(clients.map((c) => [c.id, c]));
+  const clientPorChaveTel = new Map();
+  for (const c of clients) {
+    const k = chaveTelefone(c.phone);
+    if (k && !clientPorChaveTel.has(k)) clientPorChaveTel.set(k, c);
+  }
+
+  const ETAPA_TEXTO_BR = {
+    contato: "Primeiro contato",
+    cadastro: "Cadastro feito",
+    marcada: "1ª aula marcada",
+    aula: "Depois da aula avulsa",
+    matriculada: "Matriculada",
+    perdida: "Perdida",
+  };
+
+  const CANAL_TEXTO_BR = {
+    whatsapp: "WhatsApp",
+    site: "Site",
+    escola: "Escola (Painel)",
+  };
+
+  const ORIGEM_TEXTO_BR = {
+    anuncio: "Anúncio",
+    redes: "Instagram / Facebook",
+    indicacao: "Indicação",
+    google: "Busca no Google",
+    porta: "Passou na escola",
+    evento: "Evento / feira",
+    outro: "Outro",
+  };
+
+  const MOTIVOS_PERDA_BR = {
+    preco: "Achou caro",
+    horario: "Horário não serve",
+    distancia: "Longe / mudou de cidade",
+    sem_tempo: "Sem tempo agora",
+    sem_resposta: "Parou de responder",
+    outra_escola: "Foi para outra escola",
+    nao_lead: "Não era lead (engano/spam)",
+    outro: "Outro motivo",
+  };
+
+  const alunosAtivos = [];
+  const exAlunos = [];
+
+  for (const c of clients) {
+    const matchingLead = leadPorFichaId.get(c.id) || (c.phone ? leadPorChaveTel.get(chaveTelefone(c.phone)) : null);
+    const telFormatado = telefoneBR(c.phone);
+    const dataCriacao = diaBR(c.createdAt) || String(c.createdAt || "").slice(0, 10);
+    const dataMatricula = c.matriculaAt || c.matriculaPainelAt || (matchingLead?.ganhaAt) || dataCriacao;
+    const ehCancelado = c.status === "cancelado" || c.status === "inativo";
+    const ehLeadNaTabelaClient = c.status === "lead";
+
+    if (ehCancelado) {
+      exAlunos.push({
+        id: `c_${c.id}`,
+        tipo: "ex-aluno",
+        categoria: "Ex-Aluno",
+        nome: c.name,
+        telefone: c.phone || "",
+        telefoneFormatado: telFormatado,
+        unidade: c.unit || "Sem unidade",
+        situacao: "Inativo / Cancelado",
+        etapa: matchingLead?.etapa || "ex-aluno",
+        etapaTexto: matchingLead ? (ETAPA_TEXTO_BR[matchingLead.etapa] || matchingLead.etapa) : "Ex-aluna",
+        plano: c.plan === "mensalista" ? `Ex-mensalista (${c.weeklyFreq || 1}x/sem)` : (c.plan || "Avulso"),
+        email: c.email || "",
+        cpf: c.cpf || "",
+        origem: (matchingLead?.origem && ORIGEM_TEXTO_BR[matchingLead.origem]) || c.origem || "",
+        origemDetalhe: matchingLead?.origemDetalhe || "",
+        canal: (matchingLead?.canal && CANAL_TEXTO_BR[matchingLead.canal]) || c.origem || "",
+        detalhe: c.notes || matchingLead?.detalhe || "",
+        observacoes: c.notes || "",
+        dataEntrada: dataCriacao,
+        proximoContato: matchingLead?.proximoContato || "",
+        clientId: c.id,
+        leadId: matchingLead?.id || null,
+      });
+    } else if (!ehLeadNaTabelaClient) {
+      alunosAtivos.push({
+        id: `c_${c.id}`,
+        tipo: "ativo",
+        categoria: "Aluno Ativo",
+        nome: c.name,
+        telefone: c.phone || "",
+        telefoneFormatado: telFormatado,
+        unidade: c.unit || "Sem unidade",
+        situacao: "Ativo",
+        etapa: matchingLead?.etapa || "matriculada",
+        etapaTexto: matchingLead ? (ETAPA_TEXTO_BR[matchingLead.etapa] || matchingLead.etapa) : "Matriculada",
+        plano: c.plan === "mensalista" ? `Mensalista (${c.weeklyFreq || 1}x/sem · ${c.mensalistaTipo === "escala" ? "escala" : "fixo"})` : (c.plan || "Avulso"),
+        planoNome: c.plan === "mensalista" ? "Mensalista" : (c.plan || "Avulso"),
+        frequencia: c.weeklyFreq ? `${c.weeklyFreq}x por semana` : "",
+        tipoOcupacao: c.mensalistaTipo === "escala" ? "Escala" : "Fixo",
+        diaVencimento: c.billingDay || "",
+        email: c.email || "",
+        cpf: c.cpf || "",
+        origem: (matchingLead?.origem && ORIGEM_TEXTO_BR[matchingLead.origem]) || c.origem || "",
+        origemDetalhe: matchingLead?.origemDetalhe || "",
+        canal: (matchingLead?.canal && CANAL_TEXTO_BR[matchingLead.canal]) || c.origem || "",
+        detalhe: matchingLead?.detalhe || (c.weeklyFreq ? `${c.weeklyFreq}x/sem` : ""),
+        observacoes: c.notes || "",
+        dataEntrada: dataCriacao,
+        dataMatricula: dataMatricula,
+        proximoContato: matchingLead?.proximoContato || "",
+        clientId: c.id,
+        leadId: matchingLead?.id || null,
+      });
+    }
+  }
+
+  const leadsLista = [];
+  for (const l of leads) {
+    const matchingClient = l.clientId ? clientPorId.get(l.clientId) : (l.phoneKey ? clientPorChaveTel.get(l.phoneKey) : null);
+    const telFormatado = telefoneBR(l.phone || matchingClient?.phone);
+    const dataCriacao = diaBR(l.createdAt) || String(l.createdAt || "").slice(0, 10);
+    const motivoPerdaTexto = l.motivoPerda ? (MOTIVOS_PERDA_BR[l.motivoPerda] || l.motivoPerda) : "";
+    const situacaoTexto = l.etapa === "perdida"
+      ? `Perdida · ${motivoPerdaTexto || "Outro"}`
+      : (ETAPA_TEXTO_BR[l.etapa] || l.etapa);
+
+    leadsLista.push({
+      id: `l_${l.id}`,
+      tipo: "lead",
+      categoria: "Lead",
+      nome: l.nome,
+      telefone: l.phone || matchingClient?.phone || "",
+      telefoneFormatado: telFormatado,
+      unidade: l.unit || matchingClient?.unit || "Sem unidade",
+      etapa: l.etapa,
+      etapaTexto: ETAPA_TEXTO_BR[l.etapa] || l.etapa,
+      situacao: situacaoTexto,
+      motivoPerda: motivoPerdaTexto,
+      canal: CANAL_TEXTO_BR[l.canal] || l.canal || "",
+      origem: ORIGEM_TEXTO_BR[l.origem] || l.origem || "",
+      origemDetalhe: l.origemDetalhe || "",
+      detalhe: l.detalhe || "",
+      observacoes: matchingClient?.notes || "",
+      marcouAt: l.marcouAt || "",
+      pagouAt: l.pagouAt || "",
+      ganhaAt: l.ganhaAt || "",
+      proximoContato: l.proximoContato || "",
+      dataEntrada: dataCriacao,
+      email: matchingClient?.email || "",
+      cpf: matchingClient?.cpf || "",
+      clientId: matchingClient?.id || null,
+      leadId: l.id,
+    });
+  }
+
+  for (const c of clients) {
+    if (c.status === "lead" && !leadPorFichaId.has(c.id)) {
+      const chave = chaveTelefone(c.phone);
+      if (chave && leadPorChaveTel.has(chave)) continue;
+      const telFormatado = telefoneBR(c.phone);
+      const dataCriacao = diaBR(c.createdAt) || String(c.createdAt || "").slice(0, 10);
+      leadsLista.push({
+        id: `c_lead_${c.id}`,
+        tipo: "lead",
+        categoria: "Lead",
+        nome: c.name,
+        telefone: c.phone || "",
+        telefoneFormatado: telFormatado,
+        unidade: c.unit || "Sem unidade",
+        etapa: "cadastro",
+        etapaTexto: "Cadastro feito",
+        situacao: "Cadastro feito",
+        motivoPerda: "",
+        canal: CANAL_TEXTO_BR[c.origem] || c.origem || "Escola (Painel)",
+        origem: ORIGEM_TEXTO_BR[c.origem] || c.origem || "",
+        origemDetalhe: "",
+        detalhe: c.notes || "",
+        observacoes: c.notes || "",
+        marcouAt: "",
+        pagouAt: "",
+        ganhaAt: "",
+        proximoContato: "",
+        dataEntrada: dataCriacao,
+        email: c.email || "",
+        cpf: c.cpf || "",
+        clientId: c.id,
+        leadId: null,
+      });
+    }
+  }
+
+  const contatosConsolidados = [];
+  const chavesAdicionadas = new Set();
+
+  for (const a of alunosAtivos) {
+    const k = a.telefone ? chaveTelefone(a.telefone) : `id_${a.id}`;
+    if (k) chavesAdicionadas.add(k);
+    contatosConsolidados.push(a);
+  }
+
+  for (const e of exAlunos) {
+    const k = e.telefone ? chaveTelefone(e.telefone) : `id_${e.id}`;
+    if (k && !chavesAdicionadas.has(k)) {
+      chavesAdicionadas.add(k);
+      contatosConsolidados.push(e);
+    }
+  }
+
+  for (const l of leadsLista) {
+    const k = l.telefone ? chaveTelefone(l.telefone) : `id_${l.id}`;
+    if (k && !chavesAdicionadas.has(k)) {
+      chavesAdicionadas.add(k);
+      contatosConsolidados.push(l);
+    }
+  }
+
+  const leadsPorEtapa = {
+    contato: 0,
+    cadastro: 0,
+    marcada: 0,
+    aula: 0,
+    matriculada: 0,
+    perdida: 0,
+  };
+  for (const l of leadsLista) {
+    if (leadsPorEtapa[l.etapa] !== undefined) leadsPorEtapa[l.etapa]++;
+  }
+
+  const totais = {
+    totalConsolidado: contatosConsolidados.length,
+    alunosAtivos: alunosAtivos.length,
+    exAlunos: exAlunos.length,
+    leadsTotal: leadsLista.length,
+    leadsAbertas: (leadsPorEtapa.contato || 0) + (leadsPorEtapa.cadastro || 0) + (leadsPorEtapa.marcada || 0) + (leadsPorEtapa.aula || 0),
+    leadsMatriculadas: leadsPorEtapa.matriculada || 0,
+    leadsPerdidas: leadsPorEtapa.perdida || 0,
+    leadsPorEtapa,
+  };
+
+  return {
+    totais,
+    contatosConsolidados,
+    alunosAtivos,
+    exAlunos,
+    leadsLista,
+  };
+}
+
+function gerarExcelAlunosLeads({ contatosConsolidados, alunosAtivos, exAlunos, leadsLista }) {
+  const wb = XLSX.utils.book_new();
+
+  // 1. Aba: Visão Geral (Todos)
+  const headGeral = [
+    "Categoria", "Nome", "Telefone", "Unidade", "Situação / Etapa",
+    "Plano / Frequência", "Canal", "Origem Marketing", "E-mail",
+    "Data Entrada", "Próximo Retorno", "Detalhes / Observações"
+  ];
+  const rowsGeral = contatosConsolidados.map((r) => [
+    r.categoria || "",
+    r.nome || "",
+    r.telefoneFormatado || r.telefone || "",
+    r.unidade || "",
+    r.situacao || r.etapaTexto || "",
+    r.plano || "",
+    r.canal || "",
+    r.origem || "",
+    r.email || "",
+    r.dataEntrada || "",
+    r.proximoContato || "",
+    r.detalhe || r.observacoes || "",
+  ]);
+  const wsGeral = XLSX.utils.aoa_to_sheet([headGeral, ...rowsGeral]);
+  wsGeral["!cols"] = [
+    { wch: 16 }, { wch: 32 }, { wch: 18 }, { wch: 18 }, { wch: 26 },
+    { wch: 28 }, { wch: 16 }, { wch: 22 }, { wch: 26 }, { wch: 14 },
+    { wch: 16 }, { wch: 40 },
+  ];
+  if (rowsGeral.length > 0) {
+    wsGeral["!autofilter"] = { ref: `A1:L${rowsGeral.length + 1}` };
+  }
+  XLSX.utils.book_append_sheet(wb, wsGeral, "Visão Geral (Todos)");
+
+  // 2. Aba: Alunos Ativos
+  const headAtivos = [
+    "Nome", "Telefone", "Unidade", "Plano", "Aulas / Semana",
+    "Tipo de Ocupação", "Dia Vencimento", "E-mail", "CPF", "Data Matrícula", "Observações"
+  ];
+  const rowsAtivos = alunosAtivos.map((r) => [
+    r.nome || "",
+    r.telefoneFormatado || r.telefone || "",
+    r.unidade || "",
+    r.planoNome || "",
+    r.frequencia || "",
+    r.tipoOcupacao || "",
+    r.diaVencimento || "",
+    r.email || "",
+    r.cpf || "",
+    r.dataMatricula || r.dataEntrada || "",
+    r.observacoes || "",
+  ]);
+  const wsAtivos = XLSX.utils.aoa_to_sheet([headAtivos, ...rowsAtivos]);
+  wsAtivos["!cols"] = [
+    { wch: 32 }, { wch: 18 }, { wch: 18 }, { wch: 16 }, { wch: 18 },
+    { wch: 20 }, { wch: 16 }, { wch: 26 }, { wch: 16 }, { wch: 16 },
+    { wch: 40 },
+  ];
+  if (rowsAtivos.length > 0) {
+    wsAtivos["!autofilter"] = { ref: `A1:K${rowsAtivos.length + 1}` };
+  }
+  XLSX.utils.book_append_sheet(wb, wsAtivos, "Alunos Ativos");
+
+  // 3. Aba: Ex-Alunos
+  const headEx = [
+    "Nome", "Telefone", "Unidade", "Situação", "Último Plano", "E-mail", "CPF", "Data Entrada", "Observações"
+  ];
+  const rowsEx = exAlunos.map((r) => [
+    r.nome || "",
+    r.telefoneFormatado || r.telefone || "",
+    r.unidade || "",
+    r.situacao || "",
+    r.plano || "",
+    r.email || "",
+    r.cpf || "",
+    r.dataEntrada || "",
+    r.observacoes || "",
+  ]);
+  const wsEx = XLSX.utils.aoa_to_sheet([headEx, ...rowsEx]);
+  wsEx["!cols"] = [
+    { wch: 32 }, { wch: 18 }, { wch: 18 }, { wch: 20 }, { wch: 18 },
+    { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 40 },
+  ];
+  if (rowsEx.length > 0) {
+    wsEx["!autofilter"] = { ref: `A1:I${rowsEx.length + 1}` };
+  }
+  XLSX.utils.book_append_sheet(wb, wsEx, "Ex-Alunos");
+
+  // 4. Aba: Leads (Todas as Etapas)
+  const headLeads = [
+    "Nome", "Telefone", "Unidade", "Etapa Atual", "Situação / Motivo Perda",
+    "Canal", "Origem Marketing", "Detalhe da Origem", "Detalhes",
+    "1ª Aula Marcada", "Pagou 1ª Aula", "Matriculou em", "Próximo Retorno", "Data de Entrada"
+  ];
+  const rowsLeads = leadsLista.map((r) => [
+    r.nome || "",
+    r.telefoneFormatado || r.telefone || "",
+    r.unidade || "",
+    r.etapaTexto || "",
+    r.situacao || "",
+    r.canal || "",
+    r.origem || "",
+    r.origemDetalhe || "",
+    r.detalhe || "",
+    r.marcouAt || "",
+    r.pagouAt || "",
+    r.ganhaAt || "",
+    r.proximoContato || "",
+    r.dataEntrada || "",
+  ]);
+  const wsLeads = XLSX.utils.aoa_to_sheet([headLeads, ...rowsLeads]);
+  wsLeads["!cols"] = [
+    { wch: 30 }, { wch: 18 }, { wch: 18 }, { wch: 24 }, { wch: 28 },
+    { wch: 16 }, { wch: 22 }, { wch: 22 }, { wch: 32 }, { wch: 16 },
+    { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 },
+  ];
+  if (rowsLeads.length > 0) {
+    wsLeads["!autofilter"] = { ref: `A1:N${rowsLeads.length + 1}` };
+  }
+  XLSX.utils.book_append_sheet(wb, wsLeads, "Leads (Todas as Etapas)");
+
+  return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+}
+
+app.get("/api/relatorios/alunos-leads", wrap(async (_req, res) => {
+  const dados = await carregarDadosAlunosLeads();
+  res.json(dados);
+}));
+
+app.get("/api/relatorios/alunos-leads/excel", wrap(async (_req, res) => {
+  const dados = await carregarDadosAlunosLeads();
+  const buffer = gerarExcelAlunosLeads(dados);
+  const hoje = todayISO();
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="fios-relatorio-alunos-e-leads-${hoje}.xlsx"`);
+  res.send(buffer);
 }));
 
 /* Automático: uma vez por dia, gera as mensalidades de quem está a

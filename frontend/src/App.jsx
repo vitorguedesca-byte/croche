@@ -6,7 +6,7 @@ import AdminLogin from "./AdminLogin.jsx";
 import { useStore } from "./store.jsx";
 import { useModal } from "./ui.jsx";
 import { Dashboard, Agenda, Marcacoes, Clientes, Financeiro, Depoimentos, Aniversariantes } from "./views.jsx";
-import { RelatorioVendas, RelatorioVagas, RelatorioPresentes } from "./Relatorios.jsx";
+import { RelatorioVendas, RelatorioVagas, RelatorioPresentes, RelatorioAlunosLeads } from "./Relatorios.jsx";
 import { SlotForm, BookingForm, ClientForm } from "./modals.jsx";
 import ClienteApp from "./ClienteApp.jsx";
 import Config from "./Config.jsx";
@@ -45,6 +45,7 @@ const NAV = [
   { sep: "Relacionamento" },
   { view: "clientes", ic: "👩", label: "Alunos" },
   { view: "funil", ic: "🎯", label: "Funil de leads" },
+  { view: "rel-contatos", ic: "📋", label: "Relatório de Alunos e Leads" },
   { view: "aniversariantes", ic: "🎂", label: "Aniversariantes" },
   { view: "disparo", ic: "📣", label: "Disparo WhatsApp" },
   { sep: "Financeiro" },
@@ -65,6 +66,7 @@ const TITLES = {
   marcacoes:    ["Marcações",     "Novos e alunas com acesso — confirmações e remarcações"],
   clientes:     ["Alunos",        "Alunos, leads e novatos — CRM e contato direto"],
   funil:        ["Funil de leads", "Do primeiro contato até a matrícula — com quem falar e de onde vêm as alunas"],
+  "rel-contatos": ["Relatório de Alunos e Leads", "Alunos ativos, ex-alunos e leads em todas as etapas — com extração em Excel"],
   aniversariantes: ["Aniversariantes", "Quem faz aniversário na semana e no mês"],
   disparo:      ["Disparo WhatsApp", "Mensagem para várias alunas de uma vez, pelo WhatsApp oficial"],
   financeiro:   ["Financeiro",    "Mensalidades, cobranças e fluxo de caixa"],
@@ -194,6 +196,7 @@ export default function App() {
     "rel-vendas": RelatorioVendas,
     "rel-vagas": RelatorioVagas,
     "rel-presentes": RelatorioPresentes,
+    "rel-contatos": RelatorioAlunosLeads,
     campanhas: Campanhas,
     depoimentos: Depoimentos,
     config: Config,
@@ -216,6 +219,11 @@ export default function App() {
         <div className="side-foot">
           {instrutora ? "Acesso de consulta · somente leitura" : "Backend MySQL + Prisma · React"}
           {getSession()?.role === "admin" && <button onClick={() => setMode("cliente")}>👁 Ver como aluno</button>}
+          {(canAccess("relatorios") || canAccess("alunos") || canAccess("funil")) && (
+            <button onClick={() => api.relatorios.downloadAlunosLeadsExcel()} title="Baixar planilha Excel (.xlsx) com alunos ativos, ex-alunos e leads">
+              📊 ⬇ Exportar Alunos e Leads (Excel)
+            </button>
+          )}
           {canAccess("relatorios") && <button onClick={() => exportBookingsCsv(data)}>⬇ Exportar marcações (CSV)</button>}
           <button onClick={async () => { try { await api.admin.logout(); } catch {} setToken(null); window.location.reload(); }}>🚪 Sair</button>
         </div>
@@ -230,7 +238,7 @@ export default function App() {
           <div className="topbar-right">{canEditView(currentView) && actions[currentView]}{getSession()?.role === "admin" && <Notifications go={go} />}</div>
         </div>
         <div className="content">
-          {somenteLeitura && currentView && !["dashboard", "rel-vendas", "rel-vagas", "rel-presentes"].includes(currentView) && <p className="access-readonly-banner">Seu perfil permite somente consulta neste módulo.</p>}
+          {somenteLeitura && currentView && !["dashboard", "rel-vendas", "rel-vagas", "rel-presentes", "rel-contatos"].includes(currentView) && <p className="access-readonly-banner">Seu perfil permite somente consulta neste módulo.</p>}
           {Body ? <fieldset className="access-fieldset" disabled={currentView === "config" && somenteLeitura}><Body key={currentView} go={go} params={viewParams} somenteLeitura={somenteLeitura} /></fieldset> : <p>Nenhum módulo liberado. Solicite a revisão do seu perfil à Admin.</p>}
         </div>
       </div>

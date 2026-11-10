@@ -795,6 +795,14 @@ export function Clientes({ params, go }) {
             { value: "aulas", label: "Ordenar: Mais aulas no mês", icon: "📈" },
           ]}
         />
+        <button
+          className="btn sec sm"
+          type="button"
+          onClick={() => api.relatorios.downloadAlunosLeadsExcel()}
+          title="Extrair planilha Excel (.xlsx) completa com todos os alunos ativos, ex-alunos e leads em todas as etapas"
+        >
+          📊 ⬇ Extrair Excel
+        </button>
         <span className="count">{list.length} de {groups[tab].length}</span>
       </div>
       {list.length ? (

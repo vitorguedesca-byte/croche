@@ -32,6 +32,26 @@ export function exportClientsCsv(data) {
   download(`fios-alunos-${stamp()}.csv`, "﻿" + csv, "text/csv;charset=utf-8");
 }
 
+export function exportAlunosLeadsCsv(contatos) {
+  const head = ["Categoria", "Nome", "Telefone", "Unidade", "Situação / Etapa", "Plano / Frequência", "Canal", "Origem Marketing", "E-mail", "Data Entrada", "Próximo Retorno", "Detalhes / Observações"];
+  const rows = contatos.map((r) => [
+    r.categoria || "",
+    r.nome || "",
+    r.telefoneFormatado || r.telefone || "",
+    r.unidade || "",
+    r.situacao || r.etapaTexto || "",
+    r.plano || "",
+    r.canal || "",
+    r.origem || "",
+    r.email || "",
+    r.dataEntrada || "",
+    r.proximoContato || "",
+    r.detalhe || r.observacoes || "",
+  ]);
+  const csv = [head, ...rows].map((r) => r.map(cell).join(";")).join("\n");
+  download(`fios-alunos-e-leads-${stamp()}.csv`, "﻿" + csv, "text/csv;charset=utf-8");
+}
+
 // CSV genérico dos relatórios do Financeiro (cabeçalho + linhas já prontas)
 export function exportCsv(nome, head, rows) {
   const csv = [head, ...rows].map((r) => r.map(cell).join(";")).join("\n");
