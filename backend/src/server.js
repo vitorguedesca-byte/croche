@@ -1,6 +1,6 @@
 import express from "express";
 import { createAccessControl } from "./accessControl.js";
-import { auditRequestContext, createDataAuditRoutes, DATA_AUDIT_TABLE_SQL } from "./dataAudit.js";
+import { auditRequestContext, createDataAuditRoutes, DATA_AUDIT_TABLE_SQL, withAuditContext } from "./dataAudit.js";
 import { filterState } from "./accessPolicy.js";
 import { createPortalAuth } from "./portalAuth.js";
 import { bookingWhere, ownsPortalBooking } from "./portalBookingScope.js";
@@ -105,8 +105,9 @@ import {
   textoMaterialPrimeiraAula,
   enderecoDaUnidade,
 } from "./textosEscola.js";
-import { sicrediConfigured, sicrediMissing, createCharge, getCharge, cancelCharge, isPaidStatus, extractPix } from "./sicredi.js";
+import { sicrediConfigured, sicrediMissing, createCharge, getCharge, cancelCharge, isPaidStatus, extractPix, listarPixRecebidos } from "./sicredi.js";
 import { txidBooking, txidMensalidade, parseTxid, viasDaMensalidade, destinoDoPixNaMensalidade, reservasComPixAberto } from "./pixRegras.js";
+import { reconciliarMensalidadesPix } from "./conciliacaoPix.js";
 import { enviarEventoMeta, contextoDoNavegador, guardarContexto, contextoGuardado } from "./metaCapi.js";
 import { ehExAluna, ehPagamentoDaVolta, intencaoDaVolta, fichaDaVoltaPaga, SEM_VOLTA } from "./volta.js";
 import {
@@ -3416,10 +3417,14 @@ async function confirmarPagamentoPorTxid(txid) {
       });
       return false;
     }
-    await prisma.invoice.update({
-      where: { id: invoice.id },
-      data: { status: "pago", paidAt: todayISO(), pagoPorTxid: txid },
+    const horarioPix = Date.parse(cob.pix?.[0]?.horario);
+    const paidAt = Number.isFinite(horarioPix) ? diaBR(horarioPix) : todayISO();
+    const { count } = await prisma.invoice.updateMany({
+      where: { id: invoice.id, status: { not: "pago" } },
+      data: { status: "pago", paidAt, pagoPorTxid: txid },
     });
+    // Outra consulta já deu baixa. Reavalia para distinguir repetição de Pix em dobro.
+    if (!count) return confirmarPagamentoPorTxid(txid);
     console.log(`[sicredi] mensalidade confirmada — invoice ${invoice.id}`);
     /* As outras vias desta mensalidade (o QR do lembrete, a reemissão com a
        multa) continuariam pagáveis por até 90 dias — e a aluna que guardou um
@@ -3533,6 +3538,30 @@ app.post(
     res.json({ confirmado });
   })
 );
+
+// A notificação pode chegar antes de GET /cob refletir o pagamento, ou se perder.
+// Revisitar a mesma janela permite recuperar o Pix mesmo após reinício do servidor.
+const JANELA_CONCILIACAO_PIX_MS = 7 * 24 * 60 * 60 * 1000;
+let conciliandoMensalidadesPix = false;
+async function rodadaConciliacaoMensalidadesPix() {
+  if (conciliandoMensalidadesPix || !sicrediConfigured()) return;
+  conciliandoMensalidadesPix = true;
+  try {
+    const fim = new Date();
+    const inicio = new Date(fim.getTime() - JANELA_CONCILIACAO_PIX_MS);
+    const baixadas = await withAuditContext(
+      { actor: "Conciliação automática do Sicredi", source: "sicredi" },
+      () => reconciliarMensalidadesPix(prisma, listarPixRecebidos(inicio, fim), confirmarPagamentoPorTxid),
+    );
+    if (baixadas) console.log(`[sicredi] conciliação recuperou ${baixadas} mensalidade(s).`);
+  } catch (e) {
+    console.warn(`[sicredi] falha na conciliação de mensalidades: ${e.message}`);
+  } finally {
+    conciliandoMensalidadesPix = false;
+  }
+}
+setTimeout(rodadaConciliacaoMensalidadesPix, 45_000);
+setInterval(rodadaConciliacaoMensalidadesPix, 5 * 60_000);
 
 /* ---------- MENSALIDADES (mensalistas) ---------- */
 const competenciaAtual = () => todayISO().slice(0, 7); // 'YYYY-MM'

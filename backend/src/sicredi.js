@@ -59,9 +59,10 @@ function request(method, path, { headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
     const data = body == null ? null : typeof body === "string" ? body : JSON.stringify(body);
     if (data) headers["Content-Length"] = Buffer.byteLength(data);
-    const req = https.request({ host: HOST, path, method, agent: getAgent(), headers }, (res) => {
+    const req = https.request({ host: HOST, path, method, agent: getAgent(), headers, signal: AbortSignal.timeout(15_000) }, (res) => {
       let raw = "";
       res.on("data", (c) => (raw += c));
+      res.on("error", reject);
       res.on("end", () => {
         let parsed = raw;
         try { parsed = JSON.parse(raw); } catch {}
@@ -86,23 +87,24 @@ function request(method, path, { headers = {}, body } = {}) {
 }
 
 // Token de acesso (client_credentials sobre mTLS). Dura ~1h; guardamos em cache.
-let tokenCache = { token: null, exp: 0 };
-export async function getToken() {
-  if (tokenCache.token && Date.now() < tokenCache.exp) return tokenCache.token;
+const tokenCache = new Map();
+export async function getToken(scopes = SCOPES) {
+  const cached = tokenCache.get(scopes);
+  if (cached?.token && Date.now() < cached.exp) return cached.token;
   if (!CLIENT_ID || !CLIENT_SECRET) throw new Error("Sicredi: configure SICREDI_CLIENT_ID e SICREDI_CLIENT_SECRET no .env");
   const basic = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
-  const body = `grant_type=client_credentials&scope=${encodeURIComponent(SCOPES)}`;
+  const body = `grant_type=client_credentials&scope=${encodeURIComponent(scopes)}`;
   const r = await request("POST", "/oauth/token", {
     headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: `Basic ${basic}` },
     body,
   });
   const ttl = Math.max(60, (r.expires_in || 3600) - 60); // renova 1 min antes de expirar
-  tokenCache = { token: r.access_token, exp: Date.now() + ttl * 1000 };
-  return tokenCache.token;
+  tokenCache.set(scopes, { token: r.access_token, exp: Date.now() + ttl * 1000 });
+  return r.access_token;
 }
 
-async function api(method, path, body) {
-  const token = await getToken();
+async function api(method, path, body, scopes = SCOPES) {
+  const token = await getToken(scopes);
   const headers = { Authorization: `Bearer ${token}`, Accept: "application/json" };
   if (body != null) headers["Content-Type"] = "application/json";
   return request(method, `${BASE}${path}`, { headers, body });
@@ -151,6 +153,24 @@ export async function createCharge({ txid, name, cpf, amountCents, dueDate, desc
 // vale como prova de pagamento — nunca o corpo do webhook.
 export async function getCharge(txid) {
   return api("GET", `/cob/${encodeURIComponent(txid)}`);
+}
+
+export async function* listarPixRecebidos(inicio, fim) {
+  const query = new URLSearchParams({
+    inicio: inicio.toISOString(),
+    fim: fim.toISOString(),
+    txIdPresente: "true",
+  });
+  for (let pagina = 0; ; pagina++) {
+    query.set("paginacao.paginaAtual", String(pagina));
+    const resultado = await api("GET", `/pix?${query}`, undefined, "pix.read");
+    const totalPaginas = resultado?.parametros?.paginacao?.quantidadeDePaginas;
+    if (!Array.isArray(resultado?.pix) || !Number.isInteger(totalPaginas) || totalPaginas < 0) {
+      throw new Error("Resposta inesperada ao consultar os Pix recebidos no Sicredi.");
+    }
+    yield resultado.pix;
+    if (pagina + 1 >= totalPaginas) return;
+  }
 }
 
 /* Remove uma cobrança que deixou de valer (baixa manual, mensalidade cancelada,
