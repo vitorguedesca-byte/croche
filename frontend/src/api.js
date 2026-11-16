@@ -163,10 +163,10 @@ export const api = {
   // Tira o aluno de várias aulas futuras da mesma turma. `credito: true` libera
   // a vaga como no portal (gera reposição onde couber); false apaga a aula.
   batchUnbook: (clientId, data) => req("POST", `/api/clients/${clientId}/batch-unbook`, data),
-  getMakeup: (clientId) => req("GET", `/api/clients/${clientId}/makeup`),
+  getMakeup: (clientId, horarios = false) => req("GET", `/api/clients/${clientId}/makeup${horarios ? "?horarios=1" : ""}`),
+  makeupBook: (clientId, slotId) => req("POST", `/api/clients/${clientId}/makeup-book`, { slotId }),
   // `forcar` = a Inêz viu o aviso ("sábado não faz parte do plano dela") e
   // decidiu marcar assim mesmo. O portal da aluna nunca manda esse campo.
-  makeupBook: (clientId, slotId, forcar) => req("POST", `/api/clients/${clientId}/makeup-book`, { slotId, forcar: !!forcar }),
   extraBook: (clientId, slotId, forcar) => req("POST", `/api/clients/${clientId}/extra-book`, { slotId, forcar: !!forcar }),
   // Aula de presente (fora de toda conta): dar na ficha, recolher a não usada
   // e marcar o horário pela aluna. Ela também marca sozinha pelo portal.

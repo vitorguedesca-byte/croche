@@ -262,9 +262,8 @@ export const liberouATempo = (date, time, agora) => agora <= prazoLiberacao(date
    sábado na grade continua podendo, e a escala não tem essa trava.
 
    Não é a regra "sábado não faz parte do plano" removida em 30/08/2026 — sábado
-   continua na grade e checarRegras() não barra data nenhuma. Aqui é só o destino
-   da reposição que a aluna marca pelo portal; no painel a agenda é da Inêz, e
-   ela marca onde precisar.
+   continua na grade e checarRegras() não barra data nenhuma. Esta regra se
+   aplica ao destino da reposição no portal e no painel.
 
    A grade é lida das aulas FUTURAS do plano: uma aula de sábado de meses atrás
    não diz nada sobre a grade de hoje. Sem nenhuma aula do plano pela frente não

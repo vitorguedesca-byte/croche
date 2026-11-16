@@ -3,7 +3,7 @@ import { createAccessControl } from "./accessControl.js";
 import { auditRequestContext, createDataAuditRoutes, DATA_AUDIT_TABLE_SQL, withAuditContext } from "./dataAudit.js";
 import { filterState } from "./accessPolicy.js";
 import { createPortalAuth } from "./portalAuth.js";
-import { bookingWhere, ownsPortalBooking } from "./portalBookingScope.js";
+import { bindPortalBookingScope, bookingWhere, clientForPanelBooking, ownsPortalBooking } from "./portalBookingScope.js";
 import { waWebhookJson } from "./waWebhookAuth.js";
 import cors from "cors";
 import crypto from "crypto";
@@ -303,8 +303,8 @@ const parseTags = (t) => {
 };
 
 // quantas reservas ativas (não canceladas) um slot tem
-async function occupancy(slotId) {
-  return prisma.booking.count({
+async function occupancy(slotId, db = prisma) {
+  return db.booking.count({
     where: { slotId, status: { not: "cancelada" } },
   });
 }
@@ -388,13 +388,11 @@ const comEncargos = (inv) => {
 
 /* ---------- regras de marcação do mensalista (ver src/regrasAula.js) ---------- */
 
-/* Aulas ativas da aluna. Alimentam apenas a janela da mensalista em escala.
-   A frequência 1x/2x define a grade inicial; não existe mais teto semanal que
-   transforme feriado sem aula em consumo fictício do plano. */
-async function aulasAtivasDe(client, desde = todayISO()) {
-  return prisma.booking.findMany({
+/* Aulas ativas da aluna, usadas para consultar a grade e a reposição. */
+async function aulasAtivasDe(client, desde = todayISO(), db = prisma) {
+  return db.booking.findMany({
     where: { ...bookingWhere(client), status: { not: "cancelada" }, date: { gte: desde } },
-    select: { id: true, date: true, time: true, status: true, paymentMethod: true },
+    select: { id: true, slotId: true, date: true, time: true, status: true, paymentMethod: true },
     orderBy: [{ date: "asc" }, { time: "asc" }],
   });
 }
@@ -476,8 +474,8 @@ function fimDoMesSeguinte(comp) {
 }
 
 // A mensalidade está em dia se não há boleto pendente já vencido.
-async function mensalidadeEmDia(clientId) {
-  const atrasadas = await prisma.invoice.count({
+async function mensalidadeEmDia(clientId, db = prisma) {
+  const atrasadas = await db.invoice.count({
     where: { clientId, status: "pendente", dueDate: { lt: todayISO() } },
   });
   return atrasadas === 0;
@@ -505,13 +503,15 @@ const ATRASO_GANHAR =
   "Só a aula liberada com a mensalidade em dia vira crédito.";
 
 // { ok, motivo, codigo } — se a aluna pode ganhar/usar crédito de reposição agora
-async function elegivelReposicao(client) {
+async function elegivelReposicao(client, db = prisma) {
   if (client.status === "cancelado")
     return { ok: false, codigo: "cancelado", motivo: "Inscrição cancelada — não há direito a reposição." };
   if (client.plan !== "mensalista")
     return { ok: false, codigo: "plano", motivo: "A reposição é um benefício das alunas mensalistas." };
+  if (client.status === "lead" || client.matriculaStatus === "pendente")
+    return { ok: false, codigo: "matricula", motivo: "A reposição fica disponível após a confirmação da matrícula." };
   // A trava é chave em Configurações (nasceu desligada até a Inêz confirmar).
-  if (SETTINGS.travaAtraso && !(await mensalidadeEmDia(client.id)))
+  if (SETTINGS.travaAtraso && !(await mensalidadeEmDia(client.id, db)))
     return { ok: false, codigo: "atraso", motivo: ATRASO_USAR };
   return { ok: true, codigo: "", motivo: "" };
 }
@@ -550,12 +550,12 @@ const chaveAula = (date, time) => `${date} ${hhmm(time) || String(time || "").sl
 
 /* Dos créditos EM ABERTO desta aluna, quais têm a aula de origem de pé de novo.
    Devolve um Set de ids — quem chama decide se esconde ou se apaga. */
-async function creditosComAulaDeVolta(clientName, creditos) {
+async function creditosComAulaDeVolta(client, creditos, db = prisma) {
   const abertos = (creditos || []).filter((c) => !c.usedBookingId);
   if (!abertos.length) return new Set();
-  const bks = await prisma.booking.findMany({
+  const bks = await db.booking.findMany({
     where: {
-      ...bookingWhere(clientName),
+      ...bookingWhere(client),
       date: { in: [...new Set(abertos.map((c) => c.originDate))] },
       status: { not: "cancelada" },
     },
@@ -568,11 +568,11 @@ async function creditosComAulaDeVolta(clientName, creditos) {
 // Quantas aulas de reposição a aluna já tem marcadas no mês 'YYYY-MM'.
 // Conta pela data da aula reposta (é assim que ela enxerga "duas por mês");
 // aula cancelada não conta, então liberar a reposição devolve a vaga do mês.
-async function reposicoesNoMes(client, comp) {
-  return prisma.booking.count({
+async function reposicoesNoMes(client, comp, db = prisma) {
+  return db.booking.count({
     where: {
       ...bookingWhere(client),
-      paymentMethod: "Reposição",
+      paymentMethod: PGTO_REPOSICAO,
       status: { not: "cancelada" },
       date: { gte: `${comp}-01`, lte: `${comp}-31` },
     },
@@ -674,27 +674,85 @@ async function concederCredito(client, booking) {
   return { credito, motivo: "" };
 }
 
-// Marca uma aula de reposição consumindo o crédito mais antigo ainda válido.
-// Lança { code, message } para o wrap devolver o status certo.
-// A reposição segue as MESMAS regras da marcação normal (teto da semana e a
-// janela da escala) — foi assim que a Inêz pediu: remarcar não é porta de fuga.
-async function marcarReposicao(client, slotId, { forcar = false, painel = false } = {}) {
-  const eleg = await elegivelReposicao(client);
+function impedimentoHorarioReposicao(client, slot, hoje, semSabado) {
+  if (client.unit && client.unit !== slot.unit)
+    return { codigo: "unidade", motivo: "Escolha um horário na unidade cadastrada para a aluna." };
+  if (turmaFechada(slot)) return { codigo: "turma_fechada", motivo: TURMA_FECHADA };
+  const feriado = feriadoNoDia(slot.date, slot.unit);
+  if (feriado) return { codigo: "feriado", motivo: recusaFeriado(feriado, slot.date) };
+  const regras = checarRegras(client, slot, { hoje, ignorarTeto: true });
+  if (!regras.ok) return regras;
+  if (semSabado && ehSabado(slot.date)) return { codigo: "sabado", motivo: MOTIVO_REPOSICAO_SABADO };
+  return null;
+}
+
+async function horariosReposicao(client, resumo) {
+  if (!resumo.elegivel || !resumo.saldo) return [];
+  const t = todayISO();
+  const inicio = resumo.reporAPartirDe > t ? resumo.reporAPartirDe : t;
+  const slots = (await prisma.slot.findMany({
+    where: { date: { gte: inicio }, ...(client.unit ? { unit: client.unit } : {}) },
+    orderBy: [{ date: "asc" }, { time: "asc" }],
+  })).filter(s => !impedimentoHorarioReposicao(client, s, t, resumo.regras.semSabado));
+  if (!slots.length) return [];
+  const [ocupacoes, aulas] = await Promise.all([
+    prisma.booking.groupBy({
+      by: ["slotId"],
+      where: { slotId: { in: slots.map(s => s.id) }, status: { not: "cancelada" } },
+      _count: { _all: true },
+    }),
+    aulasAtivasDe(client, `${t.slice(0, 7)}-01`),
+  ]);
+  const ocupadas = new Map(ocupacoes.map(b => [b.slotId, b._count._all]));
+  const naAgenda = new Set(aulas.map(b => b.slotId));
+  const reposPorMes = new Map();
+  for (const b of aulas) {
+    if (b.paymentMethod !== PGTO_REPOSICAO) continue;
+    const comp = b.date.slice(0, 7);
+    reposPorMes.set(comp, (reposPorMes.get(comp) || 0) + 1);
+  }
+  return slots
+    .filter(s => !naAgenda.has(s.id)
+      && (reposPorMes.get(s.date.slice(0, 7)) || 0) < REPO_MAX_MES
+      && !semVaga(s, ocupadas.get(s.id) || 0))
+    .map(s => ({ id: s.id, date: s.date, time: s.time, unit: s.unit, free: (s.capacity || 1) - (ocupadas.get(s.id) || 0) }));
+}
+
+// Painel e portal usam a mesma validação e gravam aula e crédito juntos.
+async function marcarReposicao(client, slotId) {
+  const id = Number(slotId);
+  if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error("Escolha um horário válido."), { code: 400 });
+  for (let tentativa = 0; ; tentativa++) {
+    try {
+      return await prisma.$transaction(db => consumirCreditoReposicao(db, client, id));
+    } catch (e) {
+      if (e.code !== "P2034") throw e;
+      if (tentativa >= 2)
+        throw Object.assign(new Error("A agenda foi atualizada. Confira os horários e tente novamente."), { code: 409 });
+    }
+  }
+}
+
+async function consumirCreditoReposicao(db, cadastro, slotId) {
+  const atual = await db.client.findUnique({ where: { id: cadastro.id } });
+  if (!atual) throw Object.assign(new Error("Aluno não encontrado."), { code: 404 });
+  const client = { ...cadastro, ...atual };
+  const eleg = await elegivelReposicao(client, db);
   if (!eleg.ok) throw Object.assign(new Error(eleg.motivo), { code: 403 });
   const t = todayISO();
   // O horário vem primeiro: é a data dele que decide qual crédito pode pagar a reposição.
-  const slot = await prisma.slot.findUnique({ where: { id: Number(slotId) } });
+  const slot = await db.slot.findUnique({ where: { id: slotId } });
   if (!slot) throw Object.assign(new Error("Horário não encontrado."), { code: 404 });
   if (slot.date < t) throw Object.assign(new Error("Não dá para repor em uma aula que já passou."), { code: 400 });
 
-  const candidatos = await prisma.makeupCredit.findMany({
+  const candidatos = await db.makeupCredit.findMany({
     where: { clientId: client.id, ...creditoValido(t) },
     orderBy: { expiresOn: "asc" }, // gasta primeiro o que vence antes
   });
   /* Crédito cuja aula de origem voltou não é crédito: a aluna tem a aula.
      Filtrar aqui, e não na cláusula acima, é o que garante que nenhuma porta
      nova de criação de aula escape da regra — ver creditosComAulaDeVolta. */
-  const revogados = await creditosComAulaDeVolta(client, candidatos);
+  const revogados = await creditosComAulaDeVolta(client, candidatos, db);
   const vivos = candidatos.filter((c) => !revogados.has(c.id));
   if (!vivos.length)
     throw Object.assign(new Error("Você não tem crédito de reposição disponível."), { code: 409 });
@@ -717,38 +775,36 @@ async function marcarReposicao(client, slotId, { forcar = false, painel = false 
     );
   }
 
-  // A reposição não é aula do plano: não ocupa vaga do teto semanal 1x/2x.
-  await exigirRegras(client, slot, { forcar, ignorarTeto: true });
-  // Fixa de semana antes das 18h não repõe no sábado (ver fixaSemSabado). O painel não passa por aqui.
-  if (!painel && ehSabado(slot.date) && fixaSemSabado(client, await aulasAtivasDe(client, t)))
-    throw Object.assign(new Error(MOTIVO_REPOSICAO_SABADO), { code: 409, codigo: "sabado" });
+  const semSabado = ehSabado(slot.date) && fixaSemSabado(client, await aulasAtivasDe(client, t, db));
+  const impedimento = impedimentoHorarioReposicao(client, slot, t, semSabado);
+  if (impedimento) throw Object.assign(new Error(impedimento.motivo), { code: 409, codigo: impedimento.codigo });
   // Teto de reposições dentro do mês da aula escolhida
   const compAula = slot.date.slice(0, 7);
-  if ((await reposicoesNoMes(client, compAula)) >= REPO_MAX_MES)
+  if ((await reposicoesNoMes(client, compAula, db)) >= REPO_MAX_MES)
     throw Object.assign(
       new Error(`Você já tem ${REPO_MAX_MES} aulas de reposição marcadas em ${compPorExtenso(compAula)}. Escolha uma data do mês seguinte ou chame a gente no WhatsApp.`),
       { code: 409 }
     );
-  const dup = await prisma.booking.findFirst({
+  const dup = await db.booking.findFirst({
     where: { slotId: slot.id, ...bookingWhere(client), status: { not: "cancelada" } },
   });
   if (dup) throw Object.assign(new Error("Você já tem essa aula marcada."), { code: 400 });
   // não há vaga reservada para reposição: só entra se a turma tiver vaga livre
-  if ((await occupancy(slot.id)) >= (slot.capacity || 1))
+  if ((await occupancy(slot.id, db)) >= (slot.capacity || 1))
     throw Object.assign(new Error("Turma lotada — não há vaga de reposição nesse horário."), { code: 409 });
 
-  const booking = await prisma.booking.create({
+  const booking = await db.booking.create({
     data: {
       clientName: client.name, phone: client.phone || "", unit: slot.unit,
       date: slot.date, time: slot.time, prof: slot.prof || profFor(slot.unit),
-      slotId: slot.id, status: "confirmada", value: 0, paid: true, paymentMethod: "Reposição",
+      slotId: slot.id, status: "confirmada", value: 0, paid: true, paymentMethod: PGTO_REPOSICAO,
       paymentDate: t,
       // A reposição é aula ÚNICA: nunca entra numa série. Sem seriesId, nenhum
       // "excluir/replicar os demais desta série" a alcança. Ver ehReposicao().
       seriesId: null,
     },
   });
-  await prisma.makeupCredit.update({
+  await db.makeupCredit.update({
     where: { id: credito.id },
     data: { usedBookingId: booking.id, usedAt: t },
   });
@@ -5291,6 +5347,7 @@ app.get("/api/relatorios/alunos-leads/excel", wrap(async (_req, res) => {
   const dados = await carregarDadosAlunosLeads();
   const buffer = gerarExcelAlunosLeads(dados);
   const hoje = todayISO();
+  res.setHeader("Cache-Control", "private, no-store");
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", `attachment; filename="fios-relatorio-alunos-e-leads-${hoje}.xlsx"`);
   res.send(buffer);
@@ -5980,7 +6037,8 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
     try {
       return res.json(await marcarReposicao(client, req.body.slotId));
     } catch (e) {
-      return res.status(e.code || 500).json({ error: e.message });
+      if (!Number.isInteger(e.code)) throw e;
+      return res.status(e.code).json({ error: e.message, codigo: e.codigo });
     }
   }
   if (req.body.extra) {
@@ -6038,7 +6096,14 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
    da hora some da tela, e a aluna que volta dias depois precisa ver ali por que
    aquela aula não virou reposição (Vitor, 28/10/2026 — caso da Pitya). */
 async function liberarAula(client, b, extra = {}, opts = {}) {
-  const r = await liberarAulaERegras(client, b, extra, opts);
+  // Na escala, a aula que a aluna libera continua contando no pacote. Quando
+  // a escola desmarca em lote, só conta se gerar crédito.
+  const liberacao = await prisma.booking.updateMany({
+    where: { id: b.id, status: { not: "cancelada" } },
+    data: { status: "cancelada", liberada: !opts.devolverRepo, ...extra },
+  });
+  if (!liberacao.count) return { credito: false, devolvido: false, motivo: "Esta aula já foi liberada." };
+  const r = await liberarAulaERegras(client, b, opts);
   if (!r.credito && !r.devolvido && r.motivo)
     await prisma.booking.update({ where: { id: b.id }, data: { creditoMotivo: r.motivo.slice(0, 300) } });
   return r;
@@ -6067,11 +6132,7 @@ async function previaLiberacao(client, b) {
   return { credito: false, aviso: `Esta aula não vai gerar crédito de reposição. ${sem.motivo}${pacote}` };
 }
 
-async function liberarAulaERegras(client, b, extra = {}, { devolverRepo = false } = {}) {
-  /* `liberada`: foi a aluna que abriu mão da aula — na escala, ela continua
-     contando no pacote do mês (ver aulasDoPacote). `devolverRepo` é a escola
-     desmarcando em lote: aí só conta se a aula virar crédito, lá embaixo. */
-  await prisma.booking.update({ where: { id: b.id }, data: { status: "cancelada", liberada: !devolverRepo, ...extra } });
+async function liberarAulaERegras(client, b, { devolverRepo = false } = {}) {
   await fecharPixDasReservas([b], "aula liberada"); // só age se ainda havia Pix em aberto
   if (b.paymentMethod === "Reposição") {
     if (devolverRepo) {
@@ -6097,7 +6158,7 @@ async function liberarAulaERegras(client, b, extra = {}, { devolverRepo = false 
     }
     return { credito: false, devolvido: false, motivo: "Esta era a sua aula de presente — ela se encerra aqui e não é remarcada." };
   }
-  /* A vaga JÁ foi liberada na linha de cima. Se a concessão do crédito falhar,
+  /* A vaga já foi liberada. Se a concessão do crédito falhar,
      a liberação não pode falhar junto: quem avisou que não vem não fica presa na
      turma por causa de um erro na regra de reposição. O erro vai para o log e a
      tela diz o que aconteceu. (Foi o que quebrou em 29/08/2026: horário fora do
@@ -6755,11 +6816,14 @@ app.post("/api/clients/:id/matricula/refund", wrap(async (req, res) => {
   res.json({ ...safeClient(updated), desfez });
 }));
 
-// Saldo/histórico de reposição (admin)
+// Saldo, histórico e (quando solicitados) horários de reposição pelo painel.
 app.get("/api/clients/:id/makeup", wrap(async (req, res) => {
   const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
-  res.json(await resumoReposicao(client));
+  await bindPortalBookingScope(prisma, client, { allowUniqueName: true });
+  const resumo = await resumoReposicao(client);
+  if (req.query.horarios === "1") resumo.horarios = await horariosReposicao(client, resumo);
+  res.json(resumo);
 }));
 
 /* Reposições duplicadas: lista (GET) e limpa (POST) as aulas de reposição
@@ -6838,14 +6902,16 @@ app.post("/api/clients/:id/presente-book", wrap(async (req, res) => {
   catch (e) { res.status(e.code || 500).json({ error: e.message, codigo: e.codigo }); }
 }));
 
-// Marcar reposição pelo painel (admin) — body { slotId, forcar? }
+// Marcar reposição em nome da aluna — body { slotId }
 app.post("/api/clients/:id/makeup-book", wrap(async (req, res) => {
   const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  await bindPortalBookingScope(prisma, client, { allowUniqueName: true });
   try {
-    res.json(await marcarReposicao(client, req.body?.slotId, { forcar: !!req.body?.forcar, painel: true }));
+    res.json(await marcarReposicao(client, req.body?.slotId));
   } catch (e) {
-    res.status(e.code || 500).json({ error: e.message, codigo: e.codigo });
+    if (!Number.isInteger(e.code)) throw e;
+    res.status(e.code).json({ error: e.message, codigo: e.codigo });
   }
 }));
 
@@ -6853,7 +6919,7 @@ app.post("/api/clients/:id/makeup-book", wrap(async (req, res) => {
 app.post("/api/bookings/:id/release", wrap(async (req, res) => {
   const b = await prisma.booking.findUnique({ where: { id: Number(req.params.id) } });
   if (!b) return res.status(404).json({ error: "Aula não encontrada." });
-  const client = await prisma.client.findFirst({ where: { name: b.clientName } });
+  const client = await clientForPanelBooking(prisma, b);
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
   const r = await liberarAula(client, b, { absenceReason: String(req.body?.reason || "").slice(0, 500) });
   res.json({ ok: true, ...r });

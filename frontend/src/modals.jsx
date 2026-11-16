@@ -3061,42 +3061,38 @@ export function MatricularNovaForm({ client, plano: planoInicial, tipo: tipoInic
 }
 
 /* ============ Reposição: saldo, histórico e marcação (admin) ============ */
+function useResumoReposicao(clientId, horarios = false) {
+  const { lastUpdated } = useStore();
+  const ultimaAtualizacao = horarios ? null : lastUpdated;
+  const [resumo, setResumo] = useState(null);
+  const [erro, setErro] = useState("");
+  const [versao, setVersao] = useState(0);
+
+  useEffect(() => {
+    let ativo = true;
+    api.getMakeup(clientId, horarios).then((r) => {
+      if (!ativo) return;
+      setResumo(r);
+      setErro("");
+    }).catch((e) => {
+      if (!ativo) return;
+      setResumo(null);
+      setErro(e.message);
+    });
+    return () => { ativo = false; };
+  }, [clientId, horarios, versao, ultimaAtualizacao]);
+
+  const recarregar = () => {
+    setErro("");
+    setResumo(null);
+    setVersao((v) => v + 1);
+  };
+  return { resumo, erro, recarregar };
+}
+
 function MakeupBlock({ client }) {
-  const { data } = useStore();
   const { open } = useModal();
-  const t = todayISO();
-  // o /api/state já traz todos os créditos; filtra os desta aluna
-  /* Crédito cuja aula de origem voltou para a agenda não vale mais: a aluna
-     tem a aula: não há o que repor. O backend é quem manda (ver
-     creditosComAulaDeVolta no server.js) — aqui a conta é repetida só para o
-     painel não oferecer um botão que a API vai recusar. */
-  const aulasAtivas = new Set(
-    (data.bookings || [])
-      .filter((b) => b.clientName === client.name && b.status !== "cancelada")
-      .map((b) => `${b.date} ${(b.time || "").slice(0, 5)}`)
-  );
-  const creditos = (data.makeups || [])
-    .filter((m) => m.clientId === client.id)
-    .map((m) => ({
-      ...m,
-      situacao: m.usedBookingId ? "usado"
-        : aulasAtivas.has(`${m.originDate} ${(m.originTime || "").slice(0, 5)}`) ? "revogado"
-        : m.expiresOn < t ? "expirado"
-        : "disponivel",
-    }));
-  const saldo = creditos.filter((m) => m.situacao === "disponivel").length;
-  // espelha elegivelReposicao do backend, só para a tela avisar antes de tentar
-  const emAtraso = (data.invoices || []).some((i) => i.clientId === client.id && i.status === "pendente" && i.dueDate < t);
-  // teto de 2 reposições marcadas dentro do mês corrente (o backend também barra)
-  const comp = t.slice(0, 7);
-  const reposNoMes = (data.bookings || []).filter(
-    (b) => b.clientName === client.name && b.paymentMethod === "Reposição" && b.status !== "cancelada" && (b.date || "").slice(0, 7) === comp
-  ).length;
-  const noLimite = reposNoMes >= 2;
-  const bloqueio = client.status === "cancelado"
-    ? "Inscrição cancelada — sem direito a reposição."
-    : emAtraso ? "Mensalidade em atraso — sem direito a reposição."
-    : noLimite ? `Já são ${reposNoMes} reposições marcadas neste mês — o limite é 2.` : "";
+  const { resumo, erro, recarregar } = useResumoReposicao(client.id);
 
   const rotulo = {
     disponivel: ["b-ok", "disponível"],
@@ -3108,22 +3104,26 @@ function MakeupBlock({ client }) {
   return (
     <div style={{ margin: "1rem 0" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: ".5rem" }}>
-        <b style={{ color: "var(--brown)" }}>🔁 Reposição · {saldo} crédito(s)</b>
+        <b style={{ color: "var(--brown)" }}>🔁 Reposição{resumo && ` · ${resumo.saldo} crédito(s)`}</b>
         <div style={{ display: "flex", gap: ".4rem", flexWrap: "wrap" }}>
           <button data-access="agenda:2" className="btn ghost sm" onClick={() => open(<ExtraBookForm client={client} />)}>
             ➕ Aula extra
           </button>
-          <button data-access="agenda:2" className="btn sec sm" disabled={!saldo || !!bloqueio} onClick={() => open(<MakeupBookForm client={client} />)}>
+          <button data-access="agenda:2" className="btn sec sm" disabled={!resumo?.saldo || !resumo.elegivel} onClick={() => open(<MakeupBookForm client={client} />)}>
             Marcar reposição
           </button>
         </div>
       </div>
-      {bloqueio
-        ? <div className="help" style={{ color: "var(--danger)" }}>{bloqueio}</div>
-        : <div className="help">Máx. 2 créditos por mês e 2 reposições marcadas por mês ({reposNoMes}/2 neste mês); o crédito vale até o fim do mês seguinte ao da aula liberada.</div>}
-      {creditos.length > 0 && (
+      {!resumo && <div className="help" role="status">{erro || "Consultando créditos de reposição…"} {erro && <button className="btn ghost sm" onClick={recarregar}>Tentar novamente</button>}</div>}
+      {resumo && (resumo.elegivel
+        ? <div className="help">
+            {resumo.mes.marcadas} de {resumo.regras.maxPorMes} reposições marcadas neste mês. O crédito vale até o fim do mês seguinte ao da aula liberada.
+            {!resumo.saldo && " Para gerar crédito, abra a aula em Aulas e use Liberar vaga. O sistema aplica as regras de antecedência."}
+          </div>
+        : <div className="help" style={{ color: "var(--danger)" }}>{resumo.motivo}</div>)}
+      {resumo?.creditos.length > 0 && (
         <div style={{ marginTop: ".6rem" }}>
-          {creditos.slice(0, 6).map((m) => {
+          {resumo.creditos.slice(0, 6).map((m) => {
             const [cls, txt] = rotulo[m.situacao];
             return (
               <div className="roster-row" key={m.id}>
@@ -3143,56 +3143,77 @@ function MakeupBlock({ client }) {
 
 /* Escolha de turma para marcar o aluno — só turmas futuras com vaga livre.
    Serve tanto para a reposição (consome crédito) quanto para a aula extra (paga). */
-function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso, ate = null, aba }) {
+function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso, ate = null, aba, horarios, aviso, onError }) {
   const { data, run } = useStore();
   const { open } = useModal();
   const t = todayISO();
   // `ate`: última data aceita (a validade da aula de presente)
-  const livres = data.slots
+  const [ocupado, setOcupado] = useState(false);
+  const marcando = useRef(false);
+  const livres = horarios ?? data.slots
     .filter((s) => s.date >= t && !s.bloqueada && (!ate || s.date <= ate) && slotBookings(data, s.id).length < slotCapacity(s))
-    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
+    .slice(0, 40);
   /* Reposição, aula extra e presente usam uma única turma e nunca criam recorrência. */
   const marcar = async (s) => {
-    if (!(await confirmModal({ title: titulo, message: confirmar(s), confirmLabel: titulo }))) return;
+    if (marcando.current) return;
+    marcando.current = true;
+    setOcupado(true);
     try {
+      if (!(await confirmModal({ title: titulo, message: confirmar(s), confirmLabel: titulo }))) return;
       await run(acao(s, false)); // run já avisa o erro na tela
       toast(sucesso);
       open(<ClientProfile client={client} initialTab={aba} />);
-    } catch { /* erro já reportado pelo run */ }
+    } catch { onError?.(); }
+    finally { marcando.current = false; setOcupado(false); }
   };
   return (
     <Modal title={titulo} footer={<>
-      <button className="btn ghost" onClick={() => open(<ClientProfile client={client} initialTab={aba} />)}>← Voltar ao perfil</button>
+      <button className="btn ghost" disabled={ocupado} onClick={() => open(<ClientProfile client={client} initialTab={aba} />)}>← Voltar ao perfil</button>
     </>}>
       <div className="help">{ajuda}</div>
       <div style={{ marginTop: ".8rem" }}>
-        {livres.length ? livres.slice(0, 40).map((s) => {
+        {livres.length ? livres.map((s) => {
           return (
             <div className="roster-row row-click" key={s.id} onClick={() => marcar(s)}>
               <div className="rr-info">
                 <b>{fmtDate(s.date)} · {faixaHorario(s.time, data.meta?.duracaoAulaMin)}</b>
                 <div className="cli-sub">
-                  {s.unit} · {slotCapacity(s) - slotBookings(data, s.id).length} vaga(s)
+                  {s.unit} · {s.free ?? (slotCapacity(s) - slotBookings(data, s.id).length)} vaga(s)
                 </div>
               </div>
-              <button className="btn sec sm">Escolher</button>
+              <button className="btn sec sm" disabled={ocupado}>Escolher</button>
             </div>
           );
-        }) : <div className="empty" style={{ padding: "1.2rem" }}><div className="ic">🪑</div><p>Nenhuma turma com vaga livre no momento.</p></div>}
+        }) : <div className="empty" role="status" style={{ padding: "1.2rem" }}>
+          {aviso || <><div className="ic">🪑</div><p>Nenhuma turma com vaga livre no momento.</p></>}
+        </div>}
       </div>
     </Modal>
   );
 }
 
 export function MakeupBookForm({ client }) {
+  const { resumo, erro, recarregar } = useResumoReposicao(client.id, true);
+  const aviso = erro ? <>{erro} <button className="btn ghost sm" onClick={recarregar}>Tentar novamente</button></>
+    : !resumo ? "Consultando horários de reposição…"
+    : !resumo.elegivel ? resumo.motivo
+    : !resumo.saldo ? "A aluna está sem créditos disponíveis."
+    : "Nenhuma turma disponível para reposição nas datas permitidas.";
   return (
     <SlotPicker
       client={client}
       titulo="Marcar reposição"
-      ajuda="Não há vaga reservada para reposição — aparecem só as turmas que já têm vaga livre. Máximo de 2 reposições dentro do mesmo mês. O crédito só fica válido depois que a data da aula liberada passa, e a reposição é sempre uma ocorrência única."
+      ajuda={<>Escolha uma turma para {client.name}. A reposição acontece em uma data posterior à aula liberada e usa um crédito.
+        {resumo?.regras.semSabado && " Para a grade desta aluna, a reposição é de segunda a sexta."}
+      </>}
       confirmar={(s) => `Marcar ${client.name} em reposição?\n\n${s.unit}\n${fmtDateLong(s.date)} às ${s.time}\n\nIsso consome 1 crédito.`}
-      acao={(s, forcar) => api.makeupBook(client.id, s.id, forcar)}
+      acao={(s) => api.makeupBook(client.id, s.id)}
       sucesso="Reposição marcada. 💚"
+      aba="repo"
+      horarios={resumo?.horarios || []}
+      aviso={aviso}
+      onError={recarregar}
     />
   );
 }
