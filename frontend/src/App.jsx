@@ -18,6 +18,7 @@ import ClientPortal from "./ClientPortal.jsx";
 import FirstClassBooking from "./FirstClassBooking.jsx";
 import { Notifications } from "./Notifications.jsx";
 import { toast } from "./toast.jsx";
+import { ExportarAlunosLeadsExcel } from "./ExportarAlunosLeadsExcel.jsx";
 
 // O painel se atualiza sozinho a cada 25s e sempre que a aba volta ao foco
 // (ver store.jsx) — por isso não há botão de atualizar na barra do topo.
@@ -220,9 +221,9 @@ export default function App() {
           {instrutora ? "Acesso de consulta · somente leitura" : "Backend MySQL + Prisma · React"}
           {getSession()?.role === "admin" && <button onClick={() => setMode("cliente")}>👁 Ver como aluno</button>}
           {(canAccess("relatorios") || canAccess("alunos") || canAccess("funil")) && (
-            <button onClick={() => api.relatorios.downloadAlunosLeadsExcel()} title="Baixar planilha Excel (.xlsx) com alunos ativos, ex-alunos e leads">
+            <ExportarAlunosLeadsExcel title="Baixar planilha Excel (.xlsx) com alunos ativos, ex-alunos e leads">
               📊 ⬇ Exportar Alunos e Leads (Excel)
-            </button>
+            </ExportarAlunosLeadsExcel>
           )}
           {canAccess("relatorios") && <button onClick={() => exportBookingsCsv(data)}>⬇ Exportar marcações (CSV)</button>}
           <button onClick={async () => { try { await api.admin.logout(); } catch {} setToken(null); window.location.reload(); }}>🚪 Sair</button>

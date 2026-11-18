@@ -57,7 +57,7 @@ export function canAccess(module, level = 1) {
   return !!TOKEN && (SESSION?.role === "admin" || (SESSION?.permissions?.[module] || 0) >= level);
 }
 
-async function req(method, url, body) {
+async function req(method, url, body, { raw = false, signal } = {}) {
   const headers = { "Content-Type": "application/json" };
   const portalRequest = url.startsWith("/api/portal/");
   const studentRequest = portalRequest || url.startsWith("/api/auth/");
@@ -70,6 +70,7 @@ async function req(method, url, body) {
     // sem cache: depois de cancelar/marcar uma aula, a tela precisa ler o estado
     // novo do servidor, nunca uma resposta guardada pelo navegador
     cache: "no-store",
+    signal,
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
@@ -89,7 +90,7 @@ async function req(method, url, body) {
         if (motivo === null) throw new Error("Alteração cancelada. Nenhum dado foi salvo nesta solicitação.");
         if (motivo.trim().length < 3 || motivo.trim().length > 500) toast("Informe um motivo de 3 a 500 caracteres.", "error");
       } while (motivo.trim().length < 3 || motivo.trim().length > 500);
-      return req(method, url, { ...body, motivo: motivo.trim() });
+      return req(method, url, { ...body, motivo: motivo.trim() }, { raw, signal });
     }
     const err = new Error(msg);
     if (res.status === 401 && portalRequest && sentPortalToken && sentPortalToken === PORTAL_TOKEN) {
@@ -105,7 +106,7 @@ async function req(method, url, body) {
     err.data = corpo; // ex.: o funil devolve o `leadId` de quem já está lá
     throw err;
   }
-  return res.status === 204 ? null : res.json();
+  return raw ? res : res.status === 204 ? null : res.json();
 }
 
 async function portalLogin(path, body) {
@@ -280,25 +281,14 @@ export const api = {
 
   // Relatório geral: alunos ativos, ex-alunos e leads em todas as etapas (dados e extração Excel)
   relatorioAlunosLeads: () => req("GET", "/api/relatorios/alunos-leads"),
-  downloadAlunosLeadsExcel: async () => {
-    const res = await fetch("/api/relatorios/alunos-leads/excel", {
-      headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {},
-    });
-    if (!res.ok) {
-      let msg = "Erro ao baixar relatório em Excel.";
-      try { msg = (await res.json()).error || msg; } catch {}
-      throw new Error(msg);
-    }
+  prepararAlunosLeadsExcel: async (signal) => {
+    const res = await req("GET", "/api/relatorios/alunos-leads/excel", undefined, { raw: true, signal });
     const blob = await res.blob();
-    const hoje = new Date().toISOString().slice(0, 10);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `fios-relatorio-alunos-e-leads-${hoje}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    if (!blob.size || blob.type !== "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") {
+      throw new Error("O servidor não retornou uma planilha válida. Tente novamente.");
+    }
+    const nome = res.headers.get("Content-Disposition")?.match(/filename="(fios-relatorio-alunos-e-leads-\d{4}-\d{2}-\d{2}\.xlsx)"/i)?.[1];
+    return { blob, nome: nome || "fios-relatorio-alunos-e-leads.xlsx" };
   },
 
   availableSlots: (unit) => req("GET", `/api/slots/available${unit ? `?unit=${encodeURIComponent(unit)}` : ""}`),

@@ -3,6 +3,7 @@ import { toast, confirmModal } from "./toast.jsx";
 import { useStore } from "./store.jsx";
 import { useModal, StatusBadge, Select } from "./ui.jsx";
 import { api, canAccess } from "./api.js";
+import { ExportarAlunosLeadsExcel } from "./ExportarAlunosLeadsExcel.jsx";
 import { WaIcon } from "./icons.jsx";
 import Agendamentos from "./Agendamentos.jsx";
 import { DataAuditModal } from "./DataAudit.jsx";
@@ -795,14 +796,12 @@ export function Clientes({ params, go }) {
             { value: "aulas", label: "Ordenar: Mais aulas no mês", icon: "📈" },
           ]}
         />
-        <button
+        <ExportarAlunosLeadsExcel
           className="btn sec sm"
-          type="button"
-          onClick={() => api.relatorios.downloadAlunosLeadsExcel()}
           title="Extrair planilha Excel (.xlsx) completa com todos os alunos ativos, ex-alunos e leads em todas as etapas"
         >
           📊 ⬇ Extrair Excel
-        </button>
+        </ExportarAlunosLeadsExcel>
         <span className="count">{list.length} de {groups[tab].length}</span>
       </div>
       {list.length ? (

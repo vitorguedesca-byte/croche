@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, Fragment } from "react";
 import { useStore } from "./store.jsx";
 import { useModal, Select } from "./ui.jsx";
 import { api } from "./api.js";
+import { ExportarAlunosLeadsExcel } from "./ExportarAlunosLeadsExcel.jsx";
 import { ClientProfile, SlotDetail } from "./modals.jsx";
 import { exportCsv, exportAlunosLeadsCsv } from "./exports.js";
 import { toast } from "./toast.jsx";
@@ -1114,7 +1115,6 @@ export function RelatorioAlunosLeads() {
   const { open } = useModal();
   const [dados, setDados] = useState(null);
   const [carregando, setCarregando] = useState(true);
-  const [baixandoExcel, setBaixandoExcel] = useState(false);
   const [erro, setErro] = useState("");
 
   const [categoriaFiltro, setCategoriaFiltro] = useState("todos"); // todos | ativo | ex-aluno | lead
@@ -1138,18 +1138,6 @@ export function RelatorioAlunosLeads() {
   useEffect(() => {
     carregar();
   }, []);
-
-  const exportarExcel = async () => {
-    setBaixandoExcel(true);
-    try {
-      await api.downloadAlunosLeadsExcel();
-      toast("Planilha Excel (.xlsx) baixada com sucesso! 📊", "success");
-    } catch (e) {
-      toast("Não foi possível baixar o Excel: " + e.message, "error");
-    } finally {
-      setBaixandoExcel(false);
-    }
-  };
 
   const totais = dados?.totais || {
     totalConsolidado: 0,
@@ -1253,14 +1241,13 @@ export function RelatorioAlunosLeads() {
             </div>
           </div>
           <div style={{ display: "flex", gap: ".5rem", flexWrap: "wrap", alignItems: "center" }}>
-            <button
+            <ExportarAlunosLeadsExcel
               className="btn sec"
-              onClick={exportarExcel}
-              disabled={carregando || baixandoExcel}
+              disabled={carregando}
               title="Baixar planilha Excel (.xlsx) com abas: Visão Geral, Alunos Ativos, Ex-Alunos e Leads"
             >
-              {baixandoExcel ? "⏳ Gerando Excel…" : "📊 ⬇ Extrair Excel (.xlsx)"}
-            </button>
+              📊 ⬇ Extrair Excel (.xlsx)
+            </ExportarAlunosLeadsExcel>
             <button
               className="btn ghost sm"
               onClick={exportarCsvFiltrado}
