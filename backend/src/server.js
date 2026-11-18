@@ -39,9 +39,9 @@ import {
   diaDoMes,
   encargosDaMensalidade,
   hhmm,
-  janelaEscala,
-  tetoMensalEscala,
-  limiteMensalEscala,
+  janelaReposicaoEscala,
+  cicloEscalaNaData,
+  resumoCiclosEscala,
   compPorExtenso,
   liberouATempo as liberouATempoPuro,
   motivoSemCredito,
@@ -397,10 +397,24 @@ async function aulasAtivasDe(client, desde = todayISO(), db = prisma) {
   });
 }
 
+async function cobrancaDaEscala(client, date, db = prisma, mesesAdiante = 1) {
+  const comp = date.slice(0, 7);
+  const mensalidades = await db.invoice.findMany({
+    where: {
+      clientId: client.id,
+      competencia: { gte: somarComp(comp, -1), lte: somarComp(comp, mesesAdiante) },
+      status: { not: "cancelado" },
+    },
+    select: { competencia: true, dueDate: true, status: true },
+    orderBy: { id: "asc" },
+  });
+  return { mensalidades, vencimentoDia: SETTINGS.vencimentoDia || 10 };
+}
+
 /* Aplica as regras antes de criar a aula. Lança { code: 409 } quando barra.
    `forcar` existe só para o painel: a Inêz vê o aviso na tela e decide passar
    por cima (ela é a dona da agenda). O portal da aluna nunca manda `forcar`. */
-async function exigirRegras(client, alvo, { forcar = false, ignorarJanela = false, ignorarTeto = false } = {}) {
+async function exigirRegras(client, alvo, { forcar = false, ignorarJanela = false, ignorarTeto = false, db = prisma } = {}) {
   /* Feriado vem ANTES do `forcar`, e de propósito: as outras regras deste
      módulo são do plano da aluna, e a Inêz pode passar por cima delas porque a
      agenda é dela. Feriado não é regra de plano — é o dia em que a escola não
@@ -411,14 +425,20 @@ async function exigirRegras(client, alvo, { forcar = false, ignorarJanela = fals
     throw Object.assign(new Error(recusaFeriado(nomeFeriado, alvo?.date)), { code: 409, codigo: "feriado" });
   if (forcar) return { ok: true, codigo: "", motivo: "" };
   const hoje = todayISO();
-  const isEscala = tipoMensalista(client) === "escala";
-  // Canceladas vêm junto: a aula que ela liberou continua no pacote do mês
+  if (tipoMensalista(client) !== "escala" || (ignorarJanela && ignorarTeto)) return;
+  const cobranca = await cobrancaDaEscala(client, alvo.date, db);
+  const ciclo = cicloEscalaNaData(client, alvo.date, cobranca);
+  // Canceladas vêm junto: a aula que ela liberou continua no pacote do ciclo
   // (aulasDoPacote decide quais contam).
-  const todasAulas = isEscala
-    ? await prisma.booking.findMany({ where: { ...bookingWhere(client) } })
+  const todasAulas = !ignorarTeto
+    ? await db.booking.findMany({
+      where: { ...bookingWhere(client), date: { gte: ciclo.inicio, lte: ciclo.vencimentoSeguinte }, paymentMethod: PGTO_PLANO },
+      select: { date: true, time: true, paymentMethod: true, status: true, liberada: true },
+    })
     : [];
   const r = checarRegras(client, alvo, {
     hoje,
+    ciclo,
     todasAulas,
     ignorarJanela,
     ignorarTeto,
@@ -680,8 +700,10 @@ function impedimentoHorarioReposicao(client, slot, hoje, semSabado) {
   if (turmaFechada(slot)) return { codigo: "turma_fechada", motivo: TURMA_FECHADA };
   const feriado = feriadoNoDia(slot.date, slot.unit);
   if (feriado) return { codigo: "feriado", motivo: recusaFeriado(feriado, slot.date) };
-  const regras = checarRegras(client, slot, { hoje, ignorarTeto: true });
-  if (!regras.ok) return regras;
+  if (tipoMensalista(client) === "escala") {
+    const janela = janelaReposicaoEscala(hoje, slot.date);
+    if (!janela.aberta) return { codigo: "escala", motivo: janela.motivo };
+  }
   if (semSabado && ehSabado(slot.date)) return { codigo: "sabado", motivo: MOTIVO_REPOSICAO_SABADO };
   return null;
 }
@@ -2517,7 +2539,7 @@ app.post(
       const doPlano = !ehMatricula && !isAvulso && tipoMensalista(client) !== null;
       if (doPlano) {
         try {
-          await exigirRegras(client, { date: slot.date, time: slot.time }, {
+          await exigirRegras(client, slot, {
             // O painel pode passar por cima do teto (a agenda é da Inêz); a
             // janela da escala não se aplica a quem marca pelo painel.
             forcar: painel && !!b.forcar,
@@ -5748,7 +5770,8 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
   const pode = clientPodeAcessarPortal(client);
   if (!pode.ok) return res.status(403).json({ error: pode.motivo, leadPendente: pode.leadPendente || false });
   const t = todayISO();
-  const [bookings, slots, ativas, invoices] = await Promise.all([
+  const tipo = tipoMensalista(client);
+  const [bookings, slots, ativas, invoices, cobrancaEscala] = await Promise.all([
     prisma.booking.findMany({ where: { ...bookingWhere(client) }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
     prisma.slot.findMany({ where: { date: { gte: t } }, orderBy: [{ date: "asc" }, { time: "asc" }] }),
     prisma.booking.findMany({ where: { status: { not: "cancelada" } } }),
@@ -5758,6 +5781,7 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
       orderBy: { competencia: "desc" },
       take: 12,
     }),
+    tipo === "escala" ? cobrancaDaEscala(client, t, prisma, 2) : null,
   ]);
   const occ = {}; ativas.forEach((b) => { occ[b.slotId] = (occ[b.slotId] || 0) + 1; });
   const available = slots
@@ -5766,19 +5790,9 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
     .filter((s) => !feriadoNoDia(s.date, s.unit))
     // Restringe à unidade da aluna, se cadastrada — Inêz pode alterar pelo painel admin
     .filter((s) => !client.unit || s.unit === client.unit)
-    /* Toda turma livre da unidade dela aparece. Havia aqui um filtro por data
-       (sábado / a partir das 18h); as duas regras saíram, e o que sobrou — o
-       teto semanal — não some com a turma: ela aparece e o botão é que fica
-       preso, com o motivo escrito. */
     .map((s) => ({ ...s, prof: s.prof || profFor(s.unit), occupancy: occ[s.id] || 0, free: (s.capacity || 1) - (occ[s.id] || 0) }));
   const makeup = await resumoReposicao(client);
-  // A janela da escala é um aviso à parte (os horários continuam visíveis, o
-  // botão é que fica preso), para a aluna entender por que não dá hoje.
-  const tipo = tipoMensalista(client);
-  const janela = tipo === "escala" ? janelaEscala(t) : { aberta: true, motivo: "" };
-  const tetoEscala = tipo === "escala"
-    ? tetoMensalEscala(client, t, bookings)
-    : null;
+  const ciclosEscala = cobrancaEscala ? resumoCiclosEscala(client, t, cobrancaEscala, bookings) : [];
   const extra = (await passeExtraDisponivel(client.id)) || (await passeExtraPendente(client.id));
   const presentes = await presentesDisponiveis(client.id, t);
   res.json({
@@ -5791,8 +5805,7 @@ app.get("/api/portal/:key", wrap(async (req, res) => {
     regras: {
       tipo,                                  // "fixo" | "escala" | null
       weeklyFreq: client.weeklyFreq,
-      janela,                                // { aberta, motivo }
-      tetoEscala,                            // { competencia, limite, marcadas, restantes, atingido }
+      ciclosEscala,
     },
     // Aula extra comprada: null, ou { status, valor, pixCode, ... }
     extra: extra ? resumoPasse(extra) : null,
@@ -6028,6 +6041,29 @@ app.post("/api/portal/:key/enroll", wrap(async (req, res) => {
 
 // Marcar aula. { reposicao: true } consome crédito; { extra: true } é aula
 // avulsa paga (não mexe no saldo de reposição — são coisas separadas).
+async function marcarAulaRegularPortal(client, slotId, db = prisma) {
+  const slot = await db.slot.findUnique({ where: { id: Number(slotId) } });
+  if (!slot) throw Object.assign(new Error("Horário não encontrado."), { code: 404 });
+  const dup = await db.booking.findFirst({ where: { slotId: slot.id, ...bookingWhere(client), status: { not: "cancelada" } } });
+  if (dup) throw Object.assign(new Error("Você já tem essa aula marcada."), { code: 400 });
+  if (turmaFechada(slot)) throw Object.assign(new Error(TURMA_FECHADA), { code: 409 });
+  if ((await occupancy(slot.id, db)) >= (slot.capacity || 1))
+    throw Object.assign(new Error("Turma lotada."), { code: 400 });
+  await exigirRegras(client, slot, { db });
+
+  const mensalista = client.plan === "mensalista";
+  return db.booking.create({
+    data: {
+      clientName: client.name, phone: client.phone || "", unit: slot.unit, date: slot.date, time: slot.time, prof: slot.prof || profFor(slot.unit),
+      slotId: slot.id,
+      status: mensalista ? "confirmada" : "aguardando",
+      value: 0,
+      paid: false,
+      paymentMethod: mensalista ? PGTO_PLANO : null,
+    },
+  });
+}
+
 app.post("/api/portal/:key/book", wrap(async (req, res) => {
   const client = req.portalClient;
   if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
@@ -6060,29 +6096,18 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
     return res.status(403).json({
       error: "Sua grade regular já é reservada automaticamente por 12 meses. Para alterar uma data, cancele aquela aula e use a reposição individual. 💚",
     });
-  const slot = await prisma.slot.findUnique({ where: { id: Number(req.body.slotId) } });
-  if (!slot) return res.status(404).json({ error: "Horário não encontrado." });
-  const dup = await prisma.booking.findFirst({ where: { slotId: slot.id, ...bookingWhere(client), status: { not: "cancelada" } } });
-  if (dup) return res.status(400).json({ error: "Você já tem essa aula marcada." });
-  if (turmaFechada(slot)) return res.status(409).json({ error: TURMA_FECHADA });
-  if ((await occupancy(slot.id)) >= (slot.capacity || 1)) return res.status(400).json({ error: "Turma lotada." });
-  // Na escala, a janela de marcação continua valendo. A reserva criada aqui é
-  // somente desta ocorrência e nunca entra em replicação.
-  try { await exigirRegras(client, slot); }
-  catch (e) { return res.status(e.code || 409).json({ error: e.message, codigo: e.codigo }); }
-  const mensalista = client.plan === "mensalista";
-  const booking = await prisma.booking.create({
-    data: {
-      clientName: client.name, phone: client.phone || "", unit: slot.unit, date: slot.date, time: slot.time, prof: slot.prof || profFor(slot.unit),
-      slotId: slot.id,
-      status: mensalista ? "confirmada" : "aguardando",
-      // A aula não tem preço próprio: quem se paga é a mensalidade do mês.
-      value: 0,
-      paid: false,
-      paymentMethod: mensalista ? "Mensalista" : null,
-    },
-  });
-  res.json(booking);
+  try {
+    // A leitura da quitação e do saldo e a reserva usam a mesma transação.
+    const booking = tipoMensalista(client) === "escala"
+      ? await prisma.$transaction(db => marcarAulaRegularPortal(client, req.body.slotId, db), { isolationLevel: "Serializable" })
+      : await marcarAulaRegularPortal(client, req.body.slotId);
+    return res.json(booking);
+  } catch (e) {
+    if (e.code === "P2034")
+      return res.status(409).json({ error: "A agenda foi atualizada. Confira os horários e tente novamente." });
+    if (!Number.isInteger(e.code)) throw e;
+    return res.status(e.code).json({ error: e.message, codigo: e.codigo });
+  }
 }));
 
 /* Libera a vaga da aula e, se couber, gera o crédito de reposição.
@@ -6121,9 +6146,9 @@ async function previaLiberacao(client, b) {
   if (b.paymentMethod === PGTO_PRESENTE)
     return { credito: false, aviso: "Esta é a sua aula de presente 🎁 — se você liberar, ela não é remarcada." };
   const sem = await semCreditoAgora(client, b);
-  // Escala: a aula liberada não volta para o pacote do mês (ver aulasDoPacote).
+  // Escala: a aula liberada não volta para o pacote do ciclo (ver aulasDoPacote).
   const pacote = tipoMensalista(client) === "escala" && b.paymentMethod === PGTO_PLANO
-    ? " Ela continua contando nas aulas do seu plano deste mês."
+    ? " Ela continua contando nas aulas do seu plano neste ciclo."
     : "";
   if (!sem.codigo) return { credito: true, aviso: `Liberando agora, esta aula vira 1 crédito de reposição. 💚${pacote}` };
   if (sem.codigo === "plano") return { credito: false, aviso: "" };

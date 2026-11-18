@@ -7,7 +7,7 @@ import { api } from "./api.js";
 import { WaIcon } from "./icons.jsx";
 import PixQR from "./PixQR.jsx";
 import Agendamentos from "./Agendamentos.jsx";
-import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, compPorExtenso, PLANOS_MENSALISTA, valorPlanoMeta, aulasSeChocam, janelaEscala, aulasDoPacote, dowMon, PGTO_PRESENTE } from "./helpers.js";
+import { fmtDate, fmtDateLong, todayISO, addDays, waLink, money, faixaHorario, compLabel, PLANOS_MENSALISTA, valorPlanoMeta, aulasSeChocam, dowMon, PGTO_PRESENTE } from "./helpers.js";
 
 const CPF_KEY = "fqc_portal_cpf";
 // WhatsApp da escola: (31) 98496-6403 — sem o "55", que o waLink já acrescenta
@@ -694,9 +694,6 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
   const repondo = modo === "repor";
   const extrando = modo === "extra";
   const presenteando = modo === "presente";
-  // Mensalista escala: marca quando quiser, no mês atual e no seguinte, até o
-  // pacote do mês (4 no 1x, 8 no 2x).
-  // Reposição, aula extra e presente são sempre escolhas unitárias, fora da grade de 12 meses.
   const foraDoPlano = repondo || extrando || presenteando;
   // O presente vale até uma data: depois dela o dia não oferece vaga.
   const passouDoPresente = (date) => presenteando && !!presenteAte && date > presenteAte;
@@ -704,8 +701,6 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
   const sabadoFechado = (date) => repondo && semSabado && dowMon(date) === 5;
   // Reposição só depois da aula liberada: antes disso o dia não oferece vaga (o servidor também barra).
   const antesDaLiberada = (date) => repondo && !!repoAPartirDe && date < repoAPartirDe;
-  const janelaGeral = (regras && regras.janela) || { aberta: true, motivo: "" };
-  const janelaFechadaGeral = !foraDoPlano && regras && regras.tipo === "escala" && !janelaGeral.aberta;
 
   const aulasPorDia = {};
   bookings.forEach((b) => { (aulasPorDia[b.date] = aulasPorDia[b.date] || []).push(b); });
@@ -757,29 +752,19 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
   const minhasDoDia = dia ? aulasPorDia[dia] || [] : [];
   const vagasDoDia = dia && dia >= t && !passouDoPresente(dia) && !sabadoFechado(dia) && !antesDaLiberada(dia) ? vagasPorDia[dia] || [] : [];
 
-  const tetoEscala = regras && regras.tetoEscala;
-  const compDia = dia ? dia.slice(0, 7) : "";
-  const marcadasNoMes = dia ? aulasDoPacote(bookings, compDia) : 0;
-  const limiteMes = tetoEscala?.limite || 4;
-  // O pacote no topo acompanha o mês do calendário: na escala ela marca este
-  // mês e o próximo, e cada um tem o seu.
-  const compVisto = `${y}-${String(m + 1).padStart(2, "0")}`;
-  const usadasNoVisto = aulasDoPacote(bookings, compVisto);
-  const tetoAtingido =!foraDoPlano && regras && regras.tipo === "escala" && marcadasNoMes >= limiteMes;
-
-  const janelaDoDia = dia && !foraDoPlano && regras && regras.tipo === "escala"
-    ? janelaEscala(t, dia)
-    : { aberta: true, motivo: "" };
-
-  const bloqueioDoDia = dia
-    ? !janelaDoDia.aberta
-      ? janelaDoDia.motivo
-      : tetoAtingido
-        ? `Você já atingiu o limite de ${limiteMes} aulas do seu plano no mês de ${compPorExtenso(compDia)}. Para agendar mais aulas, adquira uma Aula Extra! 💚`
-        : gradeJaReservada
-          ? "Sua grade regular já está reservada por 12 meses. Cancelamentos, reposições e aulas extras são feitos uma aula por vez."
-          : ""
-    : "";
+  const escala = !foraDoPlano && regras?.tipo === "escala";
+  const ciclos = regras?.ciclosEscala || [];
+  const cicloDoDia = dia && ciclos.find(ciclo => dia >= ciclo.inicio && dia <= ciclo.fim);
+  const cicloVisivel = cicloDoDia || ciclos.find(ciclo => ciclo.fim >= t);
+  let bloqueioDoDia = "";
+  if (dia && escala) {
+    if (cicloDoDia) bloqueioDoDia = cicloDoDia.bloqueio;
+    else if (ciclos.some(ciclo => dia === ciclo.vencimento || dia === ciclo.vencimentoSeguinte))
+      bloqueioDoDia = "A marcação de aulas do plano Escala fica fechada no dia do vencimento.";
+    else bloqueioDoDia = "As marcações do plano Escala abrem a cada ciclo, após o vencimento e a quitação da mensalidade.";
+  } else if (dia && gradeJaReservada) {
+    bloqueioDoDia = "Sua grade regular já está reservada por 12 meses. Cancelamentos, reposições e aulas extras são feitos uma aula por vez.";
+  }
 
   return (
     <div className="mini-agenda" id="pt-agenda">
@@ -789,10 +774,11 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
         <button className="mini-nav" onClick={() => { setOff(off + 1); setDia(null); }} aria-label="Próximo mês">→</button>
       </div>
 
-      {regras && regras.tipo === "escala" && tetoEscala && (
+      {escala && cicloVisivel && (
         <div className="mini-dica" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: ".5rem", marginBottom: ".5rem" }}>
-          <span>🗓️ <b>Plano Escala:</b> {usadasNoVisto} de {limiteMes} aulas de {label} usadas</span>
-          {usadasNoVisto >= limiteMes && <span style={{ color: "var(--warn)", fontWeight: 600 }}>Limite do mês atingido</span>}
+          <span><b>Plano Escala</b> · {fmtDate(cicloVisivel.inicio)} a {fmtDate(cicloVisivel.fim)} · {cicloVisivel.marcadas} de {cicloVisivel.limite} aulas usadas</span>
+          {cicloVisivel.atingido && <span style={{ color: "var(--warn)", fontWeight: 600 }}>Limite do ciclo atingido</span>}
+          {!dia && cicloVisivel.bloqueio && !cicloVisivel.atingido && <span>{cicloVisivel.bloqueio}</span>}
         </div>
       )}
 
@@ -817,12 +803,6 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
           🎁 Escolhendo o horário da sua <b>aula de presente</b>{presenteAte ? <> — escolha um dia até <b>{fmtDate(presenteAte)}</b></> : null}.
           Ela não ocupa vaga das aulas do seu plano.
           <button className="pt-link" onClick={onSairModo}>Deixar para depois</button>
-        </div>
-      )}
-
-      {janelaFechadaGeral && (
-        <div className="mini-repo-aviso" style={{ borderLeftColor: "var(--warn)" }}>
-          🗓️ {janelaGeral.motivo}
         </div>
       )}
 

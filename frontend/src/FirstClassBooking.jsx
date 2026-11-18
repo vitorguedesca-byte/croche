@@ -80,8 +80,7 @@ function PtAgenda({ available, value, onPick }) {
    ver com quantas aulas ela faz:
 
    • FIXO   — o mesmo dia e horário toda semana, a escola deixa marcado para você.
-   • ESCALA — um pacote de aulas no mês (4 no 1x, 8 no 2x) que ela marca
-              quando quiser (29/10/2026).
+   • ESCALA — pacote por ciclo de vencimento (4 no 1x, 8 no 2x).
 
    3x e 4x por semana só existem no fixo (23/09/2026). */
 function EscolhaDePlano({
@@ -184,7 +183,7 @@ function EscolhaDePlano({
             <Opcao
               on={tipo === "escala"} onClick={() => setTipo("escala")}
               titulo="Escala"
-              linhas="Você tem um pacote de aulas no mês e marca quando quiser, nos dias e horários disponíveis. Bom para quem tem a semana variável."
+              linhas="Você escolhe os dias e horários disponíveis no seu ciclo. As marcações abrem no dia seguinte ao vencimento, com a mensalidade paga."
             />
           )}
           {/* Aqui dizia "de segunda a sexta, até as 18h" — as duas regras saíram
@@ -203,7 +202,7 @@ function EscolhaDePlano({
             <h3 style={{ marginTop: 0 }}>🧺 Só a aula avulsa mesmo?</h3>
             <p>Você quer pagar <b>somente a aula avulsa</b> ({money(valorAvulsa)} por uma aula de {duracao})?</p>
             {comparativo.length > 0 && (<>
-              <p>Temos também a opção de <b>mensalista na escala</b>: você tem um pacote de aulas por mês e marca quando quiser, nos dias e horários disponíveis — e cada aula fica mais em conta:</p>
+              <p>Na opção <b>mensalista na escala</b>, você recebe um pacote de aulas por ciclo e escolhe entre os horários disponíveis. As marcações abrem no dia seguinte ao vencimento, com a mensalidade paga, e as aulas do pacote vão até a véspera do próximo vencimento.</p>
               <ul style={{ margin: ".3rem 0 0 1.1rem", padding: 0 }}>
                 {comparativo.map((p) => (
                   <li key={p.freq} style={{ marginBottom: ".3rem" }}>

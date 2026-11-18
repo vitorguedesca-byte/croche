@@ -2,17 +2,16 @@
    Combinado com a Inêz em 22/08/2026. Existem dois tipos de mensalista:
 
    • FIXO   — tem dia e hora fixos; quem monta a agenda dela é a Inêz (em lote).
-   • ESCALA — ela mesma marca a aula pelo portal, durante a semana.
+   • ESCALA — ela mesma marca cada aula pelo portal.
 
    A frequência de 1x ou 2x por semana define somente quantos padrões entram
    na grade inicial de 12 meses. Ela não cria um teto semanal: feriado fechado,
    cancelamento, remarcação, reposição e aula extra não alteram uma contagem
    obrigatória da semana.
 
-   Para a modalidade ESCALA (Vitor, 29/10/2026) não há mais regra de dia nem
-   de semana: ela tem um PACOTE de aulas por mês (4 no 1x, 8 no 2x) e marca
-   quando quiser — as 4 na mesma semana, se for o caso — no mês atual e no
-   seguinte. Semana sem aula não vira reposição. Ver janelaEscala().
+   A escala tem um pacote de 4 ou 8 aulas por ciclo de vencimento. As aulas
+   podem cair na mesma semana. O portal libera o ciclo após o vencimento
+   e a quitação da mensalidade. Saldo do pacote não vira reposição.
 
    DUAS REGRAS DE DATA/HORA FORAM REMOVIDAS, e pelo mesmo motivo — as duas
    diziam que parte da grade da escola não fazia parte do plano:
@@ -352,35 +351,14 @@ export const mesmaSemana = (a, b) => segundaDaSemana(a) === segundaDaSemana(b);
 // Só conta como aula do plano o que o backend marcou como "Mensalista".
 export const contaNoTeto = (b) => b && b.status !== "cancelada" && b.paymentMethod === PGTO_PLANO;
 
-/* ===================== JANELA DA ESCALA: O PACOTE DO MÊS =====================
-   Vitor, 29/10/2026. Substitui as duas regras anteriores — a do 1x ("a próxima
-   aula é marcada no dia da sua aula") e a do 2x de 04/09 ("duas por semana, a
-   próxima semana abre na última aula desta").
-
-   A aluna de escala tem um PACOTE de aulas por mês (limiteMensalEscala: 4 no
-   1x, 8 no 2x) e marca quando quiser. Não existe mais regra de dia nem de
-   semana: as 4 aulas do 1x podem cair todas na mesma semana. O 1x/2x diz só o
-   tamanho do pacote.
-
-   O que sobra para a janela é ATÉ ONDE ela enxerga: o mês atual e o seguinte
-   (ESCALA_MESES_ABERTOS), cada um com o seu pacote. Só o mês atual deixaria a
-   aluna sem como marcar a aula da semana que vem no dia 29; sem limite nenhum,
-   a escala viraria grade fixa e seguraria vaga por meses.
-
-   O que ela não marcar no mês se perde: semana sem aula NÃO vira reposição.
-   Reposição só nasce de aula marcada e liberada — e a aula liberada continua
-   contando no pacote (ver aulasDoPacote), senão liberar daria duas aulas por
-   uma: o crédito e a vaga de volta no pacote. */
-export const ESCALA_MESES_ABERTOS = 2; // o mês atual + o seguinte
-
-export function janelaEscala(hoje, alvoDate) {
-  if (!alvoDate) return { aberta: true, motivo: "" };
+/* Reposição da escala tem crédito próprio e conserva a janela de dois meses. */
+export function janelaReposicaoEscala(hoje, alvoDate) {
   if (alvoDate < hoje) return { aberta: false, motivo: "Não é possível agendar aulas em datas passadas." };
-  const ultimoMes = somarComp(String(hoje).slice(0, 7), ESCALA_MESES_ABERTOS - 1);
+  const ultimoMes = somarComp(hoje.slice(0, 7), 1);
   if (String(alvoDate).slice(0, 7) > ultimoMes)
     return {
       aberta: false,
-      motivo: `Na escala você marca as aulas deste mês e do próximo. As de ${compPorExtenso(somarComp(ultimoMes, 1))} abrem no dia 1º. 💚`,
+      motivo: `Na escala você marca reposições para este mês e o próximo. As de ${compPorExtenso(somarComp(ultimoMes, 1))} abrem no dia 1º. 💚`,
     };
   return { aberta: true, motivo: "" };
 }
@@ -413,10 +391,10 @@ export function tetoSemanal(client, date, aulasAtivas) {
   return { limite, marcadas, restantes: limite ? Math.max(0, limite - marcadas) : null };
 }
 
-/* ---------- teto de aulas por mês para aluna de ESCALA ----------
+/* ---------- teto de aulas por ciclo para aluna de ESCALA ----------
    Vitor, 03/09/2026:
-   • Aluna de escala no plano 1x (R$ 120,00): tem direito a 4 aulas no mês.
-   • Aluna de escala no plano 2x (R$ 200,00): tem direito a 8 aulas no mês.
+   • Aluna de escala no plano 1x (R$ 120,00): tem direito a 4 aulas por ciclo.
+   • Aluna de escala no plano 2x (R$ 200,00): tem direito a 8 aulas por ciclo.
    Reposições (PGTO_REPOSICAO), aulas extras (PGTO_EXTRA) e aulas de presente
    (PGTO_PRESENTE) NÃO consomem essas aulas do plano mensal.
 
@@ -434,14 +412,14 @@ export function compPorExtenso(comp) {
   return `${meses[+m[2] - 1]} de ${m[1]}`;
 }
 
-export function limiteMensalEscala(client, date) {
-  const freq = freqNaData(client, date);
+export function limiteMensalEscala(client, competencia) {
+  const freq = freqNaData(client, competencia);
   if (freq === 2) return 8;
   if (client?.monthlyValue && Number(client.monthlyValue) >= 200) return 8;
-  return 4; // padrão 1x (R$ 120,00) = 4 aulas por mês
+  return 4;
 }
 
-/* Quantas aulas do pacote do mês `comp` ('YYYY-MM') a aluna já usou.
+/* Quantas aulas do pacote do ciclo a aluna já usou.
 
    Conta as aulas do plano de pé MAIS as que ela liberou (`liberada`, gravado
    por liberarAula no server): a liberada vira crédito de reposição, e devolver
@@ -451,25 +429,56 @@ export function limiteMensalEscala(client, date) {
    A liberada deixa de contar se a mesma aula (data e hora) voltou a ficar de
    pé: é a aluna se arrependendo, e a aula não pode contar duas vezes. É a
    mesma leitura de creditosComAulaDeVolta no server. */
-export function aulasDoPacote(todasAulasDaAluna, comp) {
-  const doMes = (todasAulasDaAluna || []).filter(
-    (b) => b && b.paymentMethod === PGTO_PLANO && String(b.date || "").startsWith(comp)
+export function aulasDoPacote(todasAulasDaAluna, { inicio, fim }) {
+  const doCiclo = (todasAulasDaAluna || []).filter(
+    (b) => b?.paymentMethod === PGTO_PLANO && b.date >= inicio && b.date <= fim
   );
   const chave = (b) => `${b.date} ${hhmm(b.time)}`;
-  const dePe = doMes.filter((b) => b.status !== "cancelada");
+  const dePe = doCiclo.filter((b) => b.status !== "cancelada");
   const aulasDePe = new Set(dePe.map(chave));
   const liberadas = new Set(
-    doMes.filter((b) => b.status === "cancelada" && b.liberada).map(chave).filter((k) => !aulasDePe.has(k))
+    doCiclo.filter((b) => b.status === "cancelada" && b.liberada).map(chave).filter((k) => !aulasDePe.has(k))
   );
   return dePe.length + liberadas.size;
 }
 
-export function tetoMensalEscala(client, date, todasAulasDaAluna) {
-  const comp = String(date || "").slice(0, 7);
-  const limite = limiteMensalEscala(client, date);
-  const marcadas = aulasDoPacote(todasAulasDaAluna, comp);
+function mensalidadeDoCiclo(mensalidades, competencia) {
+  const ativas = mensalidades.filter(m => m.competencia === competencia && m.status !== "cancelado");
+  return ativas.find(m => m.status === "pago") || ativas[0];
+}
+
+function vencimentoDoCiclo(client, competencia, vencimentoDia, mensalidade) {
+  // Uma cobrança de competência passada pode ter sido emitida com vencimento
+  // em outro mês. Isso não transfere o pacote dela para o mês da emissão.
+  if (mensalidade?.dueDate?.slice(0, 7) === competencia) return mensalidade.dueDate;
+  const dia = Math.min(28, Math.max(1, client.billingDay || vencimentoDia));
+  return `${competencia}-${String(dia).padStart(2, "0")}`;
+}
+
+export function cicloEscala(client, competencia, { vencimentoDia = 10, mensalidades = [] } = {}) {
+  const mensalidade = mensalidadeDoCiclo(mensalidades, competencia);
+  const proxima = somarComp(competencia, 1);
+  const vencimento = vencimentoDoCiclo(client, competencia, vencimentoDia, mensalidade);
+  const vencimentoSeguinte = vencimentoDoCiclo(client, proxima, vencimentoDia, mensalidadeDoCiclo(mensalidades, proxima));
   return {
-    competencia: comp,
+    competencia, vencimento, vencimentoSeguinte,
+    inicio: somarDias(vencimento, 1), fim: somarDias(vencimentoSeguinte, -1),
+    paga: mensalidade?.status === "pago",
+  };
+}
+
+export function cicloEscalaNaData(client, date, cobranca) {
+  const competencia = date.slice(0, 7);
+  const ciclo = cicloEscala(client, competencia, cobranca);
+  return date <= ciclo.vencimento ? cicloEscala(client, somarComp(competencia, -1), cobranca) : ciclo;
+}
+
+export function tetoCicloEscala(client, ciclo, todasAulasDaAluna) {
+  const limite = limiteMensalEscala(client, ciclo.competencia);
+  // Reservas anteriores à mudança ou feitas pela secretaria no vencimento
+  // também ocupam uma das aulas do ciclo que se encerra naquela data.
+  const marcadas = aulasDoPacote(todasAulasDaAluna, { inicio: ciclo.inicio, fim: ciclo.vencimentoSeguinte });
+  return {
     limite,
     marcadas,
     restantes: Math.max(0, limite - marcadas),
@@ -477,40 +486,47 @@ export function tetoMensalEscala(client, date, todasAulasDaAluna) {
   };
 }
 
-/* Checagem única usada por todos os caminhos de marcação.
+const diaMesBR = (date) => `${date.slice(8, 10)}/${date.slice(5, 7)}`;
+const regraAceita = { ok: true, codigo: "", motivo: "" };
 
-   client       — o registro do Client (precisa de plan, mensalistaTipo, weeklyFreq)
-   alvo         — { date, time } do horário escolhido
-   ctx.hoje     — 'YYYY-MM-DD' pelo relógio de Brasília
-   ctx.todasAulas  — aulas da aluna, canceladas inclusive (o pacote do mês
-                     conta as liberadas — ver aulasDoPacote)
-   ctx.ignorarJanela — true em caminhos onde a janela da escala não faz sentido
-   ctx.ignorarTeto   — true para reposição e aula extra
+export function janelaCicloEscala(ciclo, hoje, date) {
+  if (date < hoje)
+    return { ok: false, codigo: "escala", motivo: "Não é possível agendar aulas em datas passadas." };
+  if (date > ciclo.fim)
+    return { ok: false, codigo: "escala", motivo: "A marcação de aulas do plano Escala fica fechada no dia do vencimento." };
+  if (hoje < ciclo.inicio)
+    return { ok: false, codigo: "escala", motivo: `As marcações deste ciclo abrem em ${diaMesBR(ciclo.inicio)}, com a mensalidade paga.` };
+  if (!ciclo.paga)
+    return { ok: false, codigo: "mensalidade_escala", motivo: `Pague a mensalidade com vencimento em ${diaMesBR(ciclo.vencimento)} para marcar aulas deste ciclo.` };
+  return regraAceita;
+}
 
-   Devolve { ok:true } ou { ok:false, codigo, motivo }.
-   `codigo` é 'escala' | 'teto_mes'. */
+function checarTetoEscala(teto) {
+  if (teto.atingido)
+    return { ok: false, codigo: "teto_mes", motivo: `Você já marcou as ${teto.limite} aulas do seu plano previstas para este ciclo. Para fazer mais aulas, você pode adquirir uma Aula Extra no portal! 💚` };
+  return regraAceita;
+}
+
+export function resumoCiclosEscala(client, hoje, cobranca, aulas) {
+  const atual = cicloEscalaNaData(client, hoje, cobranca);
+  const seguinte = cicloEscala(client, somarComp(atual.competencia, 1), cobranca);
+  return [atual, seguinte].map(ciclo => {
+    const teto = tetoCicloEscala(client, ciclo, aulas);
+    const janela = janelaCicloEscala(ciclo, hoje, hoje > ciclo.inicio ? hoje : ciclo.inicio);
+    return { ...ciclo, ...teto, bloqueio: janela.motivo || checarTetoEscala(teto).motivo };
+  });
+}
+
+/* A secretaria pode ignorar a janela e a quitação. Extra e presente também
+   ignoram o teto, pois utilizam passes próprios. */
 export function checarRegras(client, alvo, ctx = {}) {
-  const tipo = tipoMensalista(client);
-  if (!tipo) return { ok: true, codigo: "", motivo: "" }; // avulsa/matrícula seguem como antes
-
-  if (tipo === "escala") {
-    if (!ctx.ignorarJanela) {
-      const j = janelaEscala(ctx.hoje, alvo?.date);
-      if (!j.aberta) return { ok: false, codigo: "escala", motivo: j.motivo };
-    }
-    if (!ctx.ignorarTeto && alvo?.date) {
-      const tm = tetoMensalEscala(client, alvo.date, ctx.todasAulas);
-      if (tm.atingido) {
-        return {
-          ok: false,
-          codigo: "teto_mes",
-          motivo: `Você já atingiu o limite de ${tm.limite} aulas do seu plano no mês de ${compPorExtenso(tm.competencia)}. Para agendar mais aulas, você pode adquirir uma Aula Extra no portal! 💚`,
-        };
-      }
-    }
+  if (tipoMensalista(client) !== "escala" || (ctx.ignorarJanela && ctx.ignorarTeto)) return regraAceita;
+  const ciclo = ctx.ciclo || cicloEscalaNaData(client, alvo.date, ctx.cobranca);
+  if (!ctx.ignorarJanela) {
+    const janela = janelaCicloEscala(ciclo, ctx.hoje, alvo.date);
+    if (!janela.ok) return janela;
   }
-
-  return { ok: true, codigo: "", motivo: "" };
+  return ctx.ignorarTeto ? regraAceita : checarTetoEscala(tetoCicloEscala(client, ciclo, ctx.todasAulas));
 }
 
 /* ---------- ciclo de cobrança da mensalidade ----------
