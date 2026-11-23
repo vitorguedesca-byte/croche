@@ -1045,8 +1045,8 @@ const resumoPresente = (p, hoje = todayISO()) => ({
   createdAt: p.createdAt,
 });
 
-const presentesDisponiveis = async (clientId, hoje = todayISO()) =>
-  (await prisma.aulaPresente.findMany({ where: { clientId, status: "disponivel", expiresOn: { gte: hoje } } }))
+const presentesDisponiveis = async (clientId, hoje = todayISO(), db = prisma) =>
+  (await db.aulaPresente.findMany({ where: { clientId, status: "disponivel", expiresOn: { gte: hoje } } }))
     .sort((a, b) => a.expiresOn.localeCompare(b.expiresOn) || a.id - b.id);
 
 // Ela consegue abrir o portal para usar? Presente que ela não vê não é presente.
@@ -1080,17 +1080,24 @@ async function darAulasPresente(client, { quantidade = 1, motivo = "", quem = nu
   return criados;
 }
 
-/* Marca a aula com o presente. Portal e painel passam por aqui; a diferença é
-   o `forcar`, que só o painel manda (e que não pula a validade nem o feriado). */
-async function marcarAulaPresente(client, slotId, { forcar = false } = {}) {
+async function marcarAulaPresente(client, slotId, opcoes = {}) {
+  try {
+    return await prisma.$transaction(db => consumirAulaPresente(db, client, slotId, opcoes), { isolationLevel: "Serializable" });
+  } catch (e) {
+    if (e.code !== "P2034") throw e;
+    throw Object.assign(new Error("A agenda foi atualizada. Confira os horários e tente novamente."), { code: 409 });
+  }
+}
+
+async function consumirAulaPresente(db, client, slotId, { forcar = false, peloPortal = false, reservaAnteriorId = null } = {}) {
   if (client.status === "cancelado")
     throw Object.assign(new Error("Inscrição cancelada. Chame a gente no WhatsApp."), { code: 403 });
   const t = todayISO();
-  const slot = await prisma.slot.findUnique({ where: { id: Number(slotId) } });
+  const slot = await db.slot.findUnique({ where: { id: Number(slotId) } });
   if (!slot) throw Object.assign(new Error("Horário não encontrado."), { code: 404 });
   if (slot.date < t) throw Object.assign(new Error("Escolha uma aula futura."), { code: 400 });
 
-  const disponiveis = await presentesDisponiveis(client.id, t);
+  const disponiveis = await presentesDisponiveis(client.id, t, db);
   if (!disponiveis.length)
     throw Object.assign(new Error("Você não tem aula de presente para marcar."), { code: 409 });
   const presente = presenteParaAula(disponiveis, slot.date, t);
@@ -1100,39 +1107,72 @@ async function marcarAulaPresente(client, slotId, { forcar = false } = {}) {
   }
 
   // Como a aula extra: fora do plano, então a janela da escala e o teto não valem.
-  await exigirRegras(client, slot, { forcar, ignorarJanela: true, ignorarTeto: true });
-  const dup = await prisma.booking.findFirst({
-    where: { slotId: slot.id, ...bookingWhere(client), status: { not: "cancelada" } },
+  await exigirRegras(client, slot, { forcar, ignorarJanela: true, ignorarTeto: true, db });
+
+  // O vínculo identifica o presente da aluna mesmo após uma mudança no cadastro.
+  // Quando a escola devolve o presente, a reserva deixa de ter esse vínculo.
+  const usados = peloPortal ? await db.aulaPresente.findMany({
+    where: { clientId: client.id, status: "usado", usedBookingId: { not: null } },
+    select: { usedBookingId: true },
+  }) : [];
+  const idsPresentesUsados = new Set(usados.map(p => p.usedBookingId));
+  const reservas = await db.booking.findMany({
+    where: { slotId: slot.id, OR: [
+      { ...bookingWhere(client), status: { not: "cancelada" } },
+      { id: { in: [...idsPresentesUsados] }, paymentMethod: PGTO_PRESENTE },
+    ] },
+    select: { id: true, status: true, paymentMethod: true, attendance: true },
+    orderBy: { id: "desc" },
   });
-  if (dup) throw Object.assign(new Error("Você já tem essa aula marcada."), { code: 400 });
-  if ((await occupancy(slot.id)) >= (slot.capacity || 1))
+  const ativas = reservas.filter(b => b.status !== "cancelada");
+  const ativa = ativas[0];
+  const usaPresente = b => b.paymentMethod === PGTO_PRESENTE && idsPresentesUsados.has(b.id);
+  if (ativa && (ativas.length > 1 || ativa.status !== "confirmada" || ativa.attendance || !usaPresente(ativa)))
+    throw Object.assign(new Error("Você já tem essa aula marcada."), { code: 400 });
+
+  const anterior = ativa || reservas.find(usaPresente);
+  if (reservaAnteriorId !== null && reservaAnteriorId !== anterior?.id)
+    throw Object.assign(new Error("Sua reserva mudou. Confira a agenda antes de usar outro presente."), { code: 409 });
+
+  // Uma substituição usa a própria vaga mesmo se a turma estiver lotada.
+  if (!ativa && (await occupancy(slot.id, db)) >= (slot.capacity || 1))
     throw Object.assign(new Error("Turma lotada."), { code: 409 });
 
-  /* Reserva o presente ANTES de criar a aula: dois toques seguidos (ou portal e
-     painel ao mesmo tempo) não gastam o mesmo presente em duas aulas. */
-  const reservado = await prisma.aulaPresente.updateMany({
+  if (anterior && reservaAnteriorId === null) {
+    const aviso = ativa
+      ? "Ao confirmar, sua reserva anterior será cancelada. O primeiro presente continuará usado e a nova reserva vai gastar mais um presente."
+      : "Sua reserva anterior foi cancelada e o primeiro presente continua usado. A nova reserva vai gastar mais um presente.";
+    throw Object.assign(new Error(aviso), { code: 409, codigo: "confirmar_novo_presente", reservaAnteriorId: anterior.id });
+  }
+
+  const reservado = await db.aulaPresente.updateMany({
     where: { id: presente.id, status: "disponivel" },
     data: { status: "usado", usedAt: t },
   });
   if (!reservado.count) throw Object.assign(new Error("Este presente acabou de ser usado. Atualize a tela. 💚"), { code: 409 });
 
-  try {
-    const booking = await prisma.booking.create({
+  if (ativa) {
+    await db.booking.update({
+      where: { id: ativa.id },
       data: {
-        clientName: client.name, phone: client.phone || "", unit: slot.unit,
-        date: slot.date, time: slot.time, prof: slot.prof || profFor(slot.unit),
-        slotId: slot.id, status: "confirmada", value: 0, paid: true,
-        paymentMethod: PGTO_PRESENTE, paymentDate: t,
-        // Aula única, como a reposição e a extra: nenhum lote alcança.
-        seriesId: null,
+        status: "cancelada", liberada: true,
+        creditoMotivo: "A reserva foi cancelada ao confirmar uma nova reserva para a mesma turma. O presente da primeira reserva continua usado.",
       },
     });
-    await prisma.aulaPresente.update({ where: { id: presente.id }, data: { usedBookingId: booking.id } });
-    return booking;
-  } catch (e) {
-    await prisma.aulaPresente.update({ where: { id: presente.id }, data: { status: "disponivel", usedAt: null } }).catch(() => {});
-    throw e;
   }
+
+  const booking = await db.booking.create({
+    data: {
+      clientName: client.name, phone: client.phone || "", unit: slot.unit,
+      date: slot.date, time: slot.time, prof: slot.prof || profFor(slot.unit),
+      slotId: slot.id, status: "confirmada", value: 0, paid: true,
+      paymentMethod: PGTO_PRESENTE, paymentDate: t,
+      // Aula única, como a reposição e a extra: nenhum lote alcança.
+      seriesId: null,
+    },
+  });
+  await db.aulaPresente.update({ where: { id: presente.id }, data: { usedBookingId: booking.id } });
+  return booking;
 }
 
 /* A ESCOLA desfez a aula de presente (excluiu, desmarcou a turma, cancelou no
@@ -6086,10 +6126,14 @@ app.post("/api/portal/:key/book", wrap(async (req, res) => {
     }
   }
   if (req.body.presente) {
+    const { reservaAnteriorId = null } = req.body;
+    if (reservaAnteriorId !== null && (!Number.isSafeInteger(reservaAnteriorId) || reservaAnteriorId <= 0))
+      return res.status(400).json({ error: "Confirmação inválida. Confira a agenda e tente novamente." });
     try {
-      return res.json(await marcarAulaPresente(client, req.body.slotId));
+      return res.json(await marcarAulaPresente(client, req.body.slotId, { peloPortal: true, reservaAnteriorId }));
     } catch (e) {
-      return res.status(e.code || 500).json({ error: e.message, codigo: e.codigo });
+      if (!Number.isInteger(e.code)) throw e;
+      return res.status(e.code).json({ error: e.message, codigo: e.codigo, reservaAnteriorId: e.reservaAnteriorId });
     }
   }
   if (client.plan === "mensalista" && client.mensalistaTipo !== "escala")
@@ -6924,7 +6968,10 @@ app.post("/api/clients/:id/presente-book", wrap(async (req, res) => {
   const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
   if (!client) return res.status(404).json({ error: "Aluna não encontrada." });
   try { res.json(await marcarAulaPresente(client, req.body?.slotId, { forcar: !!req.body?.forcar })); }
-  catch (e) { res.status(e.code || 500).json({ error: e.message, codigo: e.codigo }); }
+  catch (e) {
+    if (!Number.isInteger(e.code)) throw e;
+    res.status(e.code).json({ error: e.message, codigo: e.codigo });
+  }
 }));
 
 // Marcar reposição em nome da aluna — body { slotId }

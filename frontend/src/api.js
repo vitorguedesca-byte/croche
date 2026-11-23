@@ -338,8 +338,8 @@ export const api = {
 
   portal: {
     get: (phone) => req("GET", `/api/portal/${encodeURIComponent(phone)}`),
-    book: (phone, slotId, name, modo) => req("POST", `/api/portal/${encodeURIComponent(phone)}/book`, {
-      slotId, name, reposicao: modo === "repor", extra: modo === "extra", presente: modo === "presente",
+    book: (phone, slotId, name, modo, reservaAnteriorId) => req("POST", `/api/portal/${encodeURIComponent(phone)}/book`, {
+      slotId, name, reposicao: modo === "repor", extra: modo === "extra", presente: modo === "presente", reservaAnteriorId,
     }),
     enroll: (phone, data) => req("POST", `/api/portal/${encodeURIComponent(phone)}/enroll`, data),
     // Aula extra: ela compra primeiro (Pix) e só escolhe o horário depois que cai

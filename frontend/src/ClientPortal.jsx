@@ -397,9 +397,22 @@ export default function ClientPortal({ onBack, fromSite, kiosk, onSairKiosk }) {
       },
     }[modo];
     if (!(await confirmModal({ title: cfg.title, message: cfg.message, confirmLabel: cfg.confirmLabel }))) return;
+    const agendar = (reservaAnteriorId) => api.portal.book(phone, slot.id, data.client && data.client.name, modo, reservaAnteriorId);
     setBusy(true);
     try {
-      await api.portal.book(phone, slot.id, data.client && data.client.name, modo);
+      try {
+        await agendar();
+      } catch (e) {
+        if (e.data?.codigo !== "confirmar_novo_presente") throw e;
+        const confirmou = await confirmModal({
+          title: "Usar outro presente nesta turma?",
+          message: `${quando}\n\n${e.message}`,
+          confirmLabel: "Usar outro presente",
+          cancelLabel: "Voltar",
+        });
+        if (!confirmou) return;
+        await agendar(e.data.reservaAnteriorId);
+      }
       flash(cfg.okMsg);
       setModo("normal"); setScreen("home"); await load(phone);
     } catch (e) { toastErro(e.message, "error"); } finally { setBusy(false); }
@@ -750,7 +763,11 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
   }
   const label = base.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
   const minhasDoDia = dia ? aulasPorDia[dia] || [] : [];
-  const vagasDoDia = dia && dia >= t && !passouDoPresente(dia) && !sabadoFechado(dia) && !antesDaLiberada(dia) ? vagasPorDia[dia] || [] : [];
+  const possoUsarOutroPresente = (b) => presenteando && b.date >= t && !passouDoPresente(b.date)
+    && b.paymentMethod === PGTO_PRESENTE && b.status === "confirmada" && !b.attendance;
+  const vagasDoDia = dia && dia >= t && !passouDoPresente(dia) && !sabadoFechado(dia) && !antesDaLiberada(dia)
+    ? (vagasPorDia[dia] || []).filter(s => !minhasDoDia.some(b => b.slotId === s.id && possoUsarOutroPresente(b)))
+    : [];
 
   const escala = !foraDoPlano && regras?.tipo === "escala";
   const ciclos = regras?.ciclosEscala || [];
@@ -832,6 +849,11 @@ function MiniAgenda({ cliente, bookings, available, unit, meta, regras, podeMarc
                 <div className="mini-minha" key={b.id}>
                   <b>{faixaHorario(b.time, meta.duracaoAulaMin)}</b>
                   <span>{b.unit} · {statusText(b)}</span>
+                  {possoUsarOutroPresente(b) && (
+                    <button className="pt-link" disabled={busy} onClick={() => onBook({ id: b.slotId, date: b.date, time: b.time, unit: b.unit })}>
+                      Usar outro presente nesta turma
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
