@@ -1104,10 +1104,11 @@ export function StudentSearchCombobox({ clients, selectedClient, onSelect, onCle
 /* ======================= Nova marcação ======================= */
 export function BookingForm({ slotId }) {
   const { data, run } = useStore();
-  const { close } = useModal();
+  const { open, close } = useModal();
   const slot = slotId ? slotById(data, slotId) : null;
   const meta = data.meta;
   const [selectedClient, setSelectedClient] = useState(null);
+  const [marcandoReposicao, setMarcandoReposicao] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [unit, setUnit] = useState(slot ? slot.unit : meta.units[0]);
@@ -1181,9 +1182,25 @@ export function BookingForm({ slotId }) {
     }
   };
 
+  if (marcandoReposicao && selectedClient) {
+    return (
+      <MakeupBookForm
+        client={selectedClient}
+        slotId={slotId}
+        onBack={() => setMarcandoReposicao(false)}
+        onBooked={(s) => slotId ? open(<SlotDetail slotId={s.id} />) : close()}
+      />
+    );
+  }
+
   return (
     <Modal title="Nova marcação" footer={<>
       <button className="btn ghost" onClick={close}>Cancelar</button>
+      {canAccess("alunos") && (
+        <button data-access="agenda:2" className="btn sec" disabled={!selectedClient} onClick={() => setMarcandoReposicao(true)}>
+          🔁 Marcar reposição
+        </button>
+      )}
       <button data-access="agenda:2" className="btn" onClick={save} disabled={!dates.length}>
         Salvar marcação{repetindo ? ` (${dates.length})` : ""}
       </button>
@@ -3143,9 +3160,10 @@ function MakeupBlock({ client }) {
 
 /* Escolha de turma para marcar o aluno — só turmas futuras com vaga livre.
    Serve tanto para a reposição (consome crédito) quanto para a aula extra (paga). */
-function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso, ate = null, aba, horarios, aviso, onError }) {
+function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso, ate = null, aba, horarios, aviso, onError, onBack, onBooked }) {
   const { data, run } = useStore();
   const { open } = useModal();
+  const voltarAoPerfil = () => open(<ClientProfile client={client} initialTab={aba} />);
   const t = todayISO();
   // `ate`: última data aceita (a validade da aula de presente)
   const [ocupado, setOcupado] = useState(false);
@@ -3163,13 +3181,16 @@ function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso, ate = nul
       if (!(await confirmModal({ title: titulo, message: confirmar(s), confirmLabel: titulo }))) return;
       await run(acao(s, false)); // run já avisa o erro na tela
       toast(sucesso);
-      open(<ClientProfile client={client} initialTab={aba} />);
+      if (onBooked) onBooked(s);
+      else voltarAoPerfil();
     } catch { onError?.(); }
     finally { marcando.current = false; setOcupado(false); }
   };
   return (
     <Modal title={titulo} footer={<>
-      <button className="btn ghost" disabled={ocupado} onClick={() => open(<ClientProfile client={client} initialTab={aba} />)}>← Voltar ao perfil</button>
+      <button className="btn ghost" disabled={ocupado} onClick={onBack || voltarAoPerfil}>
+        {onBack ? "← Voltar à marcação" : "← Voltar ao perfil"}
+      </button>
     </>}>
       <div className="help">{ajuda}</div>
       <div style={{ marginTop: ".8rem" }}>
@@ -3193,27 +3214,32 @@ function SlotPicker({ client, titulo, ajuda, confirmar, acao, sucesso, ate = nul
   );
 }
 
-export function MakeupBookForm({ client }) {
+export function MakeupBookForm({ client, slotId, onBack, onBooked }) {
   const { resumo, erro, recarregar } = useResumoReposicao(client.id, true);
+  const horarios = resumo?.horarios || [];
+  const turmas = slotId ? horarios.filter((s) => s.id === slotId) : horarios;
   const aviso = erro ? <>{erro} <button className="btn ghost sm" onClick={recarregar}>Tentar novamente</button></>
     : !resumo ? "Consultando horários de reposição…"
     : !resumo.elegivel ? resumo.motivo
     : !resumo.saldo ? "A aluna está sem créditos disponíveis."
+    : slotId ? "Esta turma não está disponível para reposição desta aluna. Você pode consultar outros horários em Nova marcação."
     : "Nenhuma turma disponível para reposição nas datas permitidas.";
   return (
     <SlotPicker
       client={client}
       titulo="Marcar reposição"
-      ajuda={<>Escolha uma turma para {client.name}. A reposição acontece em uma data posterior à aula liberada e usa um crédito.
+      ajuda={<>{slotId ? `Reposição para ${client.name} na turma selecionada.` : `Escolha uma turma para ${client.name}.`} A reposição acontece em uma data posterior à aula liberada e usa um crédito.
         {resumo?.regras.semSabado && " Para a grade desta aluna, a reposição é de segunda a sexta."}
       </>}
       confirmar={(s) => `Marcar ${client.name} em reposição?\n\n${s.unit}\n${fmtDateLong(s.date)} às ${s.time}\n\nIsso consome 1 crédito.`}
       acao={(s) => api.makeupBook(client.id, s.id)}
       sucesso="Reposição marcada. 💚"
       aba="repo"
-      horarios={resumo?.horarios || []}
+      horarios={turmas}
       aviso={aviso}
       onError={recarregar}
+      onBack={onBack}
+      onBooked={onBooked}
     />
   );
 }
