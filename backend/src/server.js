@@ -7950,7 +7950,13 @@ async function janelasAbertas() {
   const janelas = [];
   for (const c of clients) {
     const t = ultima.get(chaveTelefone(c.phone));
-    if (t) janelas.push({ id: c.id, fechaEm: new Date(t + 24 * 3600_000).toISOString() });
+    if (t) janelas.push({ id: c.id, key: `c:${c.id}`, fechaEm: new Date(t + 24 * 3600_000).toISOString() });
+  }
+  // leads do funil sem ficha também abrem janela (falaram com o robô)
+  const leads = await prisma.lead.findMany({ where: { clientId: null }, select: { id: true, phone: true } });
+  for (const l of leads) {
+    const t = ultima.get(chaveTelefone(l.phone));
+    if (t) janelas.push({ id: null, key: `l:${l.id}`, fechaEm: new Date(t + 24 * 3600_000).toISOString() });
   }
   return janelas;
 }
@@ -8038,8 +8044,41 @@ app.get("/api/wa/disparo/opcoes", wrap(async (req, res) => {
     limitesTemplate: LIMITES_TEMPLATE,
     emAndamento: emAndamento?.id || null,
     ultimos: await resumirDisparos(),
+    ...(await publicoAvancadoDoDisparo()),
   });
 }));
+
+/* PÚBLICO AVANÇADO do disparo (25/11/2026): além das fichas, as leads do funil
+   que ainda não têm ficha (deixaram o WhatsApp no site, falaram com o robô,
+   foram anotadas pela equipe), a etapa/origem do funil de cada ficha e quem
+   recebeu disparo nos últimos 30 dias — para não mandar a mesma pessoa duas
+   vezes na semana (e não esbarrar no limite de marketing da Meta).
+   "Não era lead" (engano, spam) fica fora: não é contato da escola. */
+async function publicoAvancadoDoDisparo() {
+  const leads = await prisma.lead.findMany({
+    where: { OR: [{ motivoPerda: null }, { motivoPerda: { not: "nao_lead" } }] },
+    select: { id: true, nome: true, phone: true, unit: true, clientId: true, etapa: true, origem: true, canal: true, createdAt: true, perdidaAt: true, motivoPerda: true },
+  });
+  const desde = new Date(Date.now() - 30 * 24 * 3600_000);
+  const recentes = await prisma.waDisparoItem.findMany({
+    where: { situacao: "enviado", disparo: { inicioEm: { gte: desde } } },
+    select: { clientId: true, leadId: true, disparo: { select: { inicioEm: true } } },
+  });
+  const recebeuEm = {};
+  for (const r of recentes) {
+    const k = r.clientId ? `c:${r.clientId}` : r.leadId ? `l:${r.leadId}` : null;
+    const t = r.disparo.inicioEm.toISOString();
+    if (k && (!recebeuEm[k] || recebeuEm[k] < t)) recebeuEm[k] = t;
+  }
+  return {
+    leadsSemFicha: leads.filter((l) => !l.clientId).map((l) => ({
+      id: l.id, nome: l.nome, phone: l.phone, unit: l.unit, etapa: l.etapa, origem: l.origem, canal: l.canal,
+      desde: l.createdAt.toISOString().slice(0, 10), perdida: !!l.perdidaAt, motivoPerda: l.motivoPerda,
+    })),
+    funilDaFicha: Object.fromEntries(leads.filter((l) => l.clientId).map((l) => [l.clientId, { etapa: l.etapa, origem: l.origem, canal: l.canal }])),
+    recebeuDisparoEm: recebeuEm,
+  };
+}
 
 app.post("/api/wa/disparo", wrap(async (req, res) => {
   if (!waConfigured()) return res.status(400).json({ error: "WhatsApp não configurado no servidor." });
@@ -8048,7 +8087,8 @@ app.post("/api/wa/disparo", wrap(async (req, res) => {
 
   const { modo, template, texto } = req.body || {};
   const ids = [...new Set((req.body?.clientIds || []).map(Number).filter(Boolean))];
-  if (!ids.length) return res.status(400).json({ error: "Escolha pelo menos uma aluna." });
+  const leadIds = [...new Set((req.body?.leadIds || []).map(Number).filter(Boolean))];
+  if (!ids.length && !leadIds.length) return res.status(400).json({ error: "Escolha pelo menos uma pessoa." });
   if (!["template", "texto"].includes(modo)) return res.status(400).json({ error: "Modo inválido." });
 
   let tpl = null;
@@ -8072,8 +8112,24 @@ app.post("/api/wa/disparo", wrap(async (req, res) => {
     return res.status(400).json({ error: "Escreva a mensagem." });
   }
 
-  const clients = await prisma.client.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, phone: true } });
-  if (!clients.length) return res.status(400).json({ error: "Nenhuma das alunas escolhidas existe mais." });
+  const clients = ids.length ? await prisma.client.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, phone: true } }) : [];
+  // lead que ganhou ficha depois de a tela abrir vai pela ficha (já pode estar na lista)
+  const leads = leadIds.length ? await prisma.lead.findMany({ where: { id: { in: leadIds }, clientId: null }, select: { id: true, nome: true, phone: true } }) : [];
+  /* O mesmo número uma vez só: a mãe e a filha na mesma ficha de telefone, a
+     lead que é a mesma pessoa de uma ex-aluna... Cobrança e marketing por
+     mensagem — e duas iguais seguidas parecem spam. Ficha tem preferência. */
+  const vistos = new Set();
+  const destinos = [];
+  for (const d of [
+    ...clients.map((c) => ({ clientId: c.id, leadId: null, nome: c.name, phone: c.phone })),
+    ...leads.map((l) => ({ clientId: null, leadId: l.id, nome: l.nome, phone: l.phone })),
+  ]) {
+    const k = chaveTelefone(d.phone);
+    if (k && vistos.has(k)) continue;
+    if (k) vistos.add(k);
+    destinos.push(d);
+  }
+  if (!destinos.length) return res.status(400).json({ error: "Nenhuma das pessoas escolhidas existe mais." });
   const id = crypto.randomUUID();
   const por = req.admin?.username || "painel";
   await prisma.waDisparo.create({
@@ -8084,13 +8140,13 @@ app.post("/api/wa/disparo", wrap(async (req, res) => {
       template: tpl ? tpl.name : null,
       texto: modo === "texto" ? String(texto).slice(0, 4000) : null,
       itens: {
-        create: clients
-          .sort((a, b) => a.name.localeCompare(b.name))
-          .map((c) => ({ clientId: c.id, nome: c.name.slice(0, 120), phone: String(c.phone || "").slice(0, 30) })),
+        create: destinos
+          .sort((a, b) => a.nome.localeCompare(b.nome))
+          .map((d) => ({ clientId: d.clientId, leadId: d.leadId, nome: String(d.nome || "").slice(0, 120), phone: String(d.phone || "").slice(0, 30) })),
       },
     },
   });
-  console.log(`[wa disparo] ${id} por ${por}: ${modo}${tpl ? " " + tpl.name : ""} para ${clients.length} aluna(s)`);
+  console.log(`[wa disparo] ${id} por ${por}: ${modo}${tpl ? " " + tpl.name : ""} para ${destinos.length} pessoa(s) (${clients.length} ficha(s), ${leads.length} lead(s) sem ficha)`);
   res.json({ id });
 
   // Daqui em diante a requisição já respondeu: o envio segue sozinho, gravando
@@ -8102,13 +8158,17 @@ async function rodarDisparo(id, { modo, texto, tpl }) {
   try {
     const itens = await prisma.waDisparoItem.findMany({ where: { disparoId: id }, orderBy: { id: "asc" } });
     // a unidade não fica no item: vem da ficha, para {unidade} e {endereco}
-    const fichas = await prisma.client.findMany({ where: { id: { in: itens.map((i) => i.clientId) } }, select: { id: true, unit: true } });
-    const unidadeDe = new Map(fichas.map((c) => [c.id, c.unit || ""]));
+    const fichas = await prisma.client.findMany({ where: { id: { in: itens.map((i) => i.clientId).filter(Boolean) } }, select: { id: true, unit: true } });
+    const leadsDoDisparo = await prisma.lead.findMany({ where: { id: { in: itens.map((i) => i.leadId).filter(Boolean) } }, select: { id: true, unit: true } });
+    const unidadeDe = new Map([
+      ...fichas.map((c) => [`c:${c.id}`, c.unit || ""]),
+      ...leadsDoDisparo.map((l) => [`l:${l.id}`, l.unit || ""]),
+    ]);
     const pedeEndereco = modo === "texto"
       ? PEDE_ENDERECO.test(texto)
       : [...tpl.valoresHeader, ...tpl.valoresBody].some((v) => PEDE_ENDERECO.test(v));
     for (const it of itens) {
-      const cli = { name: it.nome, unit: unidadeDe.get(it.clientId) || "" };
+      const cli = { name: it.nome, unit: unidadeDe.get(it.clientId ? `c:${it.clientId}` : `l:${it.leadId}`) || "" };
       let dados;
       try {
         if (!chaveTelefone(it.phone)) {
@@ -8180,6 +8240,7 @@ app.get("/api/wa/disparo/:id", wrap(async (req, res) => {
       const r = i.wamid ? porWamid.get(i.wamid) : null;
       return {
         clientId: i.clientId,
+        leadId: i.leadId,
         nome: i.nome,
         phone: i.phone,
         situacao: i.situacao,
@@ -11285,6 +11346,8 @@ const COLUNAS_ESPERADAS = [
   ["Voucher", "pacoteVenceEm", "VARCHAR(10) NULL"],
   ["Voucher", "waTemplate", "VARCHAR(512) NULL"],
   ["Invoice", "descricao", "VARCHAR(200) NULL"],
+  // disparo para leads do funil sem ficha (25/11/2026); o clientId vira opcional no db push
+  ["WaDisparoItem", "leadId", "INT NULL"],
   ["ExtraPass", "voucherUsoId", "INT NULL"],
   ["WaConversation", "lastInboundAt", "DATETIME(3) NULL"],
   // "Cadastro via WhatsApp" no painel

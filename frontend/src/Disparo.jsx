@@ -33,24 +33,74 @@ import { contemBusca } from "./helpers.js";
    a aprovação sozinha (ver CriarTemplate).
    ============================================================ */
 
+/* Públicos. "Fichas" são as alunas cadastradas; "leads do funil" são os
+   contatos que ainda não têm ficha (deixaram o WhatsApp no site, falaram com
+   o robô, foram anotados pela equipe) — eles vêm do servidor em
+   opcoes.leadsSemFicha. Os filtros avançados refinam qualquer público. */
 const SITUACOES = [
   { value: "ativas", label: "Alunas ativas", icon: "💚" },
   { value: "mensalistas", label: "Mensalistas", icon: "📅" },
   { value: "avulsas", label: "Avulsas", icon: "🧺" },
-  { value: "leads", label: "Pagamento não realizado", icon: "⚠️" },
-  { value: "inativas", label: "Inativas", icon: "💤" },
+  { value: "inativas", label: "Ex-alunas", icon: "💤", hint: "inscrição cancelada" },
+  { value: "leads", label: "Pagamento não realizado", icon: "⚠️", hint: "ficha sem a 1ª aula paga" },
+  { value: "funil", label: "Leads do funil (sem ficha)", icon: "🧲", hint: "contatos ainda sem ficha" },
+  { value: "interessadas", label: "Todas as interessadas", icon: "🎯", hint: "sem pagamento + leads" },
   { value: "todas", label: "Todas as fichas", icon: "👩" },
+  { value: "tudo", label: "Todos os contatos", icon: "📒", hint: "fichas + leads" },
   // quem recebe TEXTO LIVRE agora — de qualquer situação, lead incluída
   { value: "conversa", label: "Conversa aberta (24h)", icon: "💬" },
 ];
-const naSituacao = (c, s) =>
-  s === "todas" ? true
-  : s === "inativas" ? c.status === "cancelado"
-  : s === "leads" ? c.status === "lead"
-  : c.status === "cancelado" || c.status === "lead" ? false
-  : s === "mensalistas" ? c.plan === "mensalista"
-  : s === "avulsas" ? c.plan !== "mensalista"
-  : true;
+const naSituacao = (x, s) => {
+  if (x.tipo === "lead") return ["funil", "interessadas", "tudo"].includes(s);
+  const c = x.c;
+  return s === "todas" || s === "tudo" ? true
+    : s === "funil" ? false
+    : s === "inativas" ? c.status === "cancelado"
+    : s === "leads" || s === "interessadas" ? c.status === "lead"
+    : c.status === "cancelado" || c.status === "lead" ? false
+    : s === "mensalistas" ? c.plan === "mensalista"
+    : s === "avulsas" ? c.plan !== "mensalista"
+    : true;
+};
+
+/* ---------- filtros avançados ---------- */
+const ETAPAS_FUNIL = [
+  { value: "", label: "Qualquer etapa do funil" },
+  { value: "contato", label: "💬 Primeiro contato" },
+  { value: "cadastro", label: "📝 Cadastro feito" },
+  { value: "marcada", label: "🗓️ 1ª aula marcada" },
+  { value: "aula", label: "🧶 Depois da aula avulsa" },
+  { value: "matriculada", label: "🎓 Matriculada" },
+  { value: "perdida", label: "✖ Perdida" },
+];
+const ORIGENS_FUNIL = [
+  { value: "", label: "Qualquer origem" },
+  { value: "anuncio", label: "Anúncio" }, { value: "redes", label: "Redes sociais" },
+  { value: "indicacao", label: "Indicação" }, { value: "google", label: "Google" },
+  { value: "porta", label: "Passou na porta" }, { value: "evento", label: "Evento" },
+  { value: "outro", label: "Outra" }, { value: "sem", label: "Origem não informada" },
+];
+const ENTRADAS = [
+  { value: "", label: "Entrou em qualquer data" },
+  { value: "30", label: "Entrou nos últimos 30 dias" },
+  { value: "90", label: "Entrou nos últimos 90 dias" },
+  { value: "365", label: "Entrou no último ano" },
+  { value: "antigas", label: "Entrou há mais de 1 ano" },
+];
+const PLANOS_F = [
+  { value: "", label: "Qualquer plano" },
+  { value: "1", label: "1x por semana" }, { value: "2", label: "2x por semana" },
+  { value: "3", label: "3x por semana" }, { value: "4", label: "4x por semana" },
+];
+const SEM_DISPARO = [
+  { value: "", label: "Sem limite de disparos" },
+  { value: "3", label: "Não recebeu disparo há 3 dias" },
+  { value: "7", label: "Não recebeu disparo há 7 dias" },
+  { value: "15", label: "Não recebeu disparo há 15 dias" },
+  { value: "30", label: "Não recebeu disparo há 30 dias" },
+];
+const FILTROS_VAZIOS = { plano: "", etapa: "", origem: "", entrada: "", semDisparo: "", aniversario: false, atraso: false };
+const diasAtras = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
 
 const temTelefone = (c) => String(c.phone || "").replace(/\D/g, "").length >= 10;
 const primeiroNome = (n) => String(n || "").trim().split(/\s+/)[0] || "";
@@ -311,7 +361,8 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
     const t = setInterval(() => setAgora(Date.now()), 30_000);
     return () => clearInterval(t);
   }, []);
-  const janelas = useMemo(() => new Map(opcoes.janelas.map((j) => [j.id, new Date(j.fechaEm).getTime()])), [opcoes]);
+  // janela por contato: "c:<ficha>" ou "l:<lead sem ficha>"
+  const janelas = useMemo(() => new Map(opcoes.janelas.map((j) => [j.key || `c:${j.id}`, new Date(j.fechaEm).getTime()])), [opcoes]);
   const abertas = useMemo(() => {
     const s = new Set();
     for (const [id, fim] of janelas) if (fim > agora) s.add(id);
@@ -322,6 +373,10 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
   const [unitF, setUnitF] = useState("Todas");
   const [sitF, setSitF] = useState("ativas");
   const [sel, setSel] = useState(() => new Set(preSel || []));
+  const [filtros, setFiltros] = useState(FILTROS_VAZIOS);
+  const [verAvancados, setVerAvancados] = useState(false);
+  const setFiltro = (k, v) => setFiltros((f) => ({ ...f, [k]: v }));
+  const nAvancados = Object.entries(filtros).filter(([, v]) => v).length;
   const [modo, setModo] = useState(opcoes.templates.some((t) => t.usavel) ? "template" : "texto");
   const [tplName, setTplName] = useState("");
   const [hVals, setHVals] = useState([]);
@@ -348,33 +403,74 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
     setBVals(Array.from({ length: t?.bodyVars || 0 }, (_, i) => palpite(t.body, i + 1, ex.body[i], data.meta.units)));
   };
 
-  const lista = data.clients
-    .filter((c) => (sitF === "conversa" ? abertas.has(c.id) : naSituacao(c, sitF)))
+  /* Fichas e leads do funil numa lista só. `key` separa os dois ("c:12",
+     "l:34") — é ela que vai na seleção e no envio. */
+  const contatos = useMemo(() => {
+    const funil = opcoes.funilDaFicha || {};
+    return [
+      ...data.clients.map((c) => ({
+        key: `c:${c.id}`, tipo: "ficha", id: c.id, name: c.name, phone: c.phone, unit: c.unit, c,
+        etapa: funil[c.id]?.etapa || null, origem: funil[c.id]?.origem || null,
+        desde: String(c.createdAt || "").slice(0, 10),
+      })),
+      ...(opcoes.leadsSemFicha || []).map((l) => ({
+        key: `l:${l.id}`, tipo: "lead", id: l.id, name: l.nome, phone: l.phone, unit: l.unit, l,
+        etapa: l.etapa, origem: l.origem, desde: l.desde,
+      })),
+    ];
+  }, [data.clients, opcoes]);
+
+  // em atraso: mensalidade em aberto com vencimento já passado
+  const emAtraso = useMemo(() => {
+    const hoje = new Date().toISOString().slice(0, 10);
+    return new Set((data.invoices || []).filter((i) => i.status === "pendente" && i.dueDate < hoje).map((i) => i.clientId));
+  }, [data.invoices]);
+  const mesAtual = String(new Date().getMonth() + 1).padStart(2, "0");
+  const recebeuEm = opcoes.recebeuDisparoEm || {};
+
+  const passaAvancados = (x) => {
+    const f = filtros;
+    if (f.plano && (x.tipo !== "ficha" || String(x.c.weeklyFreq || "") !== f.plano)) return false;
+    if (f.etapa && x.etapa !== f.etapa) return false;
+    if (f.origem && (f.origem === "sem" ? !!x.origem : x.origem !== f.origem)) return false;
+    if (f.entrada) {
+      if (!x.desde) return false;
+      if (f.entrada === "antigas" ? x.desde >= diasAtras(365) : x.desde < diasAtras(Number(f.entrada))) return false;
+    }
+    if (f.aniversario && (x.tipo !== "ficha" || String(x.c.birthday || "").slice(5, 7) !== mesAtual)) return false;
+    if (f.atraso && (x.tipo !== "ficha" || !emAtraso.has(x.id))) return false;
+    if (f.semDisparo && recebeuEm[x.key] && recebeuEm[x.key] >= new Date(Date.now() - Number(f.semDisparo) * 864e5).toISOString()) return false;
+    return true;
+  };
+
+  const lista = contatos
+    .filter((c) => (sitF === "conversa" ? abertas.has(c.key) : naSituacao(c, sitF)))
     .filter((c) => unitF === "Todas" || c.unit === unitF)
+    .filter(passaAvancados)
     .filter((c) => contemBusca([c.name, c.phone], search))
     .sort((a, b) => a.name.localeCompare(b.name));
   const listaComTel = lista.filter(temTelefone);
-  const todasDaListaMarcadas = listaComTel.length > 0 && listaComTel.every((c) => sel.has(c.id));
+  const todasDaListaMarcadas = listaComTel.length > 0 && listaComTel.every((c) => sel.has(c.key));
 
   const toggle = (c) => {
     if (!temTelefone(c)) return;
-    setSel((s) => { const n = new Set(s); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; });
+    setSel((s) => { const n = new Set(s); n.has(c.key) ? n.delete(c.key) : n.add(c.key); return n; });
   };
   const marcarLista = () => setSel((s) => {
     const n = new Set(s);
-    if (todasDaListaMarcadas) listaComTel.forEach((c) => n.delete(c.id));
-    else listaComTel.forEach((c) => n.add(c.id));
+    if (todasDaListaMarcadas) listaComTel.forEach((c) => n.delete(c.key));
+    else listaComTel.forEach((c) => n.add(c.key));
     return n;
   });
 
-  const selecionadas = data.clients.filter((c) => sel.has(c.id));
-  const comConversaAberta = selecionadas.filter((c) => abertas.has(c.id)).length;
+  const selecionadas = contatos.filter((c) => sel.has(c.key));
+  const comConversaAberta = selecionadas.filter((c) => abertas.has(c.key)).length;
   const exemploCli = selecionadas[0] || { name: "Maria Silva", unit: data.meta.units[0] || "" };
   const exemploNome = exemploCli.name;
   // todas as fichas com a conversa aberta agora, marcadas ou não
-  const abertasComTel = data.clients.filter((c) => abertas.has(c.id) && temTelefone(c));
-  const abertasForaDaSel = abertasComTel.filter((c) => !sel.has(c.id));
-  const soAbertas = () => setSel(new Set(abertasComTel.map((c) => c.id)));
+  const abertasComTel = contatos.filter((c) => abertas.has(c.key) && temTelefone(c));
+  const abertasForaDaSel = abertasComTel.filter((c) => !sel.has(c.key));
+  const soAbertas = () => setSel(new Set(abertasComTel.map((c) => c.key)));
   const tirarFechadas = () => setSel((s) => new Set([...s].filter((id) => abertas.has(id))));
 
   const faltaVariavel = modo === "template" && (!tpl || !tpl.usavel || [...hVals, ...bVals].some((v) => !v.trim()));
@@ -385,7 +481,7 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
      e no aviso ao clicar. O botão não fica mais cinza e mudo: cinza sem
      explicação era o "o revisar envio não funciona". */
   const pendencia =
-    !selecionadas.length ? "Selecione pelo menos uma aluna."
+    !selecionadas.length ? "Selecione pelo menos uma pessoa."
     : modo === "template" && !tpl ? "Escolha o template."
     : modo === "template" && !tpl.usavel ? "Este template ainda não está liberado pela Meta."
     : faltaVariavel ? "Preencha todas as variáveis do template."
@@ -412,7 +508,9 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
       title: "Confirmar disparo no WhatsApp",
       confirmLabel: `📣 Enviar para ${recebem}`,
       message: (<>
-        <b>{selecionadas.length}</b> aluna(s) selecionada(s): {nomes}.<br /><br />
+        <b>{selecionadas.length}</b> pessoa(s) selecionada(s): {nomes}.
+        {selecionadas.some((c) => c.tipo === "lead") && <> ({selecionadas.filter((c) => c.tipo === "lead").length} lead(s) do funil sem ficha)</>}
+        <br /><br />
         {modo === "template"
           ? <>Mensagem: template <b>{tpl.name}</b> ({tpl.category === "MARKETING" ? "marketing" : "utilidade"}). Chega para todas — <b>cada mensagem é cobrada pela Meta</b>{tpl.category === "MARKETING" ? ", e marketing custa mais" : ""}.</>
           : <>Mensagem: <b>texto livre</b>. Só vai para as <b>{comConversaAberta}</b> que falaram com a escola nas últimas 24h; {selecionadas.length - comConversaAberta} ficam de fora.</>}
@@ -427,7 +525,8 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
     setEnviando(true);
     try {
       const r = await api.disparo.enviar({
-        clientIds: [...sel],
+        clientIds: [...sel].filter((k) => k.startsWith("c:")).map((k) => Number(k.slice(2))),
+        leadIds: [...sel].filter((k) => k.startsWith("l:")).map((k) => Number(k.slice(2))),
         modo,
         texto: modo === "texto" ? texto : undefined,
         template: modo === "template" ? { name: tpl.name, header: hVals, body: bVals } : undefined,
@@ -472,10 +571,39 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
         <Select compact value={sitF} onChange={setSitF} options={SITUACOES} />
         <Select compact value={unitF} onChange={setUnitF}
           options={[{ value: "Todas", label: "Todas as unidades", icon: "📍" }, ...data.meta.units.map((u) => ({ value: u, label: u, icon: "📍" }))]} />
+        <button className={`btn ${nAvancados ? "" : "ghost "}sm`} onClick={() => setVerAvancados(!verAvancados)}>
+          ⚙️ Filtros avançados{nAvancados ? ` (${nAvancados})` : ""}
+        </button>
         <button className="btn sec sm" disabled={!listaComTel.length} onClick={marcarLista}>
           {todasDaListaMarcadas ? `Desmarcar as ${listaComTel.length} da lista` : `☑ Selecionar todas (${listaComTel.length})`}
         </button>
       </div>
+      {verAvancados && (
+        <div className="cfg-preview" style={{ marginTop: 0, marginBottom: "1rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: ".6rem" }}>
+            <Select compact value={filtros.etapa} onChange={(v) => setFiltro("etapa", v)} options={ETAPAS_FUNIL} />
+            <Select compact value={filtros.origem} onChange={(v) => setFiltro("origem", v)} options={ORIGENS_FUNIL} />
+            <Select compact value={filtros.entrada} onChange={(v) => setFiltro("entrada", v)} options={ENTRADAS} />
+            <Select compact value={filtros.plano} onChange={(v) => setFiltro("plano", v)} options={PLANOS_F} />
+            <Select compact value={filtros.semDisparo} onChange={(v) => setFiltro("semDisparo", v)} options={SEM_DISPARO} />
+          </div>
+          <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", alignItems: "center", marginTop: ".7rem" }}>
+            <label className="check-row" style={{ display: "flex", gap: ".4rem", alignItems: "center", margin: 0 }}>
+              <input type="checkbox" style={{ width: "auto" }} checked={filtros.aniversario} onChange={(e) => setFiltro("aniversario", e.target.checked)} />
+              🎂 Faz aniversário este mês
+            </label>
+            <label className="check-row" style={{ display: "flex", gap: ".4rem", alignItems: "center", margin: 0 }}>
+              <input type="checkbox" style={{ width: "auto" }} checked={filtros.atraso} onChange={(e) => setFiltro("atraso", e.target.checked)} />
+              ⏰ Com mensalidade em atraso
+            </label>
+            <div style={{ flex: 1 }} />
+            {nAvancados > 0 && <button className="btn ghost sm" onClick={() => setFiltros(FILTROS_VAZIOS)}>Limpar filtros avançados</button>}
+          </div>
+          <div className="help" style={{ marginTop: ".6rem" }}>
+            Etapa e origem vêm do Funil. Plano, aniversário e atraso valem só para quem tem ficha. “Não recebeu disparo” olha os últimos 30 dias — evita mandar a mesma pessoa duas vezes e o limite de marketing da Meta.
+          </div>
+        </div>
+      )}
       {lista.length ? (
         <div style={{ maxHeight: 420, overflowY: "auto" }}>
           <table>
@@ -483,16 +611,22 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
             <tbody>
               {lista.map((c) => {
                 const tel = temTelefone(c);
-                const fim = janelas.get(c.id);
+                const fim = janelas.get(c.key);
+                const ultimo = recebeuEm[c.key];
                 const resta = fim ? faltando(fim - agora) : null;
                 return (
-                  <tr key={c.id} onClick={() => toggle(c)} style={{ cursor: tel ? "pointer" : "not-allowed", opacity: tel ? 1 : 0.55, background: sel.has(c.id) ? "rgba(140,154,120,.12)" : undefined }}>
-                    <td><input type="checkbox" checked={sel.has(c.id)} disabled={!tel} onChange={() => toggle(c)} onClick={(e) => e.stopPropagation()} style={{ width: "auto" }} /></td>
+                  <tr key={c.key} onClick={() => toggle(c)} style={{ cursor: tel ? "pointer" : "not-allowed", opacity: tel ? 1 : 0.55, background: sel.has(c.key) ? "rgba(140,154,120,.12)" : undefined }}>
+                    <td><input type="checkbox" checked={sel.has(c.key)} disabled={!tel} onChange={() => toggle(c)} onClick={(e) => e.stopPropagation()} style={{ width: "auto" }} /></td>
                     <td className="c-main">
                       <span className="cli-name">{c.name}</span>
-                      {c.status === "cancelado" ? <span className="badge b-danger ml">Inativa</span> : null}
-                      {c.plan === "mensalista" && c.status !== "cancelado" ? <span className="badge b-ok ml">📅 mensalista</span> : null}
-                      <div className="cli-sub">{tel ? c.phone : "sem telefone — não dá para enviar"}</div>
+                      {c.tipo === "lead" ? <span className="badge b-info ml" title="Contato do funil que ainda não tem ficha">🧲 lead{c.etapa ? ` · ${(ETAPAS_FUNIL.find((e) => e.value === c.etapa)?.label || c.etapa).replace(/^\S+\s/, "")}` : ""}</span> : null}
+                      {c.tipo === "ficha" && c.c.status === "cancelado" ? <span className="badge b-danger ml">Ex-aluna</span> : null}
+                      {c.tipo === "ficha" && c.c.status === "lead" ? <span className="badge b-warn ml">pagamento não realizado</span> : null}
+                      {c.tipo === "ficha" && c.c.plan === "mensalista" && c.c.status !== "cancelado" ? <span className="badge b-ok ml">📅 mensalista</span> : null}
+                      <div className="cli-sub">
+                        {tel ? c.phone : "sem telefone — não dá para enviar"}
+                        {ultimo ? ` · recebeu disparo em ${new Date(ultimo).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}` : ""}
+                      </div>
                     </td>
                     <td data-l="Unidade">{c.unit ? <span className="chip">{c.unit}</span> : "—"}</td>
                     <td data-l="Janela de 24h">
@@ -506,7 +640,7 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
             </tbody>
           </table>
         </div>
-      ) : <div className="empty">Nenhuma aluna nesse filtro.</div>}
+      ) : <div className="empty">Ninguém nesse filtro.</div>}
     </div>
 
     <div className="panel">
@@ -1009,7 +1143,7 @@ function Andamento({ id, onNovo }) {
       if (r === false) return;
       if (r === true) alvo = alvo.filter((i) => !seguradas.includes(i));
     }
-    onNovo(alvo.map((i) => i.clientId));
+    onNovo(alvo.map((i) => (i.clientId ? `c:${i.clientId}` : `l:${i.leadId}`)));
   };
 
   return (<>
@@ -1054,7 +1188,7 @@ function Andamento({ id, onNovo }) {
               const [cls, lbl] = SITUACAO_ENVIO[i.situacao] || ["b-muted", i.situacao];
               const ent = i.entrega ? ENTREGA[i.entrega] || ["b-muted", i.entrega] : null;
               return (
-                <tr key={i.clientId}>
+                <tr key={i.clientId ? `c:${i.clientId}` : `l:${i.leadId}`}>
                   <td className="c-main"><span className="cli-name">{i.nome}</span><div className="cli-sub">{i.phone || "sem telefone"}</div></td>
                   <td data-l="Envio"><span className={`badge ${cls}`}>{lbl}</span>{i.motivo && <div className="cli-sub">{i.motivo}</div>}</td>
                   <td data-l="Entrega">

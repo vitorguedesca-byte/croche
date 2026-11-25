@@ -133,7 +133,7 @@ const ONDE_USAR = {
   todas: "no portal (se você já estuda) ou na matrícula pelo site e aqui pelo WhatsApp",
 };
 // Para quem o disparo é sugerido (filtro da tela de Disparo)
-const PUBLICO_DISPARO = { novas: "leads", alunas: "mensalistas", todas: "todas" };
+const PUBLICO_DISPARO = { novas: "interessadas", alunas: "mensalistas", todas: "tudo" };
 function textoDivulgacao(c) {
   const linhas = (c.beneficios || []).map((b) => `• ${b}`);
   const prazo = c.fim ? ` até ${fmtDate(c.fim).slice(0, 5)}` : "";

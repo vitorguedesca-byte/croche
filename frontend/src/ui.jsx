@@ -133,9 +133,12 @@ export function Select({
     const popH = popRef.current?.offsetHeight ?? 300;
     const below = window.innerHeight - r.bottom;
     const up = below < popH + 14 && r.top > below;
+    /* O menu pode ser mais largo que o botão (filtro compacto com nome
+       comprido: "Pagamento não realizado"), sem passar da borda da tela. */
+    const width = Math.max(r.width, 300);
     setPos({
-      left: r.left,
-      width: r.width,
+      left: Math.max(8, Math.min(r.left, window.innerWidth - width - 8)),
+      width,
       top: up ? undefined : r.bottom + 6,
       bottom: up ? window.innerHeight - r.top + 6 : undefined,
       up,

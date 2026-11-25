@@ -822,7 +822,9 @@ model WaDisparoItem {
   id        Int       @id @default(autoincrement())
   disparoId String    @db.VarChar(40)
   disparo   WaDisparo @relation(fields: [disparoId], references: [id], onDelete: Cascade)
-  clientId  Int
+  // quem recebeu: a ficha (clientId) OU a lead do funil que ainda não tem ficha (leadId)
+  clientId  Int?
+  leadId    Int?
   nome      String    @db.VarChar(120)
   phone     String    @default("") @db.VarChar(30)
   // na fila | enviado | pulada | erro
