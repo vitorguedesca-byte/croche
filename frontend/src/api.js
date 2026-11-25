@@ -222,6 +222,20 @@ export const api = {
        `criarTemplate` confere de novo e submete para aprovação. */
     conferirTemplate: (data) => req("POST", "/api/wa/templates/conferir", data),
     criarTemplate: (data) => req("POST", "/api/wa/templates", data),
+    /* Imagem/vídeo/PDF do cabeçalho do template: fica guardado no servidor e
+       volta { id, nome, mime, tipo } — o id vai na criação e no disparo. */
+    subirMidia: async (file) => {
+      const fd = new FormData();
+      fd.append("arquivo", file);
+      const res = await fetch("/api/wa/midia", { method: "POST", body: fd, headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {} });
+      if (!res.ok) { let msg = "Não consegui enviar o arquivo."; try { msg = (await res.json()).error || msg; } catch {} throw new Error(msg); }
+      return res.json();
+    },
+    // endereço local (blob:) do arquivo guardado, para a prévia — a rota pede login
+    midiaUrl: async (id) => {
+      const res = await req("GET", `/api/wa/midia/${id}`, undefined, { raw: true });
+      return URL.createObjectURL(await res.blob());
+    },
   },
 
   /* Feriados: em feriado a escola não abre. `list` traz o calendário já

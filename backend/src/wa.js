@@ -123,9 +123,15 @@ const textParams = (arr) => arr.map((v) => ({ type: "text", text: sanitizeParam(
      header  variáveis do cabeçalho, quando o template tiver {{1}} no header
      body    variáveis do corpo, na ordem em que aparecem ({{1}}, {{2}}, ...)
      buttons [{ index, payload }] — só para botões de resposta rápida com variável   */
-export function sendWaTemplate(to, name, { lang = "pt_BR", header = [], body = [], buttons = [] } = {}) {
+export function sendWaTemplate(to, name, { lang = "pt_BR", header = [], headerMidia = null, body = [], buttons = [] } = {}) {
   const components = [];
-  if (header.length) components.push({ type: "header", parameters: textParams(header) });
+  /* Template com imagem/vídeo/PDF no cabeçalho: a Meta pede a mídia de novo
+     em TODO envio (a da aprovação é só exemplo). headerMidia = { tipo:
+     "image"|"video"|"document", id (de uploadWaMedia), filename? }. */
+  if (headerMidia) {
+    const m = { id: headerMidia.id, ...(headerMidia.tipo === "document" && headerMidia.filename ? { filename: headerMidia.filename } : {}) };
+    components.push({ type: "header", parameters: [{ type: headerMidia.tipo, [headerMidia.tipo]: m }] });
+  } else if (header.length) components.push({ type: "header", parameters: textParams(header) });
   if (body.length) components.push({ type: "body", parameters: textParams(body) });
   for (const b of buttons) {
     components.push({
@@ -239,6 +245,64 @@ export function parseTemplateStatuses(body) {
 export function createWaTemplate({ name, category = "UTILITY", language = "pt_BR", components }) {
   if (!WABA_ID) return Promise.reject(new Error("WA_WABA_ID não configurado"));
   return graph("POST", `/${WABA_ID}/message_templates`, { name, category, language, components });
+}
+
+/* ===================== MÍDIA (cabeçalho com imagem, vídeo ou PDF) =====================
+   São DOIS envios diferentes à Meta, e um não serve para o outro:
+
+   - uploadWaMedia: sobe o arquivo para o NÚMERO e devolve um id de mídia,
+     que vale 30 dias. É o que vai em cada mensagem de template (sendWaTemplate
+     → headerMidia). O disparo sobe uma vez e usa o mesmo id para todas.
+   - uploadWaExemploTemplate: a "Resumable Upload API" do APP, que devolve o
+     `header_handle` exigido como EXEMPLO na hora de submeter um template de
+     mídia para aprovação. Precisa do id do app: WA_APP_ID, ou perguntado à
+     própria Meta pelo token (GET /app). */
+async function graphFetch(url, opcoes) {
+  const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}${url}`, opcoes);
+  const raw = await res.text();
+  let parsed = raw;
+  try { parsed = JSON.parse(raw); } catch {}
+  if (!res.ok) throw Object.assign(new Error(`WhatsApp ${res.status}`), { status: res.status, body: parsed });
+  return parsed;
+}
+
+export async function uploadWaMedia(buffer, mime, nome = "arquivo") {
+  if (!waConfigured()) throw new Error("WhatsApp não configurado no servidor.");
+  const fd = new FormData();
+  fd.append("messaging_product", "whatsapp");
+  fd.append("type", mime);
+  fd.append("file", new Blob([buffer], { type: mime }), nome);
+  const r = await graphFetch(`/${PHONE_ID}/media`, { method: "POST", headers: { Authorization: `Bearer ${TOKEN}` }, body: fd });
+  if (!r?.id) throw new Error("A Meta não devolveu o id da mídia.");
+  return r.id;
+}
+
+let appIdCache = process.env.WA_APP_ID || "";
+async function appId() {
+  if (appIdCache) return appIdCache;
+  try {
+    const r = await graphFetch("/app", { headers: { Authorization: `Bearer ${TOKEN}` } });
+    appIdCache = String(r?.id || "");
+  } catch (e) {
+    throw new Error(`Não descobri o app da Meta pelo token (${e?.body?.error?.message || e.message}). Configure WA_APP_ID no servidor.`);
+  }
+  if (!appIdCache) throw new Error("Não descobri o app da Meta pelo token. Configure WA_APP_ID no servidor.");
+  return appIdCache;
+}
+
+export async function uploadWaExemploTemplate(buffer, mime, nome = "arquivo") {
+  if (!TOKEN) throw new Error("WA_TOKEN não configurado no servidor.");
+  const app = await appId();
+  const q = new URLSearchParams({ file_name: nome, file_length: String(buffer.length), file_type: mime });
+  const sessao = await graphFetch(`/${app}/uploads?${q}`, { method: "POST", headers: { Authorization: `Bearer ${TOKEN}` } });
+  if (!sessao?.id) throw new Error("A Meta não abriu o envio do arquivo de exemplo.");
+  const r = await graphFetch(`/${sessao.id}`, {
+    method: "POST",
+    headers: { Authorization: `OAuth ${TOKEN}`, file_offset: "0" },
+    body: buffer,
+  });
+  if (!r?.h) throw new Error("A Meta não devolveu o identificador do arquivo de exemplo.");
+  return r.h;
 }
 
 /* Extrai os avisos de ENTREGA do payload do webhook.

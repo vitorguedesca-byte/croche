@@ -835,3 +835,21 @@ model WaDisparoItem {
   @@index([disparoId])
   @@index([wamid])
 }
+
+/* Imagem, vídeo ou PDF do CABEÇALHO de um template (25/11/2026). Mora no
+   banco porque o container não tem pasta que sobreviva ao deploy, e a mesma
+   imagem é usada duas vezes: na aprovação (vai como exemplo para a Meta) e em
+   cada disparo (a Meta exige a mídia de novo em todo envio). `template` liga a
+   imagem ao template criado com ela — o disparo já abre com ela escolhida. */
+model WaMidia {
+  id        Int      @id @default(autoincrement())
+  nome      String   @db.VarChar(200) // nome do arquivo, como veio
+  mime      String   @db.VarChar(80)
+  tamanho   Int
+  dados     Bytes    @db.MediumBlob // até 16 MB, o teto da Meta para vídeo
+  template  String?  @db.VarChar(512)
+  por       String?  @db.VarChar(60)
+  createdAt DateTime @default(now())
+
+  @@index([template])
+}

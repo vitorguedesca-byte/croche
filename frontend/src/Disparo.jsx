@@ -156,6 +156,60 @@ function trechoDe(texto, n) {
   return (ini > 0 ? "…" : "") + t.slice(ini, fim).trim() + (fim < t.length ? "…" : "");
 }
 
+/* ---------- Mídia do cabeçalho (imagem, vídeo ou PDF) ----------
+   O arquivo sobe para o servidor assim que é escolhido (fica guardado lá: é
+   exemplo na criação do template e vai de novo em cada disparo). A prévia lê
+   de volta pelo id, porque a rota pede login e um <img src> não manda o token. */
+const ACEITA_MIDIA = { IMAGE: "image/jpeg,image/png", VIDEO: "video/mp4", DOCUMENT: "application/pdf" };
+const NOME_MIDIA = { IMAGE: "imagem", VIDEO: "vídeo", DOCUMENT: "PDF" };
+const urlsMidia = new Map(); // id → blob:, para não baixar de novo a cada render
+function useMidiaUrl(id) {
+  const [url, setUrl] = useState(() => (id ? urlsMidia.get(id) || null : null));
+  useEffect(() => {
+    if (!id) { setUrl(null); return; }
+    if (urlsMidia.has(id)) { setUrl(urlsMidia.get(id)); return; }
+    let vivo = true;
+    api.disparo.midiaUrl(id).then((u) => { urlsMidia.set(id, u); if (vivo) setUrl(u); }).catch(() => {});
+    return () => { vivo = false; };
+  }, [id]);
+  return url;
+}
+// o quadro da mídia no topo do balão da prévia
+function MidiaPrevia({ midia, tipo, vazio = "— escolha o arquivo" }) {
+  const url = useMidiaUrl(midia?.id);
+  const caixa = { borderRadius: 8, marginBottom: ".45rem", overflow: "hidden", background: "#d9d9d9", display: "flex", alignItems: "center", justifyContent: "center", minHeight: 120, color: "#666", fontSize: ".85rem", textAlign: "center", padding: midia && tipo === "IMAGE" && url ? 0 : ".6rem" };
+  if (!midia) return <div style={caixa}>{tipo === "VIDEO" ? "🎬" : tipo === "DOCUMENT" ? "📄" : "🖼️"} {NOME_MIDIA[tipo] || "imagem"} do cabeçalho {vazio}</div>;
+  if (tipo === "IMAGE" && url) return <div style={caixa}><img src={url} alt={midia.nome} style={{ display: "block", width: "100%", maxHeight: 260, objectFit: "cover" }} /></div>;
+  if (tipo === "VIDEO" && url) return <div style={caixa}><video src={url} style={{ display: "block", width: "100%", maxHeight: 260 }} muted controls /></div>;
+  return <div style={caixa}>{tipo === "DOCUMENT" ? "📄" : tipo === "VIDEO" ? "🎬" : "🖼️"} {midia.nome}</div>;
+}
+/* Botão de escolher/trocar o arquivo. `tipo` fixa o formato (o template já
+   aprovado pede um só); sem `tipo`, aceita imagem, vídeo ou PDF. */
+function EscolherMidia({ tipo, valor, onChange }) {
+  const ref = useRef(null);
+  const [subindo, setSubindo] = useState(false);
+  const escolher = async (file) => {
+    if (!file) return;
+    setSubindo(true);
+    try {
+      const m = await api.disparo.subirMidia(file);
+      if (tipo && m.tipo !== tipo) { toast.error(`Este template pede ${NOME_MIDIA[tipo] === "imagem" ? "uma imagem" : `um ${NOME_MIDIA[tipo]}`} no cabeçalho.`); return; }
+      onChange(m);
+    } catch (e) { toast.error(e.message); }
+    finally { setSubindo(false); if (ref.current) ref.current.value = ""; }
+  };
+  return (
+    <div style={{ display: "flex", gap: ".5rem", alignItems: "center", flexWrap: "wrap" }}>
+      <input ref={ref} type="file" accept={tipo ? ACEITA_MIDIA[tipo] : Object.values(ACEITA_MIDIA).join(",")} style={{ display: "none" }} onChange={(e) => escolher(e.target.files?.[0])} />
+      <button type="button" className={`btn ${valor ? "ghost" : "sec"} sm`} disabled={subindo} onClick={() => ref.current?.click()}>
+        {subindo ? "Enviando…" : valor ? "🔄 Trocar arquivo" : `📎 Escolher ${tipo ? NOME_MIDIA[tipo] : "imagem, vídeo ou PDF"}`}
+      </button>
+      {valor && <span className="cli-sub">{valor.nome}</span>}
+      {valor && <button type="button" className="btn ghost sm" onClick={() => onChange(null)}>Tirar</button>}
+    </div>
+  );
+}
+
 const SITUACAO_ENVIO = {
   "na fila": ["b-muted", "⏳ na fila"],
   enviado: ["b-info", "📤 enviada"],
@@ -384,6 +438,7 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
   const [tplName, setTplName] = useState("");
   const [hVals, setHVals] = useState([]);
   const [bVals, setBVals] = useState([]);
+  const [midia, setMidia] = useState(null); // arquivo do cabeçalho, em template de mídia
   const [texto, setTexto] = useState("Oi, {nome}! ");
   const [enviando, setEnviando] = useState(false);
 
@@ -397,10 +452,27 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
   }, [pedido?.template, pedido?.situacao]);
 
   const tpl = opcoes.templates.find((t) => t.name === tplName) || null;
+
+  /* Atalho "Usar uma campanha": o mesmo que o botão Disparar da tela de
+     Campanhas — escolhe a mensagem da campanha e o público sugerido. */
+  const campanhas = opcoes.campanhas || [];
+  const [campanhaId, setCampanhaId] = useState("");
+  const usarCampanha = (id) => {
+    const c = campanhas.find((x) => String(x.id) === String(id));
+    setCampanhaId(id);
+    if (!c) return;
+    if (!c.templateUsavel) { toast.error(`A mensagem da campanha ${c.codigo} ainda não pode ser usada: ${c.templateSituacao}.`); return; }
+    setSitF(c.publico);
+    setModo("template");
+    escolherTemplate(c.template);
+    toast(`Campanha ${c.codigo}: mensagem e público escolhidos. Confira a seleção antes de enviar.`);
+  };
   const enderecos = opcoes.enderecos || {};
   const escolherTemplate = (name) => {
     const t = opcoes.templates.find((x) => x.name === name);
     setTplName(name);
+    // template criado pelo painel com imagem: já vem com ela
+    setMidia(t?.midia && t.midiaSalva ? t.midiaSalva : null);
     const ex = t?.exemplo || { header: [], body: [] };
     setHVals(Array.from({ length: t?.headerVars || 0 }, (_, i) => palpite(t.header, i + 1, ex.header[i], data.meta.units)));
     setBVals(Array.from({ length: t?.bodyVars || 0 }, (_, i) => palpite(t.body, i + 1, ex.body[i], data.meta.units)));
@@ -487,6 +559,7 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
     !selecionadas.length ? "Selecione pelo menos uma pessoa."
     : modo === "template" && !tpl ? "Escolha o template."
     : modo === "template" && !tpl.usavel ? "Este template ainda não está liberado pela Meta."
+    : modo === "template" && tpl.midia && !midia ? `Escolha ${tpl.midia === "IMAGE" ? "a imagem" : tpl.midia === "VIDEO" ? "o vídeo" : "o PDF"} do cabeçalho.`
     : faltaVariavel ? "Preencha todas as variáveis do template."
     : textoVazio ? "Escreva a mensagem."
     : modo === "texto" && !recebem ? "Nenhuma das selecionadas está com a conversa aberta — texto livre não chega para elas. Use um template, ou filtre por “Conversa aberta (24h)”."
@@ -532,7 +605,7 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
         leadIds: [...sel].filter((k) => k.startsWith("l:")).map((k) => Number(k.slice(2))),
         modo,
         texto: modo === "texto" ? texto : undefined,
-        template: modo === "template" ? { name: tpl.name, header: hVals, body: bVals } : undefined,
+        template: modo === "template" ? { name: tpl.name, header: hVals, body: bVals, midiaId: tpl.midia ? midia?.id : undefined } : undefined,
       });
       toast("Disparo iniciado 📣");
       onIniciado(r.id);
@@ -551,7 +624,7 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
     label: t.name,
     icon: t.usavel ? (t.category === "MARKETING" ? "📢" : "🧾") : (ICONE_TPL[t.status] || "⚠️"),
     hint: t.usavel
-      ? `${t.category === "MARKETING" ? "marketing" : "utilidade"} · ${t.bodyVars + t.headerVars} variável(is)`
+      ? `${t.category === "MARKETING" ? "marketing" : "utilidade"} · ${t.bodyVars + t.headerVars} variável(is)${t.midia ? ` · com ${NOME_MIDIA[t.midia]}` : ""}`
       : `não dá para usar: ${t.motivo}`,
     disabled: !t.usavel,
   }));
@@ -560,6 +633,21 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
     {!opcoes.waConfigurado && <div className="help" style={{ marginBottom: "1rem", borderLeftColor: "var(--danger)" }}>⚠️ O WhatsApp não está configurado no servidor — o envio vai falhar.</div>}
 
     <BarraSync opcoes={opcoes} abertas={abertas} sincronizando={sincronizando} onSincronizar={onSincronizar} />
+
+    {campanhas.length > 0 && (
+      <div className="panel" style={{ display: "flex", gap: ".8rem", alignItems: "center", flexWrap: "wrap" }}>
+        <b>🎟️ Disparar uma campanha</b>
+        <div style={{ minWidth: 280, flex: "0 1 420px" }}>
+          <Select compact value={campanhaId} onChange={usarCampanha} placeholder="Escolha a campanha"
+            options={campanhas.map((c) => ({
+              value: String(c.id), label: `${c.nome} · ${c.codigo}`, icon: "🎟️",
+              hint: c.templateUsavel ? `${c.situacao.texto} · mensagem aprovada` : `mensagem: ${c.templateSituacao}`,
+              disabled: !c.templateUsavel,
+            }))} />
+        </div>
+        <span className="cli-sub">escolhe a mensagem da campanha e o público sugerido</span>
+      </div>
+    )}
 
     <div className="panel">
       <div className="panel-h">
@@ -623,9 +711,10 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
                     <td className="c-main">
                       <span className="cli-name">{c.name}</span>
                       {c.tipo === "lead" ? <span className="badge b-info ml" title="Contato do funil que ainda não tem ficha">🧲 lead{c.etapa ? ` · ${(ETAPAS_FUNIL.find((e) => e.value === c.etapa)?.label || c.etapa).replace(/^\S+\s/, "")}` : ""}</span> : null}
-                      {c.tipo === "ficha" && c.c.status === "cancelado" ? <span className="badge b-danger ml">Ex-aluna</span> : null}
-                      {c.tipo === "ficha" && c.c.status === "lead" ? <span className="badge b-warn ml">pagamento não realizado</span> : null}
-                      {c.tipo === "ficha" && c.c.plan === "mensalista" && c.c.status !== "cancelado" ? <span className="badge b-ok ml">📅 mensalista</span> : null}
+                      {c.tipo === "ficha" && c.aba === "ex-aluno" ? <span className="badge b-danger ml">Ex-aluna</span> : null}
+                      {c.tipo === "ficha" && c.aba === "novato" ? <span className="badge b-warn ml">lead 1ª aula</span> : null}
+                      {c.tipo === "ficha" && c.aba === "lead" ? <span className="badge b-warn ml">lead · remarketing</span> : null}
+                      {c.tipo === "ficha" && c.aba === "cliente" && c.c.plan === "mensalista" ? <span className="badge b-ok ml">📅 mensalista</span> : null}
                       <div className="cli-sub">
                         {tel ? c.phone : "sem telefone — não dá para enviar"}
                         {ultimo ? ` · recebeu disparo em ${new Date(ultimo).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}` : ""}
@@ -677,6 +766,15 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
             {tpl && !tpl.usavel && (
               <div className="help" style={{ borderLeftColor: "var(--danger)" }}>
                 Este template não pode ser disparado: {tpl.motivo}.{tpl.motivoRecusa ? ` Motivo da Meta: ${tpl.motivoRecusa}.` : ""}
+              </div>
+            )}
+            {tpl && tpl.usavel && tpl.midia && (
+              <div className="field">
+                <label>{tpl.midia === "IMAGE" ? "Imagem" : tpl.midia === "VIDEO" ? "Vídeo" : "PDF"} do cabeçalho</label>
+                <EscolherMidia tipo={tpl.midia} valor={midia} onChange={setMidia} />
+                <div className="cli-sub" style={{ marginTop: ".3rem" }}>
+                  A mesma para todas. {tpl.midiaSalva && midia?.id === tpl.midiaSalva.id ? "É a que foi usada na aprovação do template." : tpl.midia === "IMAGE" ? "JPG ou PNG, até 5 MB." : tpl.midia === "VIDEO" ? "MP4, até 16 MB." : "PDF, até 16 MB."}
+                </div>
               </div>
             )}
             {tpl && tpl.usavel && (tpl.bodyVars + tpl.headerVars) === 0 && (
@@ -733,6 +831,7 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
           <div style={{ background: "#e5ddd5", borderRadius: 12, padding: "1rem", minHeight: 140 }}>
             {(modo === "texto" || tpl) ? (
               <div style={{ background: "#fff", borderRadius: "0 10px 10px 10px", padding: ".6rem .8rem", maxWidth: 360, boxShadow: "0 1px 1px rgba(0,0,0,.12)", whiteSpace: "pre-wrap", fontSize: ".9rem", lineHeight: 1.4 }}>
+                {modo === "template" && tpl?.midia && <MidiaPrevia midia={midia} tipo={tpl.midia} />}
                 {previa.header && <div style={{ fontWeight: 700, marginBottom: ".3rem" }}>{previa.header}</div>}
                 {previa.body}
                 {previa.footer && <div style={{ color: "#8a8a8a", fontSize: ".78rem", marginTop: ".4rem" }}>{previa.footer}</div>}
@@ -878,8 +977,17 @@ export function CriarTemplate({ inicial, opcoes = {}, onCriado, voucherId = null
   const { close } = useModal();
   const [f, setF] = useState(() => ({
     titulo: "", categoria: "UTILITY", cabecalho: "", corpo: "Oi, {nome}! ", rodape: "",
+    cabecalhoTipo: "texto", midia: null, // cabeçalho de texto OU de imagem/vídeo/PDF
     ...(inicial || {}),
   }));
+  // o que vai ao servidor: só um dos dois cabeçalhos
+  const paraServidor = (x) => ({
+    titulo: x.titulo, categoria: x.categoria, corpo: x.corpo, rodape: x.rodape,
+    cabecalho: x.cabecalhoTipo === "texto" ? x.cabecalho : "",
+    midiaTipo: x.cabecalhoTipo === "midia" ? x.midia?.tipo || null : null,
+    midiaId: x.cabecalhoTipo === "midia" ? x.midia?.id || null : null,
+  });
+  const faltaMidia = f.cabecalhoTipo === "midia" && !f.midia;
   const [conf, setConf] = useState(null);
   const [busy, setBusy] = useState(false);
   const corpoRef = useRef(null);
@@ -888,7 +996,7 @@ export function CriarTemplate({ inicial, opcoes = {}, onCriado, voucherId = null
   // confere no servidor 0,4s depois de parar de digitar
   useEffect(() => {
     const t = setTimeout(() => {
-      api.disparo.conferirTemplate(f).then(setConf).catch((e) => setConf({ erros: [e.message], avisos: [], previa: null, name: "" }));
+      api.disparo.conferirTemplate(paraServidor(f)).then(setConf).catch((e) => setConf({ erros: [e.message], avisos: [], previa: null, name: "" }));
     }, 400);
     return () => clearTimeout(t);
   }, [f]);
@@ -905,14 +1013,15 @@ export function CriarTemplate({ inicial, opcoes = {}, onCriado, voucherId = null
 
   const enviar = async () => {
     let c = conf;
-    try { c = await api.disparo.conferirTemplate(f); setConf(c); } catch (e) { toast.error(e.message); return; }
+    if (faltaMidia) { toast.error("Escolha a imagem (ou o vídeo/PDF) do cabeçalho, ou volte o cabeçalho para texto."); return; }
+    try { c = await api.disparo.conferirTemplate(paraServidor(f)); setConf(c); } catch (e) { toast.error(e.message); return; }
     if (c.erros.length) { toast.error(c.erros[0]); return; }
     const cat = CATEGORIAS.find((x) => x.k === f.categoria);
     const ok = await confirmModal({
       title: "Enviar para aprovação da Meta",
       confirmLabel: "📤 Enviar para a Meta",
       message: (<>
-        Template <b>{c.name}</b> · {cat?.label}.<br /><br />
+        Template <b>{c.name}</b> · {cat?.label}{f.cabecalhoTipo === "midia" && f.midia ? ` · com ${NOME_MIDIA[f.midia.tipo]} no cabeçalho` : ""}.<br /><br />
         “{c.previa.body.length > 260 ? c.previa.body.slice(0, 260) + "…" : c.previa.body}”<br /><br />
         A Meta revisa em minutos (às vezes até 24h). Enquanto isso ele aparece como “aguardando a Meta” e não pode ser usado; esta tela avisa quando sair a resposta.
         {c.avisos.length > 0 && <><br /><br />⚠️ {c.avisos[0]}</>}
@@ -922,7 +1031,7 @@ export function CriarTemplate({ inicial, opcoes = {}, onCriado, voucherId = null
     if (!ok) return;
     setBusy(true);
     try {
-      const r = await api.disparo.criarTemplate(voucherId ? { ...f, voucherId } : f);
+      const r = await api.disparo.criarTemplate(voucherId ? { ...paraServidor(f), voucherId } : paraServidor(f));
       toast(r.status === "APPROVED" ? `✓ “${r.name}” aprovado na hora — já dá para usar.` : `📤 “${r.name}” enviado. Aguardando a Meta aprovar.`, "success", { duration: 8000 });
       if (r.category && r.category !== f.categoria) toast.error(`A Meta registrou “${r.name}” como ${r.category === "MARKETING" ? "marketing" : "utilidade"}, não como você escolheu.`);
       close();
@@ -936,7 +1045,7 @@ export function CriarTemplate({ inicial, opcoes = {}, onCriado, voucherId = null
 
   const lim = opcoes.limitesTemplate || { cabecalho: 60, corpo: 1024, rodape: 60 };
   const marcadores = opcoes.marcadores || { nome: "primeiro nome da aluna", nome_completo: "nome completo", unidade: "unidade dela", endereco: "endereço da unidade dela" };
-  const erros = conf?.erros || [];
+  const erros = [...(faltaMidia ? ["Escolha a imagem (ou o vídeo/PDF) do cabeçalho."] : []), ...(conf?.erros || [])];
   const avisos = conf?.avisos || [];
 
   return (
@@ -965,8 +1074,21 @@ export function CriarTemplate({ inicial, opcoes = {}, onCriado, voucherId = null
           </div>
 
           <div className="field">
-            <label>Cabeçalho <span className="cli-sub">(opcional · até {lim.cabecalho} · sem emoji)</span></label>
-            <input value={f.cabecalho} onChange={(e) => set("cabecalho", e.target.value)} maxLength={lim.cabecalho + 20} placeholder="ex.: Aviso da escola" />
+            <label>Cabeçalho <span className="cli-sub">(opcional)</span></label>
+            <div className="seg seg-tabs" style={{ marginBottom: ".5rem" }}>
+              <button type="button" className={f.cabecalhoTipo === "texto" ? "on" : ""} onClick={() => set("cabecalhoTipo", "texto")}>🔤 Texto</button>
+              <button type="button" className={f.cabecalhoTipo === "midia" ? "on" : ""} onClick={() => set("cabecalhoTipo", "midia")}>🖼️ Imagem, vídeo ou PDF</button>
+            </div>
+            {f.cabecalhoTipo === "texto" ? (<>
+              <input value={f.cabecalho} onChange={(e) => set("cabecalho", e.target.value)} maxLength={lim.cabecalho + 20} placeholder="ex.: Aviso da escola" />
+              <div className="cli-sub" style={{ marginTop: ".25rem" }}>até {lim.cabecalho} caracteres, sem emoji</div>
+            </>) : (<>
+              <EscolherMidia valor={f.midia} onChange={(m) => set("midia", m)} />
+              <div className="cli-sub" style={{ marginTop: ".3rem" }}>
+                Imagem JPG/PNG até 5 MB, vídeo MP4 ou PDF até 16 MB. Vai como exemplo para a Meta aprovar e já fica escolhida nos disparos deste template (dá para trocar na hora de enviar).
+              </div>
+            </>)}
+            {voucherId && f.cabecalhoTipo === "texto" && <div className="seg-hint" style={{ marginTop: ".4rem" }}>🖼️ Dica: a arte da campanha pode ir como imagem no cabeçalho — escolha “Imagem, vídeo ou PDF”.</div>}
           </div>
 
           <div className="field">
@@ -993,6 +1115,7 @@ export function CriarTemplate({ inicial, opcoes = {}, onCriado, voucherId = null
           <div style={{ background: "#e5ddd5", borderRadius: 12, padding: "1rem", minHeight: 120 }}>
             {conf?.previa?.body ? (
               <div style={{ background: "#fff", borderRadius: "0 10px 10px 10px", padding: ".6rem .8rem", maxWidth: 360, boxShadow: "0 1px 1px rgba(0,0,0,.12)", whiteSpace: "pre-wrap", fontSize: ".9rem", lineHeight: 1.4, color: "#222" }}>
+                {f.cabecalhoTipo === "midia" && <MidiaPrevia midia={f.midia} tipo={f.midia?.tipo || "IMAGE"} />}
                 {conf.previa.header && <div style={{ fontWeight: 700, marginBottom: ".3rem" }}>{conf.previa.header}</div>}
                 {conf.previa.body}
                 {conf.previa.footer && <div style={{ color: "#8a8a8a", fontSize: ".78rem", marginTop: ".4rem" }}>{conf.previa.footer}</div>}
@@ -1028,6 +1151,7 @@ function ExemploTemplate({ t }) {
   return (
     <div style={{ background: "#e5ddd5", borderRadius: 10, padding: ".7rem", marginTop: ".5rem", maxWidth: 420, cursor: "default" }} onClick={(e) => e.stopPropagation()}>
       <div style={{ background: "#fff", borderRadius: "0 10px 10px 10px", padding: ".55rem .75rem", boxShadow: "0 1px 1px rgba(0,0,0,.12)", whiteSpace: "pre-wrap", fontSize: ".85rem", lineHeight: 1.4, color: "#222" }}>
+        {t.midia && <MidiaPrevia midia={t.midiaSalva || null} tipo={t.midia} vazio="(escolhida no disparo)" />}
         {t.header && <div style={{ fontWeight: 700, marginBottom: ".3rem" }}>{comExemplo(t.header, ex.header)}</div>}
         {comExemplo(t.body, ex.body)}
         {t.footer && <div style={{ color: "#8a8a8a", fontSize: ".75rem", marginTop: ".4rem" }}>{t.footer}</div>}

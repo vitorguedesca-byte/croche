@@ -39,6 +39,17 @@ export const MARCADORES = {
 
 export const LIMITES = { nome: 512, cabecalho: 60, corpo: 1024, rodape: 60 };
 
+/* Mídia que pode ir no cabeçalho e o teto de cada uma na Meta. O tipo vem do
+   arquivo; PDF tem teto maior na Meta (100 MB), mas aqui fica em 16 MB, o
+   tamanho que o banco guarda. */
+export const MIDIAS_CABECALHO = {
+  "image/jpeg": { formato: "IMAGE", max: 5 * 1024 * 1024 },
+  "image/png": { formato: "IMAGE", max: 5 * 1024 * 1024 },
+  "video/mp4": { formato: "VIDEO", max: 16 * 1024 * 1024 },
+  "application/pdf": { formato: "DOCUMENT", max: 16 * 1024 * 1024 },
+};
+const FORMATOS_MIDIA = ["IMAGE", "VIDEO", "DOCUMENT"];
+
 /* Palavras que fazem a Meta tratar o texto como promoção. Não é a lista
    dela (ela não publica); é o suficiente para avisar ANTES de submeter que
    "utilidade" provavelmente vai voltar como marketing. */
@@ -99,6 +110,9 @@ export function montarTemplate(entrada, existentes = []) {
   // linha em branco dupla é o máximo que faz sentido; o resto some
   const corpoBruto = String(entrada?.corpo || "").replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim();
   const rodape = String(entrada?.rodape || "").trim();
+  // cabeçalho de mídia: o formato vem da imagem já enviada; o `handle` (exemplo
+  // para a Meta) só existe na hora de submeter — quem põe é o servidor
+  const midia = FORMATOS_MIDIA.includes(String(entrada?.midiaTipo || "").toUpperCase()) ? String(entrada.midiaTipo).toUpperCase() : null;
 
   // ---- nome
   const name = nomeDoTemplate(titulo);
@@ -110,7 +124,8 @@ export function montarTemplate(entrada, existentes = []) {
 
   // ---- cabeçalho
   let header = null, exHeader = [];
-  if (cabecalho) {
+  if (midia && cabecalho) erros.push("O cabeçalho é texto OU imagem — escolha um dos dois.");
+  if (cabecalho && !midia) {
     const c = converter(cabecalho, 1);
     erros.push(...c.erros.map((e) => `Cabeçalho: ${e}`));
     if (cabecalho.length > LIMITES.cabecalho) erros.push(`Cabeçalho passa de ${LIMITES.cabecalho} caracteres (${cabecalho.length}).`);
@@ -164,16 +179,17 @@ export function montarTemplate(entrada, existentes = []) {
   }
 
   const components = [];
-  if (header) components.push({ type: "HEADER", format: "TEXT", text: header, ...(exHeader.length ? { example: { header_text: exHeader } } : {}) });
+  if (midia) components.push({ type: "HEADER", format: midia, ...(entrada?.midiaHandle ? { example: { header_handle: [entrada.midiaHandle] } } : {}) });
+  else if (header) components.push({ type: "HEADER", format: "TEXT", text: header, ...(exHeader.length ? { example: { header_text: exHeader } } : {}) });
   components.push({ type: "BODY", text: body, ...(exBody.length ? { example: { body_text: [exBody] } } : {}) });
   if (rodape) components.push({ type: "FOOTER", text: rodape });
 
   return {
     erros: [...new Set(erros)],
     avisos,
-    previa: { header: header ? comExemplos(header, exHeader) : null, body: comExemplos(body, exBody), footer: rodape || null },
+    previa: { header: header && !midia ? comExemplos(header, exHeader) : null, midia, body: comExemplos(body, exBody), footer: rodape || null },
     payload: { name, category: categoria, language: "pt_BR", components },
-    marcadores: { header: header ? converter(cabecalho).marcadores : [], body: c.marcadores },
+    marcadores: { header: header && !midia ? converter(cabecalho).marcadores : [], body: c.marcadores },
   };
 }
 

@@ -136,8 +136,8 @@ import {
   passoMaisLonge,
   descreverAulaSite,
 } from "./funil.js";
-import { waConfigured, waTemplatesConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, parseTemplateStatuses, normalizePhone, listWaTemplates, createWaTemplate } from "./wa.js";
-import { montarTemplate, textoComMarcadores, MARCADORES, LIMITES as LIMITES_TEMPLATE } from "./waTemplateRegras.js";
+import { waConfigured, waTemplatesConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, parseTemplateStatuses, normalizePhone, listWaTemplates, createWaTemplate, uploadWaMedia, uploadWaExemploTemplate } from "./wa.js";
+import { montarTemplate, textoComMarcadores, MARCADORES, LIMITES as LIMITES_TEMPLATE, MIDIAS_CABECALHO } from "./waTemplateRegras.js";
 import {
   CONVERSA_EXPIRA_H,
   conversaExpirou,
@@ -184,6 +184,14 @@ const depoUpload = multer({
   fileFilter: (_req, file, cb) => {
     cb(null, /^image\/(jpeg|png|webp|gif)$/.test(file.mimetype));
   },
+});
+
+/* Imagem/vídeo/PDF do cabeçalho de template: fica na memória só o tempo de
+   gravar no banco (WaMidia) — o container não tem pasta que dure. */
+const midiaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 16 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => cb(null, !!MIDIAS_CABECALHO[file.mimetype]),
 });
 
 const app = express();
@@ -7879,10 +7887,12 @@ function descreverTemplateDisparo(t) {
   const varsDe = (txt) => [...String(txt || "").matchAll(/\{\{\s*([^}\s]+)\s*\}\}/g)].map((m) => m[1]);
   const bodyVars = [...new Set(varsDe(body?.text))];
   const headerVars = header?.format === "TEXT" ? [...new Set(varsDe(header.text))] : [];
+  // IMAGE | VIDEO | DOCUMENT: a mídia vai em cada envio (escolhida na tela do disparo)
+  const midia = ["IMAGE", "VIDEO", "DOCUMENT"].includes(header?.format) ? header.format : null;
   const status = t.status || "UNKNOWN";
   let motivo = null;
   if ([...bodyVars, ...headerVars].some((v) => !/^\d+$/.test(v))) motivo = "usa variáveis com nome";
-  else if (header && header.format && header.format !== "TEXT") motivo = "tem imagem/arquivo no cabeçalho";
+  else if (header && header.format && header.format !== "TEXT" && !midia) motivo = `tem ${String(header.format).toLowerCase()} no cabeçalho`;
   else if ((botoes?.buttons || []).some((b) => b.type === "URL" && /\{\{/.test(b.url || ""))) motivo = "tem botão com link variável";
   // O status vem antes do formato: "ainda não aprovado" é a resposta mais útil.
   const motivoStatus = status === "APPROVED" ? null : (MOTIVO_STATUS[status] || `status ${status} na Meta`);
@@ -7902,6 +7912,7 @@ function descreverTemplateDisparo(t) {
     buttons: (botoes?.buttons || []).map((b) => b.text),
     headerVars: headerVars.length,
     bodyVars: bodyVars.length,
+    midia,
     /* Os valores de exemplo que foram mandados junto na aprovação. A tela mostra
        cada um ao lado do campo ("exemplo aprovado: Ipatinga") e usa na prévia
        enquanto o campo está vazio: é o jeito de saber o que a Meta espera em
@@ -8038,6 +8049,15 @@ app.get("/api/wa/disparo/opcoes", wrap(async (req, res) => {
     .map(descreverTemplateDisparo)
     .sort((a, b) => Number(b.usavel) - Number(a.usavel) || a.name.localeCompare(b.name));
   const emAndamento = await prisma.waDisparo.findFirst({ where: { fimEm: null }, orderBy: { inicioEm: "desc" }, select: { id: true } });
+  // a imagem com que o template foi criado pelo painel: o disparo já abre com ela
+  const comMidia = todos.filter((t) => t.midia).map((t) => t.name);
+  const midias = comMidia.length
+    ? await prisma.waMidia.findMany({ where: { template: { in: comMidia } }, orderBy: { id: "desc" }, select: { id: true, nome: true, mime: true, template: true } })
+    : [];
+  for (const t of todos) {
+    const m = t.midia && midias.find((x) => x.template === t.name);
+    t.midiaSalva = m ? { id: m.id, nome: m.nome, mime: m.mime } : null;
+  }
   res.json({
     waConfigurado: waConfigured(),
     wabaConfigurada: waTemplatesConfigured(),
@@ -8062,9 +8082,33 @@ app.get("/api/wa/disparo/opcoes", wrap(async (req, res) => {
     limitesTemplate: LIMITES_TEMPLATE,
     emAndamento: emAndamento?.id || null,
     ultimos: await resumirDisparos(),
+    campanhas: await campanhasDoDisparo(todos),
     ...(await publicoAvancadoDoDisparo()),
   });
 }));
+
+/* Atalho "Usar uma campanha" do disparo (25/11/2026): as campanhas com a
+   mensagem do WhatsApp, a situação de cada uma e para quem o disparo é
+   sugerido — o mesmo que o botão "Disparar" da tela de Campanhas abre. */
+const PUBLICO_DISPARO_CAMPANHA = { novas: "interessadas", alunas: "mensalistas", todas: "tudo" };
+async function campanhasDoDisparo(templates) {
+  const vs = await prisma.voucher.findMany({ where: { waTemplate: { not: null } }, orderBy: { createdAt: "desc" } });
+  if (!vs.length) return [];
+  const usos = await prisma.voucherUso.groupBy({ by: ["voucherId"], where: { status: { in: STATUS_QUE_CONTAM } }, _count: { _all: true } });
+  const usadosDe = new Map(usos.map((u) => [u.voucherId, u._count._all]));
+  const hoje = todayISO();
+  return vs.map((v) => {
+    const t = templates.find((x) => x.name === v.waTemplate);
+    return {
+      id: v.id, nome: v.nome, codigo: v.codigo,
+      template: v.waTemplate,
+      templateUsavel: !!t?.usavel,
+      templateSituacao: t ? (t.usavel ? null : t.motivo) : "aguardando a Meta",
+      situacao: situacaoCampanha(v, { hoje, usados: usadosDe.get(v.id) || 0 }),
+      publico: PUBLICO_DISPARO_CAMPANHA[v.publico] || "todas",
+    };
+  });
+}
 
 /* PÚBLICO AVANÇADO do disparo (25/11/2026): além das fichas, as leads do funil
    que ainda não têm ficha (deixaram o WhatsApp no site, falaram com o robô,
@@ -8126,6 +8170,23 @@ app.post("/api/wa/disparo", wrap(async (req, res) => {
     }
     tpl.valoresHeader = hv;
     tpl.valoresBody = bv;
+    /* Cabeçalho de mídia: sobe UMA vez para a Meta e o mesmo id vai para
+       todas. Feito antes de responder: se a Meta recusar o arquivo, a tela
+       fica sabendo na hora, e não com 200 erros iguais depois. */
+    if (tpl.midia) {
+      const m = Number(template.midiaId) ? await prisma.waMidia.findUnique({ where: { id: Number(template.midiaId) } }) : null;
+      if (!m) return res.status(400).json({ error: "Escolha a imagem (ou o arquivo) do cabeçalho do template." });
+      if (MIDIAS_CABECALHO[m.mime]?.formato !== tpl.midia) {
+        return res.status(400).json({ error: `O cabeçalho deste template pede ${NOME_MIDIA[tpl.midia]}, e o arquivo escolhido é ${NOME_MIDIA[MIDIAS_CABECALHO[m.mime]?.formato] || m.mime}.` });
+      }
+      try {
+        const idMeta = await uploadWaMedia(Buffer.from(m.dados), m.mime, m.nome);
+        tpl.headerMidia = { tipo: tpl.midia.toLowerCase(), id: idMeta, filename: m.nome };
+      } catch (e) {
+        const er = e?.body?.error || {};
+        return res.status(502).json({ error: `A Meta não aceitou o arquivo do cabeçalho: ${er.error_user_msg || er.message || e.message}` });
+      }
+    }
   } else if (!String(texto || "").trim()) {
     return res.status(400).json({ error: "Escreva a mensagem." });
   }
@@ -8203,6 +8264,7 @@ async function rodarDisparo(id, { modo, texto, tpl }) {
             ? await sendWaText(it.phone, preencherDisparo(texto, cli))
             : await sendWaTemplate(it.phone, tpl.name, {
                 lang: tpl.language,
+                headerMidia: tpl.headerMidia || null,
                 header: tpl.valoresHeader.map((v) => preencherDisparo(v, cli)),
                 body: tpl.valoresBody.map((v) => preencherDisparo(v, cli)),
               });
@@ -8293,11 +8355,32 @@ app.post("/api/wa/templates", wrap(async (req, res) => {
   // lista fresca: o nome pode ter sido usado há um minuto no Gerenciador da Meta
   const { lista, erro } = await sincronizarTemplates({ forcar: true });
   if (erro && !lista.length) return res.status(502).json({ error: `Não consegui falar com a Meta: ${erro}` });
-  const r = montarTemplate(req.body || {}, lista);
-  if (r.erros.length) return res.status(400).json({ error: r.erros[0], erros: r.erros });
   const por = req.admin?.username || "painel";
+  /* Cabeçalho de mídia: o arquivo (já no banco) vai como EXEMPLO para a
+     Meta pela API de upload do app, que devolve o handle do template. */
+  const entrada = { ...(req.body || {}) };
+  let midia = null;
+  if (Number(entrada.midiaId)) {
+    midia = await prisma.waMidia.findUnique({ where: { id: Number(entrada.midiaId) } });
+    if (!midia) return res.status(400).json({ error: "A imagem do cabeçalho não foi encontrada. Escolha de novo." });
+    entrada.midiaTipo = MIDIAS_CABECALHO[midia.mime]?.formato || null;
+  } else {
+    entrada.midiaTipo = null;
+  }
+  let r = montarTemplate(entrada, lista);
+  if (r.erros.length) return res.status(400).json({ error: r.erros[0], erros: r.erros });
+  if (midia) {
+    try {
+      entrada.midiaHandle = await uploadWaExemploTemplate(Buffer.from(midia.dados), midia.mime, midia.nome);
+    } catch (e) {
+      const er = e?.body?.error || {};
+      return res.status(502).json({ error: `Não consegui mandar a imagem de exemplo para a Meta: ${er.error_user_msg || er.message || e.message}` });
+    }
+    r = montarTemplate(entrada, lista);
+  }
   try {
     const criado = await createWaTemplate(r.payload);
+    if (midia) await prisma.waMidia.update({ where: { id: midia.id }, data: { template: r.payload.name } }).catch(() => {});
     console.log(`[wa templates] ${r.payload.name} (${r.payload.category}) submetido por ${por}: ${criado?.status || "PENDING"} (id ${criado?.id || "?"})`);
     /* Criado a partir de uma campanha: fica ligado a ela, para a tela de
        Campanhas mostrar a aprovação e oferecer o disparo. Falhar aqui não
@@ -8316,6 +8399,33 @@ app.post("/api/wa/templates", wrap(async (req, res) => {
     console.warn(`[wa templates] ${r.payload.name} recusado na submissão: ${msg}`);
     res.status(400).json({ error: `A Meta não aceitou: ${msg}` });
   }
+}));
+
+/* Arquivo do cabeçalho (imagem, vídeo ou PDF). Fica guardado no banco: serve
+   de exemplo na criação do template e é reenviado à Meta a cada disparo. */
+const NOME_MIDIA = { IMAGE: "uma imagem", VIDEO: "um vídeo", DOCUMENT: "um PDF" };
+app.post("/api/wa/midia", (req, res, next) => midiaUpload.single("arquivo")(req, res, (err) => {
+  if (err) return res.status(400).json({ error: err.code === "LIMIT_FILE_SIZE" ? "Arquivo grande demais (máximo 16 MB)." : err.message });
+  next();
+}), wrap(async (req, res) => {
+  const f = req.file;
+  if (!f) return res.status(400).json({ error: "Envie uma imagem JPG ou PNG, um vídeo MP4 ou um PDF." });
+  const regra = MIDIAS_CABECALHO[f.mimetype];
+  if (f.size > regra.max) return res.status(400).json({ error: `Arquivo grande demais: a Meta aceita até ${Math.round(regra.max / 1024 / 1024)} MB para ${NOME_MIDIA[regra.formato].replace(/^um[a]? /, "")}.` });
+  const nome = String(f.originalname || "arquivo").replace(/[^\w.\- ]+/g, "_").slice(0, 200);
+  const m = await prisma.waMidia.create({
+    data: { nome, mime: f.mimetype, tamanho: f.size, dados: f.buffer, por: req.admin?.username || null },
+    select: { id: true, nome: true, mime: true, tamanho: true },
+  });
+  res.json({ ...m, tipo: regra.formato });
+}));
+
+app.get("/api/wa/midia/:id", wrap(async (req, res) => {
+  const m = await prisma.waMidia.findUnique({ where: { id: Number(req.params.id) || 0 } });
+  if (!m) return res.status(404).json({ error: "Arquivo não encontrado." });
+  res.setHeader("Content-Type", m.mime);
+  res.setHeader("Cache-Control", "private, max-age=86400");
+  res.end(Buffer.from(m.dados));
 }));
 
 // Histórico: os últimos disparos, para reabrir o de ontem e ver quem ficou faltando.
