@@ -75,10 +75,19 @@ export function mesesDoPacote(v) {
   return { gratis, pagos, todos, cobranca: todos[0], cobertos: todos.slice(1), volta: somaMes(v.pacoteInicio, g + n) };
 }
 
+/* Último dia em que o Pix do pacote pode ser pago: o fim da campanha. Passou
+   dele sem pagamento, o pacote cai (Inêz, 25/11/2026) — não há atraso com
+   multa depois disso, porque a promoção já acabou. */
+export const limiteDoPacote = (v) => (v?.fim ? String(v.fim).slice(0, 10) : null);
+
 /* Vencimento do Pix do pacote para quem já estuda: no dia em que usa o código
-   (sem data na campanha) ou até a data marcada — nunca antes de hoje. */
-export const vencimentoDoPacote = (v, hoje) =>
-  v?.pacoteVenceEm && v.pacoteVenceEm > hoje ? v.pacoteVenceEm : hoje;
+   (sem data na campanha) ou até a data marcada — nunca antes de hoje e nunca
+   depois do fim da campanha. */
+export const vencimentoDoPacote = (v, hoje) => {
+  const venc = v?.pacoteVenceEm && v.pacoteVenceEm > hoje ? v.pacoteVenceEm : hoje;
+  const limite = limiteDoPacote(v);
+  return limite && venc > limite && limite >= hoje ? limite : venc;
+};
 
 /* Valor do pacote: a soma das mensalidades dos meses PAGOS. `valorDoMes(comp)`
    vem de fora (é o valor que aquele mês teria sem o pacote). */
@@ -147,9 +156,12 @@ export function descreverBeneficios(v) {
     out.push(pac.pagos.length === 1
       ? `Mensalidade de ${nomeMes(pac.pagos[0])} paga já no pacote`
       : `Mensalidades de ${listaMeses(pac.pagos)} pagas juntas, num Pix só (a soma das ${pac.pagos.length} mensalidades do seu plano)`);
-    out.push(v.pacoteVenceEm
-      ? `O pacote é pago até ${fmtBR(v.pacoteVenceEm)}`
+    const limite = limiteDoPacote(v);
+    const venceEm = v.pacoteVenceEm && limite && v.pacoteVenceEm > limite ? limite : v.pacoteVenceEm;
+    out.push(venceEm
+      ? `O pacote é pago até ${fmtBR(venceEm)}`
       : "O pacote é pago no dia em que você usar o código");
+    if (limite) out.push(`Depois de ${fmtBR(limite)}, quando a promoção acaba, o pacote não pode mais ser pago`);
     out.push("Para quem está entrando: sem taxa de matrícula");
     out.push(`Em ${nomeMes(pac.volta)} a mensalidade volta a ser cobrada normalmente`);
     out.push("Se cancelar durante o pacote, o valor pago não é devolvido");
@@ -306,8 +318,6 @@ export function limparCampanha(body, { hoje } = {}) {
   const temPac = !!pacoteInicio;
   const pacoteVenceEm = temPac && b.pacoteVenceEm ? String(b.pacoteVenceEm).slice(0, 10) : null;
   if (pacoteVenceEm && !/^\d{4}-\d{2}-\d{2}$/.test(pacoteVenceEm)) return { erro: "Data de pagamento do pacote inválida." };
-  if (pacoteVenceEm && pacoteVenceEm.slice(0, 7) >= somaMes(pacoteInicio, 1))
-    return { erro: "O pacote precisa ser pago antes de terminar o 1º mês dele." };
 
   if (!isentaMatricula && !descontoTipo && !temPac && !aulaExperimental && !premio && !aulasExtras)
     return { erro: "Escolha pelo menos um benefício: isenção da matrícula, desconto, pacote, aula experimental, aula de presente ou prêmio." };
@@ -326,6 +336,9 @@ export function limparCampanha(body, { hoje } = {}) {
   if (temPac && !fim) return { erro: "Com pacote, a campanha precisa de uma data final (o pacote começa no mês seguinte a ela, ou depois)." };
   if (temPac && fim.slice(0, 7) >= pacoteInicio)
     return { erro: "O pacote precisa começar num mês DEPOIS do fim da campanha." };
+  // O Pix do pacote morre no fim da campanha: um prazo depois dele não existe.
+  if (pacoteVenceEm && pacoteVenceEm > fim)
+    return { erro: `O pacote precisa ser pago até o fim da campanha (${fmtBR(fim)}).` };
   void hoje;
   const limiteUsos = b.limiteUsos === "" || b.limiteUsos == null ? null : parseInt(b.limiteUsos, 10);
   if (limiteUsos != null && (!Number.isInteger(limiteUsos) || limiteUsos < 1)) return { erro: "O limite de usos precisa ser 1 ou mais (ou vazio para sem limite)." };

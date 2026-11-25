@@ -81,6 +81,7 @@ import {
   descricaoDoPacote,
   mesesDoPacoteNaMatricula,
   vencimentoDoPacote,
+  limiteDoPacote,
   listaMeses,
   nomeMes,
   STATUS_QUE_CONTAM,
@@ -3808,13 +3809,18 @@ async function gerarMensalidade(clientId, competencia) {
   const existing = await prisma.invoice.findFirst({ where: { clientId, competencia: comp } });
   if (existing) return existing;
   // Valor DA COMPETÊNCIA: respeita o desconto/promoção marcada para este mês.
-  const valor = await valorDaCompetencia(client, comp);
   /* PACOTE da campanha (ver gravarPacote). O mês da cobrança nasce com o valor
      do pacote e a descrição dele; os meses cobertos nascem quitados em R$ 0 —
      mas só depois que o Pix do pacote cair. Antes disso não nascem: a cobrança
      do pacote em aberto já é o que ela deve, e um "pago" de R$ 0 ali daria por
-     quitado um mês que ninguém pagou. */
-  const precoPacote = await prisma.monthlyPrice.findFirst({ where: { clientId, competencia: comp, origem: "pacote" } });
+     quitado um mês que ninguém pagou.
+     Pacote que passou do fim da campanha sem pagamento cai aqui mesmo, antes
+     de qualquer conta: o mês nasce como um mês comum. */
+  let precoPacote = await prisma.monthlyPrice.findFirst({ where: { clientId, competencia: comp, origem: "pacote" } });
+  if (precoPacote && await expirarPacoteNaoPago(await cobrancaDoPacote(clientId, comp))) {
+    precoPacote = await prisma.monthlyPrice.findFirst({ where: { clientId, competencia: comp, origem: "pacote" } });
+  }
+  const valor = await valorDaCompetencia(client, comp);
   if (precoPacote && precoPacote.amountCents === 0) {
     const cob = await cobrancaDoPacote(clientId, comp);
     if (!cob?.paga) {
@@ -3833,10 +3839,11 @@ async function gerarMensalidade(clientId, competencia) {
   const descricao = precoPacote ? (precoPacote.motivo || "Pacote").slice(0, 200) : null;
   /* O Pix do pacote vence no prazo da campanha (no dia do uso, ou até a data
      marcada), não no vencimento normal daquele mês. */
-  let venceOPacote = null;
+  let venceOPacote = null, limitePacote = null;
   if (precoPacote && precoPacote.amountCents > 0) {
     const cob = await cobrancaDoPacote(clientId, comp);
     if (cob?.vence) venceOPacote = cob.vence < todayISO() ? todayISO() : cob.vence;
+    limitePacote = cob?.limite || null;
   }
   /* Mês zerado por código de promoção (ex.: "2º mês grátis"): nasce quitado.
      O Sicredi não emite Pix de R$ 0, e sem esta saída o mês cairia no erro
@@ -3860,7 +3867,8 @@ async function gerarMensalidade(clientId, competencia) {
     // Se o Sicredi falhar, a mensalidade ainda precisa existir aqui — senão a aluna
     // fica sem cobrança nenhuma. Fica sem Pix e a tela oferece gerar de novo.
     try {
-      const validade = validadeDoPix(dueDate);
+      // O Pix do pacote morre no fim da campanha, não no horizonte de sempre
+      const validade = limiteDoPix(validadeDoPix(dueDate), limitePacote);
       ({ txid, pixCode } = await emitirCobrancaMensalidade({ client, comp, valorCents, expiraEm: validade }));
       pixExpiresOn = validade;
     } catch (e) {
@@ -3889,6 +3897,21 @@ const VALIDADE_REEMISSAO_DIAS = 3;
 const PIX_HORIZONTE_DIAS = 90;
 const validadeDoPix = (dueDate) =>
   SETTINGS.pixExpira ? dueDate : addDays(todayISO(), PIX_HORIZONTE_DIAS);
+// Validade encurtada para não passar de `limite` (o fim da campanha do pacote)
+const limiteDoPix = (validade, limite) => (limite && limite < validade ? limite : validade);
+
+/* Último dia em que a mensalidade pode ser paga, quando ela é o Pix de um
+   pacote de campanha ainda não pago; null para as demais (que seguem as regras
+   de atraso de sempre). */
+async function limiteDoPacoteDaMensalidade(inv) {
+  if (!inv || inv.status !== "pendente") return null;
+  const preco = await prisma.monthlyPrice.findFirst({
+    where: { clientId: inv.clientId, competencia: inv.competencia, origem: "pacote", amountCents: { gt: 0 } },
+  });
+  if (!preco) return null;
+  const cob = await cobrancaDoPacote(inv.clientId, inv.competencia);
+  return cob && !cob.paga && cob.comp === inv.competencia ? cob : null;
+}
 
 // Até quando o Pix guardado é pagável. Mensalidades criadas antes da coluna
 // pixExpiresOn existir não têm o campo: nelas a validade era o próprio vencimento.
@@ -3920,6 +3943,21 @@ const SEQ_LIMITE_REEMISSAO = 90;
 async function pixPagavelDaMensalidade(invoice) {
   const hoje = todayISO();
 
+  /* Pix de pacote de campanha: pagável só até o fim da campanha. Passou disso,
+     o pacote cai e o que sobra é a mensalidade comum do mês — é ela que segue. */
+  const pacote = await limiteDoPacoteDaMensalidade(invoice);
+  if (pacote?.limite && pacote.limite < hoje) {
+    if (await expirarPacoteNaoPago(pacote)) {
+      throw Object.assign(
+        new Error(`O prazo para pagar o pacote acabou em ${fmtDiaBR(pacote.limite)}, junto com a campanha. A mensalidade de ${nomeMes(invoice.competencia)} volta ao valor e ao vencimento de sempre. 💚`),
+        { code: 409, codigo: "PACOTE_EXPIRADO" }
+      );
+    }
+    invoice = await prisma.invoice.findUnique({ where: { id: invoice.id } });
+    if (invoice.status !== "pendente") return invoice;
+  }
+  const limitePacote = pacote?.limite || null;
+
   const devido = encargosHoje(invoice, hoje);
   const valorMudou = invoice.pixCode
     ? (totalDoPixAtual(invoice) !== devido.totalCents || (invoice.encargosAte && !devido.atrasada))
@@ -3941,9 +3979,9 @@ async function pixPagavelDaMensalidade(invoice) {
   }
   // Com a trava desligada a reemissão já nasce com o horizonte longo, para a
   // aluna não precisar voltar aqui a cada três dias.
-  const pixExpiresOn = SETTINGS.pixExpira
+  const pixExpiresOn = limiteDoPix(SETTINGS.pixExpira
     ? addDays(hoje, VALIDADE_REEMISSAO_DIAS)
-    : addDays(hoje, PIX_HORIZONTE_DIAS);
+    : addDays(hoje, PIX_HORIZONTE_DIAS), limitePacote);
   const { txid, pixCode } = await emitirCobrancaMensalidade({
     client,
     comp: invoice.competencia,
@@ -4478,6 +4516,7 @@ async function cobrancaDoPacote(clientId, comp) {
   const usos = await prisma.voucherUso.findMany({
     where: { clientId, status: { in: STATUS_QUE_CONTAM } },
     orderBy: { id: "desc" },
+    include: { voucher: true },
   });
   for (const u of usos) {
     let meses;
@@ -4486,12 +4525,100 @@ async function cobrancaDoPacote(clientId, comp) {
     if (!cob || !meses.some((m) => m.comp === comp)) continue;
     const inv = await prisma.invoice.findFirst({ where: { clientId, competencia: cob.comp } });
     return {
-      uso: u, comp: cob.comp, invoice: inv, vence: cob.vence || null,
+      uso: u, meses, comp: cob.comp, invoice: inv, vence: cob.vence || null,
+      // Na matrícula o pacote já nasce pago: o limite só importa a quem já estuda.
+      limite: u.contexto === "mensalidade" ? cob.limite || limiteDoPacote(u.voucher) : null,
       paga: inv?.status === "pago", pagoEm: inv?.paidAt ? String(inv.paidAt).slice(0, 10) : null,
     };
   }
   return null;
 }
+
+/* Pacote não pago até o fim da campanha CAI (Inêz, 25/11/2026): depois do
+   último dia da promoção ele não pode mais ser pago — nem com multa. Os meses
+   voltam ao que eram antes do código, a mensalidade da cobrança volta a ser a
+   comum daquele mês (valor e vencimento de sempre), o QR do pacote fecha no
+   banco e o uso vira "expirado". Aula de presente ainda não marcada volta
+   para a escola, como no cancelamento.
+   Antes de derrubar, pergunta ao banco se o Pix caiu e o aviso não chegou:
+   quem pagou no último minuto não pode perder o pacote. Devolve true se caiu. */
+async function expirarPacoteNaoPago(cob, { motivo = "prazo do pacote acabou" } = {}) {
+  const hoje = todayISO();
+  if (!cob || cob.paga || !cob.limite || cob.limite >= hoje) return false;
+  const uso = cob.uso;
+  let inv = cob.invoice;
+  if (inv?.status === "pendente" && inv.txid) {
+    try { await confirmarPagamentoPorTxid(inv.txid); } catch (e) { console.warn(`[pacote] não consegui consultar o Pix ${inv.txid}: ${e.message}`); }
+    inv = await prisma.invoice.findUnique({ where: { id: inv.id } });
+    if (inv?.status === "pago") return false;
+  }
+  const client = uso.clientId ? await prisma.client.findUnique({ where: { id: uso.clientId } }) : null;
+  if (client) {
+    for (const m of cob.meses) {
+      const atual = await prisma.monthlyPrice.findUnique({
+        where: { clientId_competencia: { clientId: client.id, competencia: m.comp } },
+      });
+      // Só desfaz o preço que ainda é do pacote: ajuste feito depois, na mão, fica.
+      if (atual?.origem !== "pacote") continue;
+      if (m.antes == null) await aplicarValorNaCompetencia(client, m.comp, null);
+      else await aplicarValorNaCompetencia(client, m.comp, m.antes / 100, { origem: m.antesOrigem || "ajuste", motivo: m.antesMotivo });
+    }
+    const aberta = await prisma.invoice.findFirst({ where: { clientId: client.id, competencia: cob.comp, status: "pendente" } });
+    if (aberta) {
+      // O QR do pacote (ou a via com multa) não pode continuar pagável no banco
+      await fecharPixDaMensalidade(aberta, motivo);
+      await prisma.invoice.update({
+        where: { id: aberta.id },
+        data: {
+          descricao: null, dueDate: vencimentoDe(client, cob.comp),
+          pixCode: null, pixExpiresOn: null, encargosAte: null,
+          avisoAVencerAt: null, avisoAtrasoAt: null, avisoAtraso2At: null,
+        },
+      });
+    }
+  }
+  const recolhidas = await prisma.extraPass.updateMany({
+    where: { voucherUsoId: uso.id, status: "pago" },
+    data: { status: "cancelado" },
+  });
+  await prisma.voucherUso.update({ where: { id: uso.id }, data: { status: "expirado" } });
+  if (client) {
+    await anotarNaFicha(client.id,
+      `⌛ ${fmtDiaBR(hoje)}: o pacote ${uso.voucher?.codigo || ""} não foi pago até ${fmtDiaBR(cob.limite)}, fim da campanha, e foi cancelado. ` +
+      `A mensalidade de ${nomeMes(cob.comp)} volta ao valor e ao vencimento de sempre.` +
+      (recolhidas.count ? ` ${recolhidas.count} aula(s) de presente ainda não marcada(s) voltaram para a escola.` : ""));
+  }
+  console.log(`[pacote] uso ${uso.id} (${uso.nome}): não pago até ${cob.limite} — pacote cancelado.`);
+  return true;
+}
+
+/* Rodada: derruba os pacotes de quem já estuda que passaram do fim da
+   campanha sem pagamento. Roda sozinha (a cada hora) e não depende da geração
+   automática de mensalidades: o prazo vale com a chave ligada ou desligada. */
+async function rodadaPacotesVencidos() {
+  const hoje = todayISO();
+  const usos = await prisma.voucherUso.findMany({
+    where: {
+      status: "confirmado", contexto: "mensalidade", clientId: { not: null },
+      voucher: { pacoteInicio: { not: null }, fim: { lt: hoje } },
+    },
+    select: { clientId: true, meses: true },
+  });
+  let caidos = 0;
+  for (const u of usos) {
+    let meses;
+    try { meses = JSON.parse(u.meses || "[]"); } catch { continue; }
+    const cobMes = meses.find((m) => m.papel === "cobranca");
+    if (!cobMes) continue;
+    const cob = await cobrancaDoPacote(u.clientId, cobMes.comp);
+    try { if (await expirarPacoteNaoPago(cob)) caidos++; }
+    catch (e) { console.warn(`[pacote] não consegui cancelar o pacote vencido (${u.clientId}, ${cobMes.comp}): ${e.message}`); }
+  }
+  if (caidos) console.log(`[pacote] ${caidos} pacote(s) não pago(s) até o fim da campanha foram cancelados.`);
+}
+const dispararPacotesVencidos = () => rodadaPacotesVencidos().catch((e) => console.warn("[pacote vencido]", e.message));
+setInterval(dispararPacotesVencidos, 60 * 60 * 1000);
+setTimeout(dispararPacotesVencidos, 30_000);
 
 /* Quanto o pacote custa para ESTA aluna (sem gravar nada): a soma do valor
    que cada mês pago teria — plano dela, valor individual ou reajuste já
@@ -4546,7 +4673,8 @@ async function gravarPacote(client, v, { gerarAgora = false, uso = null } = {}) 
     meses.push({
       comp, papel: ehCob ? "cobranca" : "coberto", origem: "pacote", depois: Math.round(novo * 100),
       antes: antes ? antes.amountCents : null, antesOrigem: antes?.origem || null, antesMotivo: antes?.motivo || null,
-      ...(ehCob ? { vence } : {}),
+      // `limite`: último dia em que o Pix pode ser pago (o fim da campanha)
+      ...(ehCob ? { vence, limite: limiteDoPacote(v) } : {}),
     });
   }
   // gerarMensalidade acha o prazo do pacote pelos meses do uso: grava antes
@@ -5888,6 +6016,8 @@ async function rodadaAvisosMensalidade() {
   if (ultimoDiaAvisos === hoje) return;
   ultimoDiaAvisos = hoje;
 
+  // Pacote que passou do fim da campanha cai ANTES: não se cobra atraso dele
+  await rodadaPacotesVencidos().catch((e) => console.warn("[pacote vencido]", e.message));
   const abertas = await prisma.invoice.findMany({
     where: { status: "pendente" },
   });
@@ -6184,6 +6314,8 @@ app.post("/api/portal/:key/invoice/:id/pix", wrap(async (req, res) => {
         codigo: "SEM_PIX",
       });
     }
+    // Pacote que passou do fim da campanha: o recado é para ela, com o que muda
+    if (e.codigo === "PACOTE_EXPIRADO") return res.status(409).json({ error: e.message, codigo: e.codigo });
     // O portal é público: erro de configuração vira recado para procurar a Inêz,
     // sem expor qual credencial do banco está faltando.
     const publico = e.code === 400 || e.code === 404;

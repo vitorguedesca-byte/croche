@@ -190,6 +190,7 @@ function beneficiosDoForm(form, meta) {
     out.push(form.pacotePrazo === "data" && form.pacoteVenceEm
       ? `O pacote é pago até ${fmtDate(form.pacoteVenceEm)}`
       : "O pacote é pago no dia em que a aluna usar o código");
+    if (form.fim) out.push(`Depois de ${fmtDate(form.fim)}, quando a promoção acaba, o pacote não pode mais ser pago`);
     out.push("Para quem está entrando: sem taxa de matrícula");
     out.push(`Em ${nomeMes(pac.volta)} a mensalidade volta a ser cobrada normalmente`);
     out.push("Se cancelar durante o pacote, o valor pago não é devolvido");
@@ -264,6 +265,8 @@ export function CampanhaForm({ campanha }) {
       if (form.fim.slice(0, 7) >= form.pacoteInicio) return toast.error("O pacote precisa começar num mês depois do fim da campanha.");
       if (form.temDesconto) return toast.error("O pacote e o desconto na mensalidade não podem ser usados juntos.");
       if (form.pacotePrazo === "data" && !form.pacoteVenceEm) return toast.error("Escolha até que dia o pacote pode ser pago.");
+      if (form.pacotePrazo === "data" && form.pacoteVenceEm > form.fim)
+        return toast.error(`O pacote precisa ser pago até o fim da campanha (${fmtDate(form.fim)}).`);
     }
     const ok = await confirmModal({
       title: campanha ? "Salvar alterações" : "Criar campanha",
@@ -402,12 +405,14 @@ export function CampanhaForm({ campanha }) {
                 onClick={() => setForm((f) => ({ ...f, pacotePrazo: "data", pacoteVenceEm: f.pacoteVenceEm || f.fim }))}>Até uma data</button>
             </div>
             {form.pacotePrazo === "data" && (
-              <input type="date" style={{ maxWidth: 220, marginTop: ".5rem" }} value={form.pacoteVenceEm} onChange={(e) => set("pacoteVenceEm", e.target.value)} />
+              <input type="date" style={{ maxWidth: 220, marginTop: ".5rem" }} value={form.pacoteVenceEm} max={form.fim || undefined}
+                onChange={(e) => set("pacoteVenceEm", e.target.value)} />
             )}
             <div className="help">
               {form.pacotePrazo === "data"
-                ? "O Pix vence nessa data (quem usar o código depois dela paga no mesmo dia). Passou do prazo, valem as regras de atraso de sempre."
-                : "O Pix vence no mesmo dia em que ela usar o código. Passou do dia, valem as regras de atraso de sempre."}
+                ? "O Pix vence nessa data (quem usar o código depois dela paga no mesmo dia)."
+                : "O Pix vence no mesmo dia em que ela usar o código."}
+              {` O prazo final é o fim da campanha${form.fim ? ` (${fmtDate(form.fim)})` : ""}: até lá, valem as regras de atraso de sempre; depois, o Pix não pode mais ser pago, o pacote é cancelado e o mês volta ao valor normal.`}
               {" "}Aluna nova sempre paga na hora, no Pix da matrícula.
             </div>
           </div>

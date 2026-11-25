@@ -2,7 +2,7 @@
 import {
   normalizarCodigo, aplicarDesconto, primeiroPagamentoComVoucher, motivoRecusa,
   situacaoCampanha, mesesSeguintes, limparCampanha, descreverBeneficios, temDesconto,
-  temPacote, mesesDoPacote, valorDoPacote, descricaoDoPacote, listaMeses, mesesDoPacoteNaMatricula, vencimentoDoPacote,
+  temPacote, mesesDoPacote, valorDoPacote, descricaoDoPacote, listaMeses, mesesDoPacoteNaMatricula, vencimentoDoPacote, limiteDoPacote,
 } from "./src/vouchers.js";
 import { somarComp, mensalidadeDoPagamento } from "./src/regrasAula.js";
 
@@ -130,6 +130,14 @@ ok(vencimentoDoPacote({ ...vp, pacoteVenceEm: "2026-11-30" }, "2026-11-24") === 
 ok(vencimentoDoPacote({ ...vp, pacoteVenceEm: "2026-11-30" }, "2026-12-02") === "2026-12-02", "data já passada: vence no dia");
 ok(limparCampanha({ ...camp0(), pacoteVenceEm: "2026-11-30" }).dados.pacoteVenceEm === "2026-11-30", "guarda a data do prazo");
 ok(!!limparCampanha({ ...camp0(), pacoteVenceEm: "2027-01-05" }).erro, "prazo não pode passar do 1º mês do pacote");
+// o pagamento do pacote acaba junto com a campanha (Inêz, 25/11/2026)
+ok(!!limparCampanha({ ...camp0(), pacoteVenceEm: "2026-12-01" }).erro, "prazo não pode passar do fim da campanha");
+ok(limparCampanha({ ...camp0(), pacoteVenceEm: "2026-11-20" }).dados.pacoteVenceEm === "2026-11-20", "prazo antes do fim vale");
+ok(limiteDoPacote(vp) === "2026-11-30", "o limite do Pix do pacote é o fim da campanha");
+ok(limiteDoPacote({ ...vp, fim: null }) === null, "sem fim, sem limite");
+ok(vencimentoDoPacote({ ...vp, pacoteVenceEm: "2026-12-10" }, "2026-11-24") === "2026-11-30", "prazo antigo depois do fim: vence no fim");
+ok(descreverBeneficios({ ...vp, pacoteVenceEm: "2026-12-10" }).includes("O pacote é pago até 30/11/2026"), "a aluna vê o prazo limitado ao fim");
+ok(descreverBeneficios(vp).some((t) => t.includes("30/11/2026") && t.includes("não pode mais ser pago")), "avisa que depois do fim não paga mais");
 ok(limparCampanha({ ...camp0(), pacoteInicio: "", isentaMatricula: true, pacoteVenceEm: "2026-11-30" }).dados.pacoteVenceEm === null, "sem pacote, sem prazo");
 ok(primeiroPagamentoComVoucher(vp, { avulsa: true, valorAvulsa: 40 }).total === 40, "pacote não mexe na aula avulsa");
 let mm = mesesDoPacoteNaMatricula(vp, "2026-11");
