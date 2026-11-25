@@ -188,6 +188,25 @@ export async function listWaTemplates() {
   return { data };
 }
 
+/* GASTO REAL na Meta (25/11/2026): o que ela cobrou da conta do WhatsApp,
+   por dia, por categoria (marketing, utilidade, autenticação, serviço) e por
+   tipo (REGULAR = pago; FREE_CUSTOMER_SERVICE / FREE_ENTRY_POINT = grátis).
+   É o `pricing_analytics` da WABA — o mesmo número do Gerenciador do WhatsApp.
+   A própria Meta diz que é aproximado: a fatura é que manda. O custo vem na
+   moeda da conta, que é perguntada à parte (`currency`).
+     de/ate: segundos UNIX. Volta { moeda, pontos: [{ start, end, pricing_category,
+     pricing_type, volume, cost }] }. Um ano para trás é o limite da Meta. */
+export async function getWaPricingAnalytics(de, ate) {
+  if (!WABA_ID) throw new Error("WA_WABA_ID não configurado");
+  const campo = `pricing_analytics.start(${Math.floor(de)}).end(${Math.floor(ate)}).granularity(DAILY).dimensions(PRICING_CATEGORY,PRICING_TYPE)`;
+  const [r, conta] = await Promise.all([
+    graph("GET", `/${WABA_ID}?fields=${campo}`),
+    graph("GET", `/${WABA_ID}?fields=currency`).catch(() => null),
+  ]);
+  const pontos = (r?.pricing_analytics?.data || []).flatMap((d) => d.data_points || []);
+  return { moeda: conta?.currency || null, pontos };
+}
+
 /* Mudanças de status de template avisadas pela própria Meta.
 
    O campo `message_template_status_update` do webhook chega quando ela aprova,
@@ -325,6 +344,10 @@ export function parseStatuses(body) {
         to: s.recipient_id || "",
         errorCode: err?.code ?? null,
         errorMsg: err ? String(err.title || err.message || "").slice(0, 400) : null,
+        /* Se a Meta cobra esta mensagem e em que categoria. Vem nos avisos de
+           "sent"/"delivered"; o preço não vem — esse sai do pricing_analytics. */
+        cobrada: s.pricing ? !!s.pricing.billable : null,
+        categoria: s.pricing?.category ? String(s.pricing.category).slice(0, 30) : null,
       };
     });
   } catch {

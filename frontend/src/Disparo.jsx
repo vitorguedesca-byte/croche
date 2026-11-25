@@ -4,6 +4,7 @@ import { useStore } from "./store.jsx";
 import { Select, Modal, useModal } from "./ui.jsx";
 import { api, canAccess } from "./api.js";
 import { contemBusca, classifyClient } from "./helpers.js";
+import DisparoGasto from "./DisparoGasto.jsx";
 
 /* ============================================================
    Disparo em massa pelo WhatsApp oficial (Meta).
@@ -286,6 +287,7 @@ export default function Disparo({ params }) {
   const [jobId, setJobId] = useState(null);
   // alunas que já entram marcadas (vem de "mandar de novo para quem faltou")
   const [preSel, setPreSel] = useState(null);
+  const [aba, setAba] = useState("disparar");
 
   /* `sync` pergunta na hora para a Meta em vez de usar o cache de 5 min do
      servidor. Sem ele a tela ainda sincroniza — só aceita uma resposta de
@@ -360,23 +362,37 @@ export default function Disparo({ params }) {
     carregar(false);
   };
 
-  if (jobId) return <Andamento id={jobId} onNovo={voltar} />;
-  if (erroOpcoes) return <div className="panel empty"><div className="ic">🔌</div><p>Não consegui falar com o WhatsApp.</p><p className="cli-sub">{erroOpcoes}</p><button className="btn" onClick={() => carregar(true)}>Tentar de novo</button></div>;
-  if (!opcoes) return <div className="panel empty"><div className="ic">💬</div><p>Sincronizando com o WhatsApp…</p></div>;
-  if (!canAccess("whatsapp", 2)) return <UltimosDisparos lista={opcoes.ultimos || []} onAbrir={setJobId} />;
-  return (
-    <Composer
-      data={data}
-      opcoes={opcoes}
-      preSel={preSel}
-      pedido={params}
-      sincronizando={sincronizando}
-      onSincronizar={() => carregar(true)}
-      onRecarregar={() => carregar("auto")}
-      onAbrir={setJobId}
-      onIniciado={setJobId}
-    />
-  );
+  const telaDisparo = () => {
+    if (jobId) return <Andamento id={jobId} onNovo={voltar} />;
+    if (erroOpcoes) return <div className="panel empty"><div className="ic">🔌</div><p>Não consegui falar com o WhatsApp.</p><p className="cli-sub">{erroOpcoes}</p><button className="btn" onClick={() => carregar(true)}>Tentar de novo</button></div>;
+    if (!opcoes) return <div className="panel empty"><div className="ic">💬</div><p>Sincronizando com o WhatsApp…</p></div>;
+    if (!canAccess("whatsapp", 2)) return <UltimosDisparos lista={opcoes.ultimos || []} onAbrir={setJobId} />;
+    return (
+      <Composer
+        data={data}
+        opcoes={opcoes}
+        preSel={preSel}
+        pedido={params}
+        sincronizando={sincronizando}
+        onSincronizar={() => carregar(true)}
+        onRecarregar={() => carregar("auto")}
+        onAbrir={setJobId}
+        onIniciado={setJobId}
+      />
+    );
+  };
+
+  /* Abas: o disparo em si e o gasto com a Meta (25/11/2026). O disparo fica
+     montado, só escondido: quem vai olhar o gasto no meio de uma seleção
+     volta com as alunas e a mensagem como deixou. */
+  return (<>
+    <div className="seg seg-tabs" style={{ marginBottom: "1rem" }}>
+      <button className={aba === "disparar" ? "on" : ""} onClick={() => setAba("disparar")}>📤 Disparar</button>
+      <button className={aba === "gasto" ? "on" : ""} onClick={() => setAba("gasto")}>💰 Gasto na Meta</button>
+    </div>
+    <div hidden={aba !== "disparar"}>{telaDisparo()}</div>
+    {aba === "gasto" && <DisparoGasto />}
+  </>);
 }
 
 /* Barra de sincronização: de quando é o que está na tela, quantos templates a

@@ -642,6 +642,11 @@ model WaMessage {
   status    String   @default("enviado") @db.VarChar(20)
   errorCode Int? // 131047 = fora da janela de 24h, o caso mais comum
   errorMsg  String?  @db.VarChar(400)
+  /* O que a Meta disse no webhook de status (25/11/2026): se cobra esta
+     mensagem e a categoria (marketing | utility | authentication | service).
+     Nulo = ainda não avisou (ou mensagem anterior a este registro). */
+  cobrada   Boolean?
+  categoria String?  @db.VarChar(30)
   sentAt    DateTime @default(now())
   updatedAt DateTime @updatedAt
 

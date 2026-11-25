@@ -217,6 +217,8 @@ export const api = {
     enviar: (data) => req("POST", "/api/wa/disparo", data),
     status: (id) => req("GET", `/api/wa/disparo/${encodeURIComponent(id)}`),
     historico: () => req("GET", "/api/wa/disparos"),
+    // gasto real na Meta (por dia/categoria) + estimativa por disparo; datas 'YYYY-MM-DD'
+    gasto: (de, ate) => req("GET", `/api/wa/gasto?de=${encodeURIComponent(de)}&ate=${encodeURIComponent(ate)}`),
     /* Template novo, escrito no painel. `conferirTemplate` só confere as regras
        da Meta (nada é gravado — a tela chama enquanto a Inêz digita);
        `criarTemplate` confere de novo e submete para aprovação. */

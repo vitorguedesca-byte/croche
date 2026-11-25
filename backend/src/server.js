@@ -136,7 +136,7 @@ import {
   passoMaisLonge,
   descreverAulaSite,
 } from "./funil.js";
-import { waConfigured, waTemplatesConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, parseTemplateStatuses, normalizePhone, listWaTemplates, createWaTemplate, uploadWaMedia, uploadWaExemploTemplate } from "./wa.js";
+import { waConfigured, waTemplatesConfigured, waVerify, sendWaText, sendWaTemplate, sendWaButtons, sendWaList, parseIncoming, parseStatuses, parseTemplateStatuses, normalizePhone, listWaTemplates, getWaPricingAnalytics, createWaTemplate, uploadWaMedia, uploadWaExemploTemplate } from "./wa.js";
 import { montarTemplate, textoComMarcadores, MARCADORES, LIMITES as LIMITES_TEMPLATE, MIDIAS_CABECALHO } from "./waTemplateRegras.js";
 import {
   CONVERSA_EXPIRA_H,
@@ -7709,6 +7709,10 @@ async function processarStatusWa(statuses) {
     const reg = await prisma.waMessage.findUnique({ where: { wamid: s.wamid } });
     if (!reg) continue; // resposta dentro da conversa: não acompanhamos
     const novo = NOME_ENTREGA[s.status] || s.status;
+    // cobrança/categoria da Meta: grava assim que vier, mesmo num aviso repetido
+    if (s.cobrada !== null && (reg.cobrada !== s.cobrada || reg.categoria !== s.categoria)) {
+      await prisma.waMessage.update({ where: { wamid: s.wamid }, data: { cobrada: s.cobrada, categoria: s.categoria } });
+    }
     /* Os avisos chegam fora de ordem e repetidos. "Entregue" não pode voltar
        para "enviado" — mas "falhou" sempre vale, venha quando vier. */
     if (novo !== "falhou" && (ORDEM_ENTREGA[novo] ?? 0) <= (ORDEM_ENTREGA[reg.status] ?? 0)) continue;
@@ -8431,6 +8435,157 @@ app.get("/api/wa/midia/:id", wrap(async (req, res) => {
 // Histórico: os últimos disparos, para reabrir o de ontem e ver quem ficou faltando.
 app.get("/api/wa/disparos", wrap(async (_req, res) => {
   res.json({ disparos: await resumirDisparos(12) });
+}));
+
+/* GASTO COM A META (25/11/2026). Duas respostas na mesma tela:
+   - REAL: o que a Meta cobrou, por dia e categoria (pricing_analytics da WABA).
+     Ela mesma chama de aproximado; a fatura é que vale. Não diz de qual disparo
+     veio cada centavo — só o total do dia por categoria.
+   - POR DISPARO (estimado): mensagens cobradas de cada disparo × o preço médio
+     que a Meta cobrou por mensagem daquela categoria. "Cobrada" é o que o
+     webhook de status disse; mensagem antiga, sem esse aviso, conta como
+     cobrada se foi template e chegou (entregue/lida) — é a regra da Meta.
+   O que sobra do real depois dos disparos é dos avisos automáticos e do robô.
+
+   Dia é o dia de Brasília. A Meta devolve baldes diários; o meio do balde
+   cai no dia certo seja o balde em UTC ou no fuso da conta. */
+const FUSO_BR_MS = 3 * 3600_000; // America/Sao_Paulo, sem horário de verão
+const inicioDiaBR = (iso) => Date.parse(`${iso}T00:00:00Z`) + FUSO_BR_MS;
+const cacheGasto = new Map(); // "de|ate" → { em, valor }
+const GASTO_TTL_MS = 10 * 60_000;
+
+async function gastoRealMeta(deMs, ateMs) {
+  const chave = `${deMs}|${ateMs}`;
+  const c = cacheGasto.get(chave);
+  if (c && Date.now() - c.em < GASTO_TTL_MS) return c.valor;
+  const valor = await getWaPricingAnalytics(deMs / 1000, ateMs / 1000);
+  cacheGasto.set(chave, { em: Date.now(), valor });
+  if (cacheGasto.size > 30) cacheGasto.delete(cacheGasto.keys().next().value);
+  return valor;
+}
+
+app.get("/api/wa/gasto", wrap(async (req, res) => {
+  const hoje = todayISO();
+  const ok = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
+  const ate = ok(req.query.ate) && req.query.ate <= hoje ? req.query.ate : hoje;
+  const de = ok(req.query.de) && req.query.de <= ate ? req.query.de : `${ate.slice(0, 8)}01`;
+  const deMs = inicioDiaBR(de);
+  const fimMs = Math.min(inicioDiaBR(ate) + 86400_000, Date.now());
+  if (fimMs - deMs > 366 * 86400_000) return res.status(400).json({ error: "A Meta só guarda um ano: escolha um período menor." });
+  /* O preço médio sai de pelo menos 90 dias: num período curto, sem nenhuma
+     mensagem de marketing paga, não haveria preço para estimar o disparo. */
+  const buscaDeMs = Math.min(deMs, fimMs - 90 * 86400_000);
+
+  let real = null, moeda = null, erro = null;
+  const preco = {}; // categoria → preço médio por mensagem paga
+  if (!waTemplatesConfigured()) erro = "A conta do WhatsApp (WA_WABA_ID/WA_TOKEN) não está configurada no servidor.";
+  else {
+    try {
+      const r = await gastoRealMeta(buscaDeMs, fimMs);
+      moeda = r.moeda;
+      const precoJanela = {}, precoPeriodo = {};
+      const porCat = {}, porDia = {};
+      let total = 0, volume = 0, volumePago = 0;
+      for (const p of r.pontos) {
+        const cat = String(p.pricing_category || "OUTRA").toUpperCase();
+        const pago = String(p.pricing_type || "").toUpperCase() === "REGULAR";
+        const custo = Number(p.cost) || 0, vol = Number(p.volume) || 0;
+        const soma = (o) => { o[cat] ??= { custo: 0, volume: 0 }; o[cat].custo += custo; o[cat].volume += pago ? vol : 0; };
+        soma(precoJanela);
+        const meio = ((Number(p.start) + Number(p.end)) / 2) * 1000;
+        if (meio < deMs || meio >= fimMs) continue;
+        soma(precoPeriodo);
+        const dia = diaBR(meio);
+        porDia[dia] ??= { dia, custo: 0, volume: 0, porCategoria: {} };
+        porDia[dia].custo += custo;
+        porDia[dia].volume += vol;
+        porDia[dia].porCategoria[cat] = (porDia[dia].porCategoria[cat] || 0) + custo;
+        porCat[cat] ??= { categoria: cat, custo: 0, volume: 0, volumePago: 0, volumeGratis: 0 };
+        porCat[cat].custo += custo;
+        porCat[cat].volume += vol;
+        porCat[cat][pago ? "volumePago" : "volumeGratis"] += vol;
+        total += custo; volume += vol; if (pago) volumePago += vol;
+      }
+      for (const cat of new Set([...Object.keys(precoJanela), ...Object.keys(precoPeriodo)])) {
+        const fonte = precoPeriodo[cat]?.volume ? precoPeriodo[cat] : precoJanela[cat];
+        if (fonte?.volume) preco[cat] = fonte.custo / fonte.volume;
+      }
+      real = {
+        total, volume, volumePago,
+        porCategoria: Object.values(porCat).map((c) => ({ ...c, precoMedio: preco[c.categoria] ?? null })).sort((a, b) => b.custo - a.custo),
+        porDia: Object.values(porDia).sort((a, b) => a.dia.localeCompare(b.dia)),
+      };
+    } catch (e) {
+      erro = String(e?.body?.error?.message || e.message).slice(0, 300);
+      console.warn(`[wa gasto] Meta não respondeu: ${erro}`);
+    }
+  }
+
+  // categoria de cada template: a que a Meta deu (pode ter reclassificado)
+  const { lista } = await sincronizarTemplates();
+  const catTemplate = new Map(lista.map((t) => [t.name, String(t.category || "").toUpperCase()]));
+  const estimar = (n, cat) => (preco[cat] != null ? n * preco[cat] : null);
+
+  const ds = await prisma.waDisparo.findMany({
+    where: { inicioEm: { gte: new Date(deMs), lt: new Date(fimMs) } },
+    orderBy: { inicioEm: "desc" },
+    include: { itens: { where: { situacao: "enviado" }, select: { wamid: true } } },
+  });
+  const wamids = ds.flatMap((d) => d.itens.map((i) => i.wamid).filter(Boolean));
+  const regs = wamids.length
+    ? await prisma.waMessage.findMany({ where: { wamid: { in: wamids } }, select: { wamid: true, status: true, cobrada: true, categoria: true } })
+    : [];
+  const reg = new Map(regs.map((r) => [r.wamid, r]));
+  const disparos = ds.map((d) => {
+    let cobradas = 0, confirmadas = 0, catMeta = null;
+    for (const i of d.itens) {
+      const r = i.wamid && reg.get(i.wamid);
+      if (r?.categoria) catMeta = r.categoria.toUpperCase();
+      if (r?.cobrada === true) { cobradas++; confirmadas++; }
+      else if (r?.cobrada == null && d.modo === "template" && ["entregue", "lido"].includes(r?.status)) cobradas++;
+    }
+    const categoria = catMeta || (d.modo === "template" ? catTemplate.get(d.template) || null : "SERVICE");
+    return {
+      id: d.id, inicioEm: d.inicioEm, por: d.por, modo: d.modo, template: d.template,
+      categoria, enviadas: d.itens.length, cobradas, confirmadas,
+      estimado: cobradas ? estimar(cobradas, categoria) : 0,
+    };
+  });
+
+  // avisos automáticos (cobrança, lembrete, aniversário…): só o que o webhook confirmou
+  const autos = await prisma.waMessage.groupBy({
+    by: ["kind", "categoria"],
+    where: { sentAt: { gte: new Date(deMs), lt: new Date(fimMs) }, NOT: { kind: { startsWith: "disparo" } } },
+    _count: { _all: true },
+  });
+  const autosCobradas = await prisma.waMessage.groupBy({
+    by: ["kind", "categoria"],
+    where: { sentAt: { gte: new Date(deMs), lt: new Date(fimMs) }, NOT: { kind: { startsWith: "disparo" } }, cobrada: true },
+    _count: { _all: true },
+  });
+  const automaticos = {};
+  for (const a of autos) {
+    automaticos[a.kind] ??= { kind: a.kind, enviadas: 0, cobradas: 0, estimado: 0 };
+    automaticos[a.kind].enviadas += a._count._all;
+  }
+  for (const a of autosCobradas) {
+    const cat = String(a.categoria || "").toUpperCase();
+    automaticos[a.kind].cobradas += a._count._all;
+    const v = estimar(a._count._all, cat);
+    automaticos[a.kind].estimado = automaticos[a.kind].estimado == null || v == null ? null : automaticos[a.kind].estimado + v;
+  }
+
+  const somaDisparos = disparos.reduce((s, d) => s + (d.estimado || 0), 0);
+  res.json({
+    de, ate, moeda, erro, real,
+    precoMedio: preco,
+    disparos,
+    somaDisparos,
+    automaticos: Object.values(automaticos).sort((a, b) => b.enviadas - a.enviadas),
+    // o que a Meta cobrou e não é de disparo: avisos automáticos, robô, Pix
+    restante: real ? Math.max(0, real.total - somaDisparos) : null,
+    consultadoEm: new Date().toISOString(),
+  });
 }));
 
 /* ---------- Fluxo de agendamento pelo WhatsApp ---------- */
