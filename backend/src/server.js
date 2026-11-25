@@ -64,6 +64,7 @@ import {
   recusaFeriado,
 } from "./feriados.js";
 import { padronizarNome } from "./nomes.js";
+import { classificarFicha } from "./classificaFicha.js";
 import {
   normalizarCodigo,
   motivoRecusa,
@@ -5382,7 +5383,7 @@ app.get("/api/relatorios/vendas", wrap(async (req, res) => {
 async function carregarDadosAlunosLeads() {
   await sincronizarFunilSePreciso(60_000).catch((e) => console.warn("[relatorio/alunos-leads] sync:", e.message));
 
-  const [clients, leads] = await Promise.all([
+  const [clients, leads, reservas] = await Promise.all([
     prisma.client.findMany({
       orderBy: { name: "asc" },
       select: {
@@ -5431,7 +5432,17 @@ async function carregarDadosAlunosLeads() {
         createdAt: true,
       },
     }),
+    // para classificar a ficha como a tela Alunos (classificaFicha.js)
+    prisma.booking.findMany({
+      select: { clientName: true, phone: true, status: true, paid: true, paymentMethod: true, value: true, holdUntil: true },
+    }),
   ]);
+
+  /* Aluna, lead ou ex-aluna pela MESMA regra da tela Alunos (Vitor,
+     25/11/2026). Antes valia só o `status` da ficha, e quem fez a aula avulsa
+     sem fechar o plano entrava como aluna ativa aqui e como lead lá. */
+  const agora = Date.now();
+  const abaDaFicha = new Map(clients.map((c) => [c.id, classificarFicha(c, reservas, agora)]));
 
   const leadPorFichaId = new Map();
   const leadPorChaveTel = new Map();
@@ -5491,10 +5502,9 @@ async function carregarDadosAlunosLeads() {
     const telFormatado = telefoneBR(c.phone);
     const dataCriacao = diaBR(c.createdAt) || String(c.createdAt || "").slice(0, 10);
     const dataMatricula = c.matriculaAt || c.matriculaPainelAt || (matchingLead?.ganhaAt) || dataCriacao;
-    const ehCancelado = c.status === "cancelado" || c.status === "inativo";
-    const ehLeadNaTabelaClient = c.status === "lead";
+    const aba = abaDaFicha.get(c.id);
 
-    if (ehCancelado) {
+    if (aba === "ex-aluno") {
       exAlunos.push({
         id: `c_${c.id}`,
         tipo: "ex-aluno",
@@ -5519,7 +5529,7 @@ async function carregarDadosAlunosLeads() {
         clientId: c.id,
         leadId: matchingLead?.id || null,
       });
-    } else if (!ehLeadNaTabelaClient) {
+    } else if (aba === "cliente") {
       alunosAtivos.push({
         id: `c_${c.id}`,
         tipo: "ativo",
@@ -5554,6 +5564,10 @@ async function carregarDadosAlunosLeads() {
 
   const leadsLista = [];
   for (const l of leads) {
+    // A lead cuja ficha já é aluna ou ex-aluna está naquelas abas: aqui ela
+    // seria contada duas vezes (era o grosso das "matriculadas" do funil).
+    const abaFicha = l.clientId ? abaDaFicha.get(l.clientId) : null;
+    if (abaFicha === "cliente" || abaFicha === "ex-aluno") continue;
     const matchingClient = l.clientId ? clientPorId.get(l.clientId) : (l.phoneKey ? clientPorChaveTel.get(l.phoneKey) : null);
     const telFormatado = telefoneBR(l.phone || matchingClient?.phone);
     const dataCriacao = diaBR(l.createdAt) || String(l.createdAt || "").slice(0, 10);
@@ -5591,12 +5605,16 @@ async function carregarDadosAlunosLeads() {
     });
   }
 
+  // Fichas que a tela Alunos põe em "Leads 1ª aula" ou "Leads (Remarketing)"
+  // e que ainda não têm a lead delas no funil
   for (const c of clients) {
-    if (c.status === "lead" && !leadPorFichaId.has(c.id)) {
+    const aba = abaDaFicha.get(c.id);
+    if ((aba === "novato" || aba === "lead") && !leadPorFichaId.has(c.id)) {
       const chave = chaveTelefone(c.phone);
       if (chave && leadPorChaveTel.has(chave)) continue;
       const telFormatado = telefoneBR(c.phone);
       const dataCriacao = diaBR(c.createdAt) || String(c.createdAt || "").slice(0, 10);
+      const etapa = aba === "novato" ? "marcada" : "cadastro";
       leadsLista.push({
         id: `c_lead_${c.id}`,
         tipo: "lead",
@@ -5605,9 +5623,9 @@ async function carregarDadosAlunosLeads() {
         telefone: c.phone || "",
         telefoneFormatado: telFormatado,
         unidade: c.unit || "Sem unidade",
-        etapa: "cadastro",
-        etapaTexto: "Cadastro feito",
-        situacao: "Cadastro feito",
+        etapa,
+        etapaTexto: ETAPA_TEXTO_BR[etapa],
+        situacao: ETAPA_TEXTO_BR[etapa],
         motivoPerda: "",
         canal: CANAL_TEXTO_BR[c.origem] || c.origem || "Escola (Painel)",
         origem: ORIGEM_TEXTO_BR[c.origem] || c.origem || "",

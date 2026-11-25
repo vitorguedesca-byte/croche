@@ -3,7 +3,7 @@ import { toast, confirmModal } from "./toast.jsx";
 import { useStore } from "./store.jsx";
 import { Select, Modal, useModal } from "./ui.jsx";
 import { api, canAccess } from "./api.js";
-import { contemBusca } from "./helpers.js";
+import { contemBusca, classifyClient } from "./helpers.js";
 
 /* ============================================================
    Disparo em massa pelo WhatsApp oficial (Meta).
@@ -42,22 +42,25 @@ const SITUACOES = [
   { value: "mensalistas", label: "Mensalistas", icon: "📅" },
   { value: "avulsas", label: "Avulsas", icon: "🧺" },
   { value: "inativas", label: "Ex-alunas", icon: "💤", hint: "inscrição cancelada" },
-  { value: "leads", label: "Pagamento não realizado", icon: "⚠️", hint: "ficha sem a 1ª aula paga" },
+  { value: "leads", label: "Leads com ficha", icon: "⚠️", hint: "Leads 1ª aula + Remarketing" },
   { value: "funil", label: "Leads do funil (sem ficha)", icon: "🧲", hint: "contatos ainda sem ficha" },
-  { value: "interessadas", label: "Todas as interessadas", icon: "🎯", hint: "sem pagamento + leads" },
+  { value: "interessadas", label: "Todas as interessadas", icon: "🎯", hint: "leads com e sem ficha" },
   { value: "todas", label: "Todas as fichas", icon: "👩" },
   { value: "tudo", label: "Todos os contatos", icon: "📒", hint: "fichas + leads" },
   // quem recebe TEXTO LIVRE agora — de qualquer situação, lead incluída
   { value: "conversa", label: "Conversa aberta (24h)", icon: "💬" },
 ];
+/* A ficha entra no público pela MESMA regra da tela Alunos (classifyClient,
+   em `x.aba`): antes valia só o status, e quem fez a aula avulsa sem fechar o
+   plano saía aqui como aluna ativa e lá como lead (Vitor, 25/11/2026). */
 const naSituacao = (x, s) => {
   if (x.tipo === "lead") return ["funil", "interessadas", "tudo"].includes(s);
-  const c = x.c;
+  const c = x.c, aba = x.aba;
   return s === "todas" || s === "tudo" ? true
     : s === "funil" ? false
-    : s === "inativas" ? c.status === "cancelado"
-    : s === "leads" || s === "interessadas" ? c.status === "lead"
-    : c.status === "cancelado" || c.status === "lead" ? false
+    : s === "inativas" ? aba === "ex-aluno"
+    : s === "leads" || s === "interessadas" ? aba === "novato" || aba === "lead"
+    : aba !== "cliente" ? false
     : s === "mensalistas" ? c.plan === "mensalista"
     : s === "avulsas" ? c.plan !== "mensalista"
     : true;
@@ -409,7 +412,7 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
     const funil = opcoes.funilDaFicha || {};
     return [
       ...data.clients.map((c) => ({
-        key: `c:${c.id}`, tipo: "ficha", id: c.id, name: c.name, phone: c.phone, unit: c.unit, c,
+        key: `c:${c.id}`, tipo: "ficha", id: c.id, name: c.name, phone: c.phone, unit: c.unit, c, aba: classifyClient(data, c),
         etapa: funil[c.id]?.etapa || null, origem: funil[c.id]?.origem || null,
         desde: String(c.createdAt || "").slice(0, 10),
       })),
@@ -418,7 +421,7 @@ function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, 
         etapa: l.etapa, origem: l.origem, desde: l.desde,
       })),
     ];
-  }, [data.clients, opcoes]);
+  }, [data, opcoes]);
 
   // em atraso: mensalidade em aberto com vencimento já passado
   const emAtraso = useMemo(() => {
