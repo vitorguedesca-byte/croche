@@ -575,6 +575,9 @@ model Voucher {
   // Até quando a aluna que já estuda paga o Pix do pacote: null = no dia em
   // que ela usa o código; 'YYYY-MM-DD' = até essa data (nunca antes de hoje).
   pacoteVenceEm     String?  @db.VarChar(10)
+  /* Template do WhatsApp criado junto com a campanha para o disparo em massa
+     (nome na Meta). A aprovação e o status moram na Meta — aqui só o vínculo. */
+  waTemplate        String?  @db.VarChar(512)
   planos            String   @default("[]") @db.VarChar(40) // JSON [1,2,...] — planos aceitos; [] = todos
   unidade           String?  @db.VarChar(100) // null = todas as unidades
   inicio            String?  @db.VarChar(10) // 'YYYY-MM-DD' — vale a partir de (inclusive)

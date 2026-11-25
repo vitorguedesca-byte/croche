@@ -169,7 +169,9 @@ function tempoDesde(iso, agora = Date.now()) {
   return `às ${hhmmDe(iso)}`;
 }
 
-export default function Disparo() {
+/* `params` vem de outra tela que manda para cá já com o que disparar — hoje,
+   a campanha com template aprovado: { template, situacao }. */
+export default function Disparo({ params }) {
   const { data, reload } = useStore();
   const [opcoes, setOpcoes] = useState(null);
   const [erroOpcoes, setErroOpcoes] = useState(null);
@@ -260,6 +262,7 @@ export default function Disparo() {
       data={data}
       opcoes={opcoes}
       preSel={preSel}
+      pedido={params}
       sincronizando={sincronizando}
       onSincronizar={() => carregar(true)}
       onRecarregar={() => carregar("auto")}
@@ -295,7 +298,7 @@ function BarraSync({ opcoes, abertas, sincronizando, onSincronizar }) {
   );
 }
 
-function Composer({ data, opcoes, preSel, sincronizando, onSincronizar, onRecarregar, onAbrir, onIniciado }) {
+function Composer({ data, opcoes, preSel, pedido, sincronizando, onSincronizar, onRecarregar, onAbrir, onIniciado }) {
   const { open } = useModal();
   // janela "criar template" — vazia, a partir do texto livre, ou corrigindo um recusado
   const criarTemplate = (inicial) =>
@@ -325,6 +328,15 @@ function Composer({ data, opcoes, preSel, sincronizando, onSincronizar, onRecarr
   const [bVals, setBVals] = useState([]);
   const [texto, setTexto] = useState("Oi, {nome}! ");
   const [enviando, setEnviando] = useState(false);
+
+  // Veio de uma campanha: já entra com o template dela e o público sugerido.
+  useEffect(() => {
+    if (pedido?.situacao && SITUACOES.some((s) => s.value === pedido.situacao)) setSitF(pedido.situacao);
+    if (!pedido?.template) return;
+    const t = opcoes.templates.find((x) => x.name === pedido.template);
+    if (t?.usavel) { setModo("template"); escolherTemplate(t.name); }
+    else toast.error(`O template “${pedido.template}” ainda não pode ser usado: ${t ? statusTpl(t.status)[1] : "não achei na Meta"}.`);
+  }, [pedido?.template, pedido?.situacao]);
 
   const tpl = opcoes.templates.find((t) => t.name === tplName) || null;
   const enderecos = opcoes.enderecos || {};
@@ -723,7 +735,9 @@ const CATEGORIAS = [
   { k: "MARKETING", label: "📢 Marketing", dica: "Novidade, promoção, convite, evento, aniversário. Mais caro, e a Meta limita quantos cada pessoa recebe." },
 ];
 
-function CriarTemplate({ inicial, opcoes, onCriado }) {
+/* `voucherId`: criado a partir de uma campanha — o servidor liga o template a
+   ela, e a tela de Campanhas acompanha a aprovação. */
+export function CriarTemplate({ inicial, opcoes = {}, onCriado, voucherId = null }) {
   const { close } = useModal();
   const [f, setF] = useState(() => ({
     titulo: "", categoria: "UTILITY", cabecalho: "", corpo: "Oi, {nome}! ", rodape: "",
@@ -771,7 +785,7 @@ function CriarTemplate({ inicial, opcoes, onCriado }) {
     if (!ok) return;
     setBusy(true);
     try {
-      const r = await api.disparo.criarTemplate(f);
+      const r = await api.disparo.criarTemplate(voucherId ? { ...f, voucherId } : f);
       toast(r.status === "APPROVED" ? `✓ “${r.name}” aprovado na hora — já dá para usar.` : `📤 “${r.name}” enviado. Aguardando a Meta aprovar.`, "success", { duration: 8000 });
       if (r.category && r.category !== f.categoria) toast.error(`A Meta registrou “${r.name}” como ${r.category === "MARKETING" ? "marketing" : "utilidade"}, não como você escolheu.`);
       close();

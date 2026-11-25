@@ -4807,6 +4807,17 @@ async function cancelarUsoVoucher(uso) {
   return resultado;
 }
 
+/* O template do WhatsApp da campanha, como a Meta o vê agora (cache de poucos
+   minutos — a tela de Disparo é quem força a sincronização). */
+async function whatsappDaCampanha(v) {
+  if (!v.waTemplate) return null;
+  const { lista } = await sincronizarTemplates();
+  const t = lista.find((x) => x.name === v.waTemplate);
+  if (!t) return { name: v.waTemplate, status: "PENDING", category: null, motivoRecusa: null };
+  const d = descreverTemplateDisparo(t);
+  return { name: d.name, status: d.status, category: d.category, motivoRecusa: d.motivoRecusa, usavel: !!d.usavel };
+}
+
 /* Campanha + números, para a tela do painel. */
 async function resumoCampanha(v) {
   const usos = await prisma.voucherUso.findMany({ where: { voucherId: v.id }, select: { id: true, status: true, descontoCents: true, premioEntregueAt: true } });
@@ -4823,6 +4834,7 @@ async function resumoCampanha(v) {
     descontoTotalCents: usos.filter((u) => u.status === "confirmado").reduce((s, u) => s + (u.descontoCents || 0), 0),
     premiosPendentes: v.premio ? usos.filter((u) => u.status === "confirmado" && !u.premioEntregueAt).length : 0,
     aulasDadas: await prisma.extraPass.count({ where: { voucherUsoId: { in: usosIds }, status: { not: "cancelado" } } }),
+    whatsapp: await whatsappDaCampanha(v).catch(() => null),
   };
 }
 
@@ -7915,6 +7927,14 @@ app.post("/api/wa/templates", wrap(async (req, res) => {
   try {
     const criado = await createWaTemplate(r.payload);
     console.log(`[wa templates] ${r.payload.name} (${r.payload.category}) submetido por ${por}: ${criado?.status || "PENDING"} (id ${criado?.id || "?"})`);
+    /* Criado a partir de uma campanha: fica ligado a ela, para a tela de
+       Campanhas mostrar a aprovação e oferecer o disparo. Falhar aqui não
+       desfaz o template, que já está na Meta. */
+    const voucherId = Number(req.body?.voucherId) || null;
+    if (voucherId) {
+      await prisma.voucher.update({ where: { id: voucherId }, data: { waTemplate: r.payload.name } })
+        .catch((e) => console.warn(`[wa templates] ${r.payload.name}: não liguei à campanha ${voucherId} — ${e.message}`));
+    }
     cacheTemplates.em = 0;
     await sincronizarTemplates({ forcar: true });
     res.json({ name: r.payload.name, status: criado?.status || "PENDING", category: criado?.category || r.payload.category, avisos: r.avisos });
@@ -10970,6 +10990,7 @@ const COLUNAS_ESPERADAS = [
   ["Voucher", "pacoteGratis", "INT NOT NULL DEFAULT 0"],
   ["Voucher", "pacotePagos", "INT NOT NULL DEFAULT 0"],
   ["Voucher", "pacoteVenceEm", "VARCHAR(10) NULL"],
+  ["Voucher", "waTemplate", "VARCHAR(512) NULL"],
   ["Invoice", "descricao", "VARCHAR(200) NULL"],
   ["ExtraPass", "voucherUsoId", "INT NULL"],
   ["WaConversation", "lastInboundAt", "DATETIME(3) NULL"],

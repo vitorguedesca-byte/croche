@@ -3,8 +3,9 @@ import { toast, confirmModal } from "./toast.jsx";
 import { useStore } from "./store.jsx";
 import { Modal, Select, useModal } from "./ui.jsx";
 import { Chave } from "./Config.jsx";
-import { api } from "./api.js";
+import { api, canAccess } from "./api.js";
 import { money, fmtDate, compLabel } from "./helpers.js";
+import { CriarTemplate } from "./Disparo.jsx";
 
 /* ============================================================
    Campanhas com código (voucher).
@@ -121,6 +122,46 @@ function etiquetasDaCampanha(c) {
   return out;
 }
 
+/* ---------- WhatsApp: a mensagem do disparo em massa da campanha ----------
+   O texto nasce da própria campanha (benefícios, código, prazo e onde usar) e a
+   Inêz ajusta antes de mandar para a Meta. Vai como MARKETING: é promoção, e a
+   Meta reclassificaria uma "utilidade" com oferta de qualquer jeito. */
+const RODAPE_WA = "Fios que Curam · Ipatinga e Timóteo";
+const ONDE_USAR = {
+  novas: "na matrícula pelo site ou aqui pelo WhatsApp",
+  alunas: "no seu portal, em “Minha mensalidade”",
+  todas: "no portal (se você já estuda) ou na matrícula pelo site e aqui pelo WhatsApp",
+};
+// Para quem o disparo é sugerido (filtro da tela de Disparo)
+const PUBLICO_DISPARO = { novas: "leads", alunas: "mensalistas", todas: "todas" };
+function textoDivulgacao(c) {
+  const linhas = (c.beneficios || []).map((b) => `• ${b}`);
+  const prazo = c.fim ? ` até ${fmtDate(c.fim).slice(0, 5)}` : "";
+  const corpo = [
+    "Oi, {nome}! 💚",
+    c.descricao || `Temos uma novidade para você: ${c.nome}.`,
+    linhas.join("\n"),
+    `Para aproveitar, use o código *${c.codigo}*${prazo}, ${ONDE_USAR[c.publico] || ONDE_USAR.todas}.`,
+    "Qualquer dúvida, é só responder esta mensagem.",
+  ].filter(Boolean).join("\n\n");
+  return corpo.slice(0, 1024);
+}
+const inicialDoTemplate = (c) => ({
+  titulo: `Campanha ${c.codigo}`,
+  categoria: "MARKETING",
+  cabecalho: "",
+  corpo: textoDivulgacao(c),
+  rodape: RODAPE_WA,
+});
+const WA_SITUACAO = {
+  APPROVED: ["b-ok", "WhatsApp aprovado"],
+  PENDING: ["b-info", "WhatsApp na Meta"],
+  IN_APPEAL: ["b-info", "WhatsApp em recurso"],
+  REJECTED: ["b-danger", "WhatsApp recusado"],
+  PAUSED: ["b-warn", "WhatsApp pausado"],
+  DISABLED: ["b-danger", "WhatsApp desativado"],
+};
+
 // Mês seguinte a uma data 'YYYY-MM-DD' — sugestão de início do pacote
 const mesSeguinte = (iso) => (iso ? somaMes(iso.slice(0, 7), 1) : "");
 
@@ -180,8 +221,13 @@ const Secao = ({ ic, titulo, sub, children }) => (
 /* ===================== Formulário (janela) ===================== */
 export function CampanhaForm({ campanha }) {
   const { data } = useStore();
-  const { close } = useModal();
+  const { close, open } = useModal();
   const meta = data?.meta || {};
+  /* Divulgar no WhatsApp: ao salvar, abre a criação do template já com o texto
+     da campanha. Ligado por padrão em campanha nova; na edição, só quando a
+     campanha ainda não tem template (ou o dela foi recusado). */
+  const waRecusado = ["REJECTED", "DISABLED"].includes(campanha?.whatsapp?.status);
+  const [divulgar, setDivulgar] = useState(() => !campanha || !campanha.whatsapp || waRecusado);
   const [form, setForm] = useState(() => campanha ? {
     ...VAZIO,
     nome: campanha.nome, codigo: campanha.codigo, descricao: campanha.descricao || "", publico: campanha.publico,
@@ -247,11 +293,13 @@ export function CampanhaForm({ campanha }) {
         inicio: form.inicio || null, fim: form.fim || null,
         unidade: form.unidade || null, planos: form.planos, ativo: form.ativo,
       };
-      if (campanha) await api.vouchers.update(campanha.id, corpo);
-      else await api.vouchers.create(corpo);
+      const salva = campanha ? await api.vouchers.update(campanha.id, corpo) : await api.vouchers.create(corpo);
       toast(campanha ? "Campanha salva." : "Campanha criada! 🎟️");
       avisarLista();
-      close();
+      if (divulgar && canAccess("whatsapp", 2)) {
+        // a mesma janela do Disparo, já com o texto da campanha — e ligada a ela
+        open(<CriarTemplate inicial={inicialDoTemplate(salva)} voucherId={salva.id} onCriado={avisarLista} />);
+      } else close();
     } catch (e) { toast.error(e.message); }
     finally { setBusy(false); }
   };
@@ -260,7 +308,9 @@ export function CampanhaForm({ campanha }) {
     <Modal size="md" title={campanha ? `Editar campanha · ${campanha.codigo}` : "Nova campanha"} footer={<>
       <div style={{ flex: 1 }} />
       <button className="btn ghost" onClick={close}>Cancelar</button>
-      <button data-access="campanhas:2" className="btn" onClick={salvar} disabled={busy}>{busy ? "Salvando…" : campanha ? "Salvar" : "Criar campanha"}</button>
+      <button data-access="campanhas:2" className="btn" onClick={salvar} disabled={busy}>
+        {busy ? "Salvando…" : `${campanha ? "Salvar" : "Criar campanha"}${divulgar && (!campanha?.whatsapp || waRecusado) ? " e escrever o WhatsApp" : ""}`}
+      </button>
     </>}>
       {/* .cfg-sec dá aos campos e textos de ajuda o mesmo acabamento das Configurações */}
       <div className="cfg-sec" style={{ padding: 0 }}>
@@ -441,6 +491,21 @@ export function CampanhaForm({ campanha }) {
           titulo="Campanha ativa"
           ligado="O código já pode ser usado (respeitando as datas e o limite)."
           desligado="Pausada: fica pronta, mas ninguém consegue usar ainda." />
+      </Secao>
+
+      <Secao ic="📣" titulo="Divulgar no WhatsApp" sub="Mensagem para o disparo em massa, aprovada pela Meta.">
+        {campanha?.whatsapp && !waRecusado ? (
+          <div className="help">
+            Esta campanha já tem a mensagem <b>{campanha.whatsapp.name}</b>
+            {" "}({(WA_SITUACAO[campanha.whatsapp.status] || ["", campanha.whatsapp.status])[1]}).
+            {" "}O texto aprovado não muda: para outro texto, crie um template novo na tela Disparo.
+          </div>
+        ) : (
+          <Chave on={divulgar} onToggle={() => setDivulgar(!divulgar)}
+            titulo={waRecusado ? "Criar uma nova mensagem (a anterior foi recusada)" : "Criar a mensagem do WhatsApp ao salvar"}
+            ligado="Ao salvar, abre o template já escrito com os benefícios e o código. Você revisa e envia para a Meta aprovar; quando aprovar, o botão “Disparar” aparece na lista."
+            desligado="Sem mensagem de WhatsApp por enquanto (dá para criar depois, editando a campanha)." />
+        )}
       </Secao>
 
       <div className="cfg-preview">
@@ -644,7 +709,7 @@ Cada uma escolhe o horário pelo portal, sem pagar.`,
 }
 
 /* ===================== Tela ===================== */
-export default function Campanhas() {
+export default function Campanhas({ go }) {
   const { open } = useModal();
   const [lista, setLista] = useState(null);
   const [aba, setAba] = useState("ativas");
@@ -740,7 +805,22 @@ export default function Campanhas() {
                     {c.premiosPendentes > 0 && <div className="cli-sub">🎁 {c.premiosPendentes} a entregar</div>}
                     {c.aulasDadas > 0 && <div className="cli-sub">➕ {c.aulasDadas} aula(s) de presente</div>}
                   </td>
-                  <td data-l="Situação"><span className={`badge ${SITUACAO_COR[c.situacao.codigo] || "b-muted"}`}>{c.situacao.texto}</span></td>
+                  <td data-l="Situação">
+                    <span className={`badge ${SITUACAO_COR[c.situacao.codigo] || "b-muted"}`}>{c.situacao.texto}</span>
+                    {c.whatsapp && (() => {
+                      const [cor, txt] = WA_SITUACAO[c.whatsapp.status] || ["b-muted", `WhatsApp: ${c.whatsapp.status}`];
+                      return (
+                        <div style={{ marginTop: ".3rem", display: "flex", gap: ".35rem", alignItems: "center", flexWrap: "wrap" }}>
+                          <span className={`badge ${cor}`} title={[c.whatsapp.name, c.whatsapp.motivoRecusa].filter(Boolean).join(" — ")}>{txt}</span>
+                          {/* aprovado: abre o Disparo já com a mensagem e o público sugerido */}
+                          {c.whatsapp.usavel && go && (
+                            <button data-access="whatsapp:2" className="btn sm" title={`Abrir o Disparo com a mensagem ${c.whatsapp.name}`}
+                              onClick={() => go("disparo", { template: c.whatsapp.name, situacao: PUBLICO_DISPARO[c.publico] || "todas" })}>📣 Disparar</button>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </td>
                   <td data-l="" style={{ width: "1%", whiteSpace: "nowrap" }}>
                     {/* numa linha só, sempre na mesma ordem: ver · mexer · ligar/desligar · apagar */}
                     <div style={{ display: "flex", gap: ".35rem", alignItems: "center" }}>
