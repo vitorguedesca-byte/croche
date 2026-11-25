@@ -6,7 +6,7 @@ import AdminLogin from "./AdminLogin.jsx";
 import { useStore } from "./store.jsx";
 import { useModal } from "./ui.jsx";
 import { Dashboard, Agenda, Marcacoes, Clientes, Financeiro, Depoimentos, Aniversariantes } from "./views.jsx";
-import { RelatorioVendas, RelatorioVagas, RelatorioPresentes, RelatorioAlunosLeads } from "./Relatorios.jsx";
+import { RelatorioVendas, RelatorioVagas, RelatorioPresentes, RelatorioAlunosLeads, RelatorioCampanhas } from "./Relatorios.jsx";
 import { SlotForm, BookingForm, ClientForm } from "./modals.jsx";
 import ClienteApp from "./ClienteApp.jsx";
 import Config from "./Config.jsx";
@@ -54,6 +54,7 @@ const NAV = [
   { view: "rel-vendas", ic: "📈", label: "Relatório de vendas" },
   { view: "rel-vagas", ic: "🪑", label: "Relatório de vagas" },
   { view: "rel-presentes", ic: "🎁", label: "Relatório de presentes" },
+  { view: "rel-campanhas", ic: "🎟️", label: "Relatório de campanhas" },
   { view: "campanhas", ic: "🎟️", label: "Campanhas e códigos" },
   { sep: "Site" },
   { view: "depoimentos", ic: "⭐", label: "Depoimentos" },
@@ -76,6 +77,7 @@ const TITLES = {
   "rel-vendas": ["Relatório de vendas", "O que entrou no período, por unidade e no total"],
   "rel-vagas":  ["Relatório de vagas",  "Capacidade, ocupação e tipos de aluna — por unidade e no total"],
   "rel-presentes": ["Relatório de presentes", "Aulas de presente dadas e o que aconteceu com elas — não é valor a receber"],
+  "rel-campanhas": ["Relatório de campanhas", "Usos dos códigos, desistências, alunas novas, valores e pacote — por campanha"],
   campanhas:    ["Campanhas e códigos", "Vouchers de promoção: isenção, desconto, aula experimental e prêmios"],
   depoimentos:  ["Depoimentos",   "Gerencie os depoimentos exibidos no site"],
   acessos:      ["Usuários e acessos", "Usuários, perfis, permissões e histórico"],
@@ -197,6 +199,7 @@ export default function App() {
     "rel-vendas": RelatorioVendas,
     "rel-vagas": RelatorioVagas,
     "rel-presentes": RelatorioPresentes,
+    "rel-campanhas": RelatorioCampanhas,
     "rel-contatos": RelatorioAlunosLeads,
     campanhas: Campanhas,
     depoimentos: Depoimentos,

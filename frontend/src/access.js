@@ -2,7 +2,7 @@ import { canAccess, getSession } from "./api.js";
 export const VIEW_MODULE = {
   dashboard: "dashboard", agenda: "agenda", marcacoes: "agenda", clientes: "alunos", aniversariantes: "alunos",
   funil: "funil", disparo: "whatsapp", financeiro: "financeiro", mensalistas: "financeiro", recebimentos: "financeiro",
-  "rel-vendas": "relatorios", "rel-vagas": "relatorios", "rel-presentes": "relatorios", "rel-contatos": "relatorios", campanhas: "campanhas",
+  "rel-vendas": "relatorios", "rel-vagas": "relatorios", "rel-presentes": "relatorios", "rel-campanhas": "relatorios", "rel-contatos": "relatorios", campanhas: "campanhas",
   depoimentos: "depoimentos", config: "configuracoes",
 };
 export function canView(view) {

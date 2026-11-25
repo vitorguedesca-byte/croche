@@ -5823,6 +5823,167 @@ app.get("/api/relatorios/alunos-leads/excel", wrap(async (_req, res) => {
   res.send(buffer);
 }));
 
+/* ---------- RELATÓRIO DE CAMPANHAS (Relatórios › Campanhas e códigos) ----------
+   Uma linha por uso de código no período (pela data do uso) e o resumo de cada
+   campanha. Responde às perguntas da Inêz: quantas usaram, quantas desistiram
+   antes de pagar (Pix não pago), quantas eram novas, quanto entrou, quanto se
+   deu de desconto, quem cancelou a inscrição depois, e como está o pacote.
+
+   "Recebido" = o que entrou pagando COM o código:
+   • matrícula / aula avulsa → a reserva paga (o Pix já com o código);
+   • mensalidade (quem já estuda) → as mensalidades pagas dos meses que o
+     código mexeu (desconto ou pacote). Mês coberto pelo pacote é R$ 0.
+   A data de cancelamento vem do histórico de alterações (DataAudit), que
+   existe desde 07/11/2026: antes disso, "cancelou" aparece sem data. */
+const USO_SITUACAO = { reservado: "Aguardando Pix", confirmado: "Usado", expirado: "Pix não pago", cancelado: "Cancelado pela escola" };
+const USO_ONDE = { matricula: "Matrícula", avulsa: "Aula avulsa", mensalidade: "Mensalidade" };
+
+async function relatorioCampanhas(de, ate) {
+  const inicio = new Date(`${de}T00:00:00-03:00`), fim = new Date(`${ate}T23:59:59.999-03:00`);
+  const [vouchers, usos] = await Promise.all([
+    prisma.voucher.findMany({ orderBy: { createdAt: "desc" } }),
+    prisma.voucherUso.findMany({ where: { createdAt: { gte: inicio, lte: fim } }, orderBy: { createdAt: "asc" } }),
+  ]);
+  for (const v of vouchers) await conciliarUsosVoucher(v.id);
+  // relê depois de conciliar (reservas que expiraram ou foram pagas)
+  const usosAtuais = usos.length
+    ? await prisma.voucherUso.findMany({ where: { id: { in: usos.map((u) => u.id) } }, orderBy: { createdAt: "asc" } })
+    : [];
+
+  const clientIds = [...new Set(usosAtuais.map((u) => u.clientId).filter(Boolean))];
+  const bookingIds = [...new Set(usosAtuais.map((u) => u.bookingId).filter(Boolean))];
+  const [clients, bookings, invoices, audits] = await Promise.all([
+    clientIds.length ? prisma.client.findMany({ where: { id: { in: clientIds } }, select: { id: true, name: true, phone: true, unit: true, status: true, plan: true, weeklyFreq: true } }) : [],
+    bookingIds.length ? prisma.booking.findMany({ where: { id: { in: bookingIds } }, select: { id: true, paid: true, value: true, unit: true, paymentDate: true } }) : [],
+    clientIds.length ? prisma.invoice.findMany({ where: { clientId: { in: clientIds } }, select: { clientId: true, competencia: true, status: true, amountCents: true, paidAt: true } }) : [],
+    clientIds.length ? prisma.dataAudit.findMany({ where: { entity: "client", clientId: { in: clientIds } }, select: { clientId: true, changes: true, createdAt: true }, orderBy: { createdAt: "asc" } }) : [],
+  ]);
+  const cli = new Map(clients.map((c) => [c.id, c]));
+  const bk = new Map(bookings.map((b) => [b.id, b]));
+  const fatura = (clientId, comp) => invoices.find((i) => i.clientId === clientId && i.competencia === comp);
+  // última vez que a ficha virou "cancelado"
+  const canceladaEm = new Map();
+  for (const a of audits) {
+    if (a.changes?.status?.after === "cancelado") canceladaEm.set(a.clientId, a.createdAt);
+  }
+  const porVoucher = new Map(vouchers.map((v) => [v.id, v]));
+
+  const linhas = usosAtuais.map((u) => {
+    const v = porVoucher.get(u.voucherId);
+    const c = u.clientId ? cli.get(u.clientId) : null;
+    const b = u.bookingId ? bk.get(u.bookingId) : null;
+    let meses = [];
+    try { meses = JSON.parse(u.meses || "[]"); } catch { meses = []; }
+    let recebidoCents = 0;
+    if (u.contexto === "mensalidade") {
+      for (const m of meses) {
+        const f = c ? fatura(c.id, m.comp) : null;
+        if (f?.status === "pago") recebidoCents += f.amountCents || 0;
+      }
+    } else if (b?.paid) {
+      recebidoCents = Math.round((Number(b.value) || 0) * 100);
+    }
+    const cob = meses.find((m) => m.papel === "cobranca");
+    let pacote = null;
+    if (cob && c) {
+      const f = fatura(c.id, cob.comp);
+      pacote = !f ? "a gerar" : f.status === "pago" ? "pago" : f.status === "cancelado" ? "cancelado" : "em aberto";
+    }
+    const cancelou = !!c && c.status === "cancelado" && u.status === "confirmado";
+    const cancelEm = cancelou ? canceladaEm.get(c.id) : null;
+    return {
+      usoId: u.id,
+      voucherId: u.voucherId,
+      codigo: v?.codigo || "?",
+      campanha: v?.nome || "",
+      data: new Date(u.createdAt.getTime() - 3 * 3600_000).toISOString().slice(0, 10),
+      aluna: c?.name || u.nome,
+      telefone: c?.phone || null,
+      clientId: c?.id || null,
+      unidade: c?.unit || b?.unit || null,
+      plano: c?.weeklyFreq ? `${c.weeklyFreq}x` : null,
+      tipo: u.contexto === "mensalidade" ? "atual" : "nova",
+      onde: USO_ONDE[u.contexto] || u.contexto,
+      status: u.status,
+      situacao: USO_SITUACAO[u.status] || u.status,
+      descontoCents: u.descontoCents || 0,
+      recebidoCents,
+      pacote,
+      premio: v?.premio ? (u.premioEntregueAt ? "entregue" : u.status === "confirmado" ? "a entregar" : null) : null,
+      cancelou,
+      canceladaEm: cancelEm ? new Date(cancelEm.getTime() - 3 * 3600_000).toISOString().slice(0, 10) : null,
+      fichaHoje: !c ? "sem ficha" : c.status === "cancelado" ? "inativa" : c.status === "lead" ? "lead" : c.plan === "mensalista" ? "mensalista" : "avulsa",
+    };
+  });
+
+  const resumo = vouchers
+    .map((v) => {
+      const ls = linhas.filter((l) => l.voucherId === v.id);
+      const conta = (f) => ls.filter(f).length;
+      const usados = ls.filter((l) => l.status === "confirmado");
+      return {
+        id: v.id, codigo: v.codigo, nome: v.nome, publico: v.publico, ativo: v.ativo, inicio: v.inicio, fim: v.fim,
+        temPacote: temPacote(v),
+        usos: usados.length,
+        aguardando: conta((l) => l.status === "reservado"),
+        pixNaoPago: conta((l) => l.status === "expirado"),
+        canceladosEscola: conta((l) => l.status === "cancelado"),
+        novas: usados.filter((l) => l.tipo === "nova").length,
+        atuais: usados.filter((l) => l.tipo === "atual").length,
+        descontoCents: usados.reduce((s, l) => s + l.descontoCents, 0),
+        recebidoCents: usados.reduce((s, l) => s + l.recebidoCents, 0),
+        cancelaram: usados.filter((l) => l.cancelou).length,
+        pacotePagos: usados.filter((l) => l.pacote === "pago").length,
+        pacoteEmAberto: usados.filter((l) => l.pacote === "em aberto" || l.pacote === "a gerar").length,
+        premiosAEntregar: usados.filter((l) => l.premio === "a entregar").length,
+      };
+    })
+    // campanha sem nenhum uso no período só aparece se estava valendo nele
+    .filter((r) => r.usos + r.aguardando + r.pixNaoPago + r.canceladosEscola > 0 ||
+      ((!r.inicio || r.inicio <= ate) && (!r.fim || r.fim >= de)));
+
+  return { de, ate, campanhas: resumo, usos: linhas };
+}
+
+app.get("/api/relatorios/campanhas", wrap(async (req, res) => {
+  const ehDia = (x) => /^\d{4}-\d{2}-\d{2}$/.test(x);
+  const de = String(req.query.de || ""), ate = String(req.query.ate || "");
+  if (!ehDia(de) || !ehDia(ate) || de > ate) return res.status(400).json({ error: "Período inválido." });
+  res.json(await relatorioCampanhas(de, ate));
+}));
+
+app.get("/api/relatorios/campanhas/excel", wrap(async (req, res) => {
+  const ehDia = (x) => /^\d{4}-\d{2}-\d{2}$/.test(x);
+  const de = String(req.query.de || ""), ate = String(req.query.ate || "");
+  if (!ehDia(de) || !ehDia(ate) || de > ate) return res.status(400).json({ error: "Período inválido." });
+  const r = await relatorioCampanhas(de, ate);
+  const reais = (c) => Math.round(c) / 100;
+  const wb = XLSX.utils.book_new();
+  const headResumo = ["Código", "Campanha", "Usos", "Alunas novas", "Já estudavam", "Aguardando Pix", "Pix não pago",
+    "Cancelados pela escola", "Cancelaram a inscrição depois", "Recebido (R$)", "Desconto (R$)", "Pacote pago", "Pacote em aberto", "Prêmios a entregar"];
+  const wsR = XLSX.utils.aoa_to_sheet([headResumo, ...r.campanhas.map((c) => [
+    c.codigo, c.nome, c.usos, c.novas, c.atuais, c.aguardando, c.pixNaoPago, c.canceladosEscola, c.cancelaram,
+    reais(c.recebidoCents), reais(c.descontoCents), c.temPacote ? c.pacotePagos : "", c.temPacote ? c.pacoteEmAberto : "", c.premiosAEntregar,
+  ])]);
+  wsR["!cols"] = headResumo.map((h, i) => ({ wch: i === 1 ? 34 : Math.max(12, h.length + 2) }));
+  XLSX.utils.book_append_sheet(wb, wsR, "Resumo por campanha");
+  const headUsos = ["Data do uso", "Código", "Campanha", "Aluna", "Telefone", "Unidade", "Plano", "Tipo", "Onde usou",
+    "Situação do código", "Recebido (R$)", "Desconto (R$)", "Pacote", "Prêmio", "Ficha hoje", "Cancelou a inscrição em"];
+  const wsU = XLSX.utils.aoa_to_sheet([headUsos, ...r.usos.map((l) => [
+    l.data, l.codigo, l.campanha, l.aluna, l.telefone || "", l.unidade || "", l.plano || "", l.tipo === "nova" ? "Aluna nova" : "Já estudava",
+    l.onde, l.situacao, reais(l.recebidoCents), reais(l.descontoCents), l.pacote || "", l.premio || "", l.fichaHoje,
+    l.cancelou ? (l.canceladaEm || "sem data") : "",
+  ])]);
+  wsU["!cols"] = headUsos.map((h, i) => ({ wch: [2, 3].includes(i) ? 30 : Math.max(12, h.length + 2) }));
+  if (r.usos.length) wsU["!autofilter"] = { ref: `A1:P${r.usos.length + 1}` };
+  XLSX.utils.book_append_sheet(wb, wsU, "Usos dos códigos");
+  const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="fios-relatorio-campanhas-${de}-a-${ate}.xlsx"`);
+  res.send(buffer);
+}));
+
 /* Automático: uma vez por dia, gera as mensalidades de quem está a
    ANTECEDENCIA_DIAS ou menos do vencimento.
 

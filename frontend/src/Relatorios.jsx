@@ -1109,6 +1109,193 @@ export function RelatorioPresentes() {
   );
 }
 
+/* ============================= CAMPANHAS E CÓDIGOS =============================
+   Os números vêm prontos do servidor (GET /api/relatorios/campanhas): uma linha
+   por uso de código no período, pela data do uso, e o resumo de cada campanha.
+   "Recebido" é o que entrou pagando com o código; "desistências" são as duas:
+   antes de pagar (Pix não pago) e depois (cancelou a inscrição). */
+const PERIODOS_CAMPANHA = [["semana", "📆 Semana"], ["mes", "🗓 Mês"], ["ano", "📅 Ano"]];
+const FILTROS_USO = [
+  ["todos", "Todos"],
+  ["usados", "Usados"],
+  ["pix", "Pix não pago"],
+  ["cancelaram", "Cancelaram depois"],
+  ["aguardando", "Aguardando Pix"],
+];
+const COR_USO = { confirmado: "b-ok", reservado: "b-info", expirado: "b-warn", cancelado: "b-muted" };
+const COR_PACOTE = { pago: "b-ok", "em aberto": "b-warn", "a gerar": "b-info", cancelado: "b-muted" };
+const cents = (c) => money((c || 0) / 100);
+
+export function RelatorioCampanhas() {
+  const { data } = useStore();
+  const { open } = useModal();
+  const [tipo, setTipo] = useState("mes");
+  const [refDia, setRefDia] = useState(todayISO());
+  const [r, setR] = useState(null);
+  const [erro, setErro] = useState(null);
+  const [campanha, setCampanha] = useState("");
+  const [filtro, setFiltro] = useState("todos");
+  const [busca, setBusca] = useState("");
+  const [baixando, setBaixando] = useState(false);
+  const [de, ate] = intervalo(tipo, refDia);
+
+  useEffect(() => {
+    let vivo = true;
+    setR(null); setErro(null);
+    api.relatorioCampanhas(de, ate).then((x) => vivo && setR(x)).catch((e) => vivo && setErro(e.message));
+    return () => { vivo = false; };
+  }, [de, ate]);
+
+  if (erro) return <div className="panel empty"><div className="ic">🎟️</div><p>Não consegui montar o relatório.</p><p className="cli-sub">{erro}</p></div>;
+  if (!r) return <div className="panel empty"><div className="ic">🎟️</div><p>Carregando…</p></div>;
+
+  const cli = new Map(data.clients.map((c) => [c.id, c]));
+  const usados = r.usos.filter((u) => u.status === "confirmado");
+  const tot = {
+    usos: usados.length,
+    novas: usados.filter((u) => u.tipo === "nova").length,
+    atuais: usados.filter((u) => u.tipo === "atual").length,
+    recebido: usados.reduce((s, u) => s + u.recebidoCents, 0),
+    desconto: usados.reduce((s, u) => s + u.descontoCents, 0),
+    pix: r.usos.filter((u) => u.status === "expirado").length,
+    cancelaram: usados.filter((u) => u.cancelou).length,
+    aguardando: r.usos.filter((u) => u.status === "reservado").length,
+  };
+  const tentativas = tot.usos + tot.pix;
+
+  const lista = r.usos
+    .filter((u) => !campanha || String(u.voucherId) === String(campanha))
+    .filter((u) => filtro === "todos" ? true
+      : filtro === "usados" ? u.status === "confirmado"
+      : filtro === "pix" ? u.status === "expirado"
+      : filtro === "cancelaram" ? u.cancelou
+      : u.status === "reservado")
+    .filter((u) => contemBusca([u.aluna, u.codigo, u.campanha, u.unidade, u.situacao, u.onde], busca))
+    .sort((a, b) => b.data.localeCompare(a.data) || a.aluna.localeCompare(b.aluna));
+
+  const baixarExcel = async () => {
+    setBaixando(true);
+    try {
+      const { blob, nome } = await api.relatorioCampanhasExcel(de, ate);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = nome;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) { toast(`Não foi possível baixar o Excel: ${e.message}`, "error"); }
+    finally { setBaixando(false); }
+  };
+
+  return (
+    <>
+      <div className="panel">
+        <Periodo tipos={PERIODOS_CAMPANHA} tipo={tipo} setTipo={setTipo} refDia={refDia} setRefDia={setRefDia}>
+          <button className="btn sec sm" disabled={baixando || !r.usos.length} onClick={baixarExcel}>{baixando ? "⏳ Gerando…" : "📊 Baixar Excel"}</button>
+        </Periodo>
+        <div className="seg-hint">Conta os códigos usados no período (pela data do uso). Recebido = o que entrou pagando com o código.</div>
+        <div className="grid stats">
+          <div className="card stat">
+            <div className="lbl">🎟️ Códigos usados</div>
+            <div className="val">{tot.usos}</div>
+            <div className="foot">{tot.novas} aluna(s) nova(s) · {tot.atuais} já estudava(m)</div>
+          </div>
+          <div className="card stat">
+            <div className="lbl">💰 Recebido com código</div>
+            <div className="val">{cents(tot.recebido)}</div>
+            <div className="foot">{cents(tot.desconto)} de desconto no ato</div>
+          </div>
+          <div className="card stat">
+            <div className="lbl">🚪 Desistências</div>
+            <div className={`val${tot.pix + tot.cancelaram ? " warn" : ""}`}>{tot.pix + tot.cancelaram}</div>
+            <div className="foot">{tot.pix} antes de pagar ({pct(tot.pix, tentativas)}%) · {tot.cancelaram} cancelaram depois</div>
+          </div>
+          <div className="card stat">
+            <div className="lbl">⏳ Aguardando Pix</div>
+            <div className="val">{tot.aguardando}</div>
+            <div className="foot">reservaram com o código e ainda não pagaram</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-h"><h2>📣 Por campanha <span className="muted-note">· {rotuloPeriodo(tipo, refDia)}</span></h2></div>
+        {r.campanhas.length ? (
+          <table>
+            <thead><tr><th>Campanha</th><th>Usos</th><th>Novas / já estudavam</th><th>Pix não pago</th><th>Cancelaram depois</th><th>Recebido</th><th>Desconto</th><th>Pacote</th></tr></thead>
+            <tbody>
+              {r.campanhas.map((c) => (
+                <tr key={c.id} className="row-click" title="Ver as alunas desta campanha"
+                  onClick={() => { setCampanha(String(c.id)); setFiltro("todos"); document.getElementById("rel-camp-usos")?.scrollIntoView({ behavior: "smooth" }); }}>
+                  <td className="c-main"><span className="chip">{c.codigo}</span><div className="cli-sub">{c.nome}</div></td>
+                  <td data-l="Usos"><b>{c.usos}</b>{c.aguardando ? <div className="cli-sub">+{c.aguardando} aguardando Pix</div> : null}</td>
+                  <td data-l="Novas / já estudavam">{c.novas} / {c.atuais}</td>
+                  <td data-l="Pix não pago">{c.pixNaoPago || "—"}</td>
+                  <td data-l="Cancelaram depois">{c.cancelaram ? <span className="badge b-warn">{c.cancelaram}</span> : "—"}</td>
+                  <td data-l="Recebido"><b>{cents(c.recebidoCents)}</b></td>
+                  <td data-l="Desconto">{c.descontoCents ? cents(c.descontoCents) : "—"}</td>
+                  <td data-l="Pacote">{c.temPacote ? <>{c.pacotePagos} pago(s){c.pacoteEmAberto ? <div className="cli-sub">{c.pacoteEmAberto} em aberto</div> : null}</> : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : <div className="empty"><div className="ic">🎟️</div><p>Nenhuma campanha valendo neste período.</p></div>}
+      </div>
+
+      <div className="panel" id="rel-camp-usos">
+        <div className="panel-h">
+          <h2>👩 Alunas que usaram <span className="muted-note">· {rotuloPeriodo(tipo, refDia)}</span></h2>
+          <button className="btn sec sm" disabled={!lista.length} onClick={() => exportCsv(`campanhas-${de}-a-${ate}`,
+            ["Data do uso", "Código", "Aluna", "Unidade", "Tipo", "Onde usou", "Situação", "Recebido", "Desconto", "Pacote", "Ficha hoje", "Cancelou em"],
+            lista.map((u) => [u.data, u.codigo, u.aluna, u.unidade || "", u.tipo === "nova" ? "Aluna nova" : "Já estudava", u.onde, u.situacao,
+              String((u.recebidoCents / 100).toFixed(2)).replace(".", ","), String((u.descontoCents / 100).toFixed(2)).replace(".", ","),
+              u.pacote || "", u.fichaHoje, u.cancelou ? (u.canceladaEm || "sem data") : ""]))}>⬇ Exportar CSV</button>
+        </div>
+        <div className="filters" style={{ display: "flex", flexWrap: "wrap", gap: ".5rem", alignItems: "center", marginBottom: ".8rem" }}>
+          <div style={{ minWidth: 220 }}>
+            <Select value={campanha} onChange={setCampanha}
+              options={[{ value: "", label: "Todas as campanhas" }, ...r.campanhas.map((c) => ({ value: String(c.id), label: `${c.codigo} · ${c.nome}` }))]} />
+          </div>
+          <div className="seg">
+            {FILTROS_USO.map(([k, l]) => <button key={k} type="button" className={filtro === k ? "on" : ""} onClick={() => setFiltro(k)}>{l}</button>)}
+          </div>
+          <input className="grow" placeholder="🔍 Buscar aluna, código, unidade..." value={busca} onChange={(e) => setBusca(e.target.value)} />
+          <span className="count">{lista.length} uso(s)</span>
+        </div>
+        {lista.length ? (
+          <table>
+            <thead><tr><th>Aluna</th><th>Uso</th><th>Código</th><th>Situação</th><th>Recebido</th><th>Desconto</th><th>Pacote</th><th>Hoje</th></tr></thead>
+            <tbody>
+              {lista.map((u) => {
+                const c = u.clientId ? cli.get(u.clientId) : null;
+                return (
+                  <tr key={u.usoId}>
+                    <td className="cli-name c-main">
+                      {c ? <span className="row-click" onClick={() => open(<ClientProfile client={c} />)}>{u.aluna}</span> : u.aluna}
+                      <div className="cli-sub">{[u.unidade, u.plano].filter(Boolean).join(" · ")}</div>
+                    </td>
+                    <td data-l="Uso">{fmtDate(u.data)}<div className="cli-sub">{u.tipo === "nova" ? "Aluna nova" : "Já estudava"} · {u.onde}</div></td>
+                    <td data-l="Código"><span className="chip">{u.codigo}</span></td>
+                    <td data-l="Situação"><span className={`badge ${COR_USO[u.status] || "b-muted"}`}>{u.situacao}</span></td>
+                    <td data-l="Recebido">{u.recebidoCents ? <b>{cents(u.recebidoCents)}</b> : "—"}</td>
+                    <td data-l="Desconto">{u.descontoCents ? cents(u.descontoCents) : "—"}</td>
+                    <td data-l="Pacote">{u.pacote ? <span className={`badge ${COR_PACOTE[u.pacote] || "b-muted"}`}>{u.pacote}</span> : "—"}</td>
+                    <td data-l="Hoje">
+                      {u.cancelou
+                        ? <span className="badge b-danger">Cancelou{u.canceladaEm ? ` em ${fmtDate(u.canceladaEm)}` : ""}</span>
+                        : <span className="cli-sub">{u.fichaHoje}</span>}
+                      {u.premio === "a entregar" && <div className="cli-sub">🎁 prêmio a entregar</div>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : <div className="empty"><div className="ic">🎟️</div><p>{r.usos.length ? "Ninguém neste filtro." : "Nenhum código usado neste período."}</p></div>}
+      </div>
+    </>
+  );
+}
+
 /* ============================= ALUNOS E LEADS ============================= */
 export function RelatorioAlunosLeads() {
   const { data } = useStore();

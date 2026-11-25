@@ -278,6 +278,14 @@ export const api = {
 
   // Financeiro › Vendas: o que entrou no período, linha a linha (a tela soma por unidade)
   relatorioVendas: (de, ate) => req("GET", `/api/relatorios/vendas?de=${de}&ate=${ate}`),
+  relatorioCampanhas: (de, ate) => req("GET", `/api/relatorios/campanhas?de=${de}&ate=${ate}`),
+  // a planilha é montada no servidor (aba de resumo + aba com cada uso)
+  relatorioCampanhasExcel: async (de, ate) => {
+    const res = await req("GET", `/api/relatorios/campanhas/excel?de=${de}&ate=${ate}`, undefined, { raw: true });
+    const blob = await res.blob();
+    if (!blob.size) throw new Error("O servidor não retornou a planilha. Tente novamente.");
+    return { blob, nome: `fios-relatorio-campanhas-${de}-a-${ate}.xlsx` };
+  },
 
   // Relatório geral: alunos ativos, ex-alunos e leads em todas as etapas (dados e extração Excel)
   relatorioAlunosLeads: () => req("GET", "/api/relatorios/alunos-leads"),
