@@ -90,6 +90,37 @@ function mesesDoPacoteForm(f) {
   const pagos = Array.from({ length: n }, (_, i) => somaMes(f.pacoteInicio, g + i));
   return { gratis, pagos, cobranca: (gratis[0] || pagos[0]), volta: somaMes(f.pacoteInicio, g + n) };
 }
+/* Benefícios em etiquetas curtas, para a lista. O texto completo (o mesmo que
+   a aluna vê) fica no title, ao passar o mouse. */
+const MES_CURTO = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+const mesCurto = (comp) => `${MES_CURTO[Number(comp.slice(5, 7)) - 1]}/${comp.slice(2, 4)}`;
+const faixaCurta = (comps) => (comps.length === 1 ? mesCurto(comps[0])
+  : comps[0].slice(0, 4) === comps[comps.length - 1].slice(0, 4)
+    ? `${MES_CURTO[Number(comps[0].slice(5, 7)) - 1]} a ${mesCurto(comps[comps.length - 1])}`
+    : `${mesCurto(comps[0])} a ${mesCurto(comps[comps.length - 1])}`);
+const primeiraMaiuscula = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+function etiquetasDaCampanha(c) {
+  const out = [];
+  const pac = c.pacoteInicio
+    ? mesesDoPacoteForm({ temPacote: true, pacoteInicio: c.pacoteInicio, pacoteGratis: c.pacoteGratis, pacotePagos: c.pacotePagos })
+    : null;
+  if (pac) {
+    if (pac.gratis.length) out.push(`${primeiraMaiuscula(faixaCurta(pac.gratis))} grátis`);
+    out.push(`${primeiraMaiuscula(faixaCurta(pac.pagos))} num Pix só`);
+    out.push(c.pacoteVenceEm ? `Pix até ${fmtDate(c.pacoteVenceEm).slice(0, 5)}` : "Pix no dia do uso");
+  }
+  if (c.isentaMatricula || pac) out.push("Sem taxa de matrícula");
+  if (c.descontoTipo) {
+    const x = Number(c.descontoValor) || 0, m = Number(c.descontoMeses) || 1;
+    const quanto = c.descontoTipo === "percentual" ? `${x}% off` : c.descontoTipo === "valor" ? `${money(x)} off` : `Mensalidade ${money(x)}`;
+    out.push(m > 1 ? `${quanto} · ${m} meses` : quanto);
+  }
+  if (c.aulaExperimental) out.push(Number(c.valorExperimental) > 0 ? `Experimental ${money(c.valorExperimental)}` : "Experimental grátis");
+  if (c.aulasExtras > 0) out.push(c.aulasExtras === 1 ? "1 aula de presente" : `${c.aulasExtras} aulas de presente`);
+  if (c.premio) out.push(`🎁 ${c.premio}`);
+  return out;
+}
+
 // Mês seguinte a uma data 'YYYY-MM-DD' — sugestão de início do pacote
 const mesSeguinte = (iso) => (iso ? somaMes(iso.slice(0, 7), 1) : "");
 
@@ -639,11 +670,11 @@ export default function Campanhas() {
   const alternarAtivo = async (c) => {
     const pausar = c.ativo;
     const ok = await confirmModal({
-      title: pausar ? "Pausar campanha" : "Reativar campanha",
+      title: pausar ? "Pausar campanha" : "Ativar campanha",
       message: pausar
         ? `Ninguém mais consegue usar o código ${c.codigo} enquanto estiver pausada. Quem já usou continua com o benefício.`
         : `O código ${c.codigo} volta a valer, respeitando as datas e o limite.`,
-      confirmLabel: pausar ? "Pausar" : "Reativar",
+      confirmLabel: pausar ? "Pausar" : "Ativar",
       tone: pausar ? "danger" : undefined,
     });
     if (!ok) return;
@@ -699,19 +730,27 @@ export default function Campanhas() {
                       {c.inicio || c.fim ? ` · ${c.inicio ? fmtDate(c.inicio) : "…"} a ${c.fim ? fmtDate(c.fim) : "…"}` : ""}
                     </div>
                   </td>
-                  <td data-l="Benefícios"><div className="cli-sub" style={{ color: "var(--ink)" }}>{c.beneficios.join(" · ")}</div></td>
+                  <td data-l="Benefícios">
+                    <div title={c.beneficios.join("\n")} style={{ display: "flex", flexWrap: "wrap", gap: ".3rem", maxWidth: 420 }}>
+                      {etiquetasDaCampanha(c).map((t) => <span key={t} className="badge b-sage">{t}</span>)}
+                    </div>
+                  </td>
                   <td data-l="Usos">
                     <b>{c.usos.usados}{c.limiteUsos != null ? ` / ${c.limiteUsos}` : ""}</b>
                     {c.premiosPendentes > 0 && <div className="cli-sub">🎁 {c.premiosPendentes} a entregar</div>}
                     {c.aulasDadas > 0 && <div className="cli-sub">➕ {c.aulasDadas} aula(s) de presente</div>}
                   </td>
                   <td data-l="Situação"><span className={`badge ${SITUACAO_COR[c.situacao.codigo] || "b-muted"}`}>{c.situacao.texto}</span></td>
-                  <td data-l="">
-                    <div style={{ display: "flex", gap: ".35rem", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <td data-l="" style={{ width: "1%", whiteSpace: "nowrap" }}>
+                    {/* numa linha só, sempre na mesma ordem: ver · mexer · ligar/desligar · apagar */}
+                    <div style={{ display: "flex", gap: ".35rem", alignItems: "center" }}>
                       <button className="btn sec sm" onClick={() => open(<UsosDaCampanha campanha={c} />)}>Usos</button>
                       <button data-access="campanhas:2" className="btn ghost sm" onClick={() => open(<CampanhaForm campanha={c} />)}>Editar</button>
-                      <button data-access="campanhas:2" className="btn ghost sm" onClick={() => alternarAtivo(c)}>{c.ativo ? "Pausar" : "Reativar"}</button>
-                      {c.usos.total === 0 && <button data-access="campanhas:2" className="btn ghost sm" onClick={() => excluir(c)}>Excluir</button>}
+                      <button data-access="campanhas:2" className="btn ghost sm" onClick={() => alternarAtivo(c)}>{c.ativo ? "Pausar" : "Ativar"}</button>
+                      {c.usos.total === 0 && (
+                        <button data-access="campanhas:2" className="btn ghost sm" title="Excluir campanha" aria-label="Excluir campanha"
+                          style={{ color: "var(--danger, #b3261e)" }} onClick={() => excluir(c)}>Excluir</button>
+                      )}
                     </div>
                   </td>
                 </tr>
