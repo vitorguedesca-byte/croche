@@ -2384,8 +2384,9 @@ function atividadesDoAluno(data, c) {
     if (p.usedAt) add(p.usedAt, "📅", "Marcou a aula de presente", "");
   });
   (data.invoices || []).filter((i) => i.clientId === c.id).forEach((i) => {
-    if (i.paidAt) add(i.paidAt, "🧾", `Mensalidade paga — ${compLabel(i.competencia)}`, money(i.amountCents / 100));
-    else if (i.status === "pendente") add(i.dueDate, "⏳", `Mensalidade em aberto — ${compLabel(i.competencia)}`, `vence ${fmtDate(i.dueDate)}`);
+    const desc = i.descricao ? ` (${i.descricao})` : "";
+    if (i.paidAt) add(i.paidAt, "🧾", `Mensalidade paga — ${compLabel(i.competencia)}${desc}`, money(i.amountCents / 100));
+    else if (i.status === "pendente") add(i.dueDate, "⏳", `Mensalidade em aberto — ${compLabel(i.competencia)}${desc}`, `vence ${fmtDate(i.dueDate)}`);
   });
   (data.makeups || []).filter((k) => k.clientId === c.id).forEach((k) => {
     add(k.originDate, "🔁", "Crédito de reposição gerado", `vale até ${fmtDate(k.expiresOn)}`);

@@ -13,7 +13,7 @@ const FIELDS = {
   mensalidadeValor: "Mensalidade padrão", vencimentoDia: "Dia de vencimento padrão", valorPlano1x: "Plano 1x", valorPlano2x: "Plano 2x", valorPlano3x: "Plano 3x", valorPlano4x: "Plano 4x", taxaMatricula: "Taxa de matrícula",
   geracaoAuto: "Emissão automática", cobrarEncargos: "Multa e juros", pixExpira: "Pix expira no vencimento", travaAtraso: "Bloqueio por atraso",
 };
-const VALUES = { pendente: "Pendente", pago: "Pago", cancelado: "Cancelado", ativo: "Ativo", lead: "Lead", mensalista: "Mensalista", avulso: "Avulso", fixo: "Fixo", escala: "Escala", nao_aplica: "Não se aplica", paga: "Paga", convertida: "Convertida", devolvida: "Devolvida", ajuste: "Ajuste", promocao: "Promoção", desconto: "Desconto", voucher: "Campanha" };
+const VALUES = { pendente: "Pendente", pago: "Pago", cancelado: "Cancelado", ativo: "Ativo", lead: "Lead", mensalista: "Mensalista", avulso: "Avulso", fixo: "Fixo", escala: "Escala", nao_aplica: "Não se aplica", paga: "Paga", convertida: "Convertida", devolvida: "Devolvida", ajuste: "Ajuste", promocao: "Promoção", desconto: "Desconto", voucher: "Campanha", pacote: "Pacote" };
 const currency = new Set(["monthlyValue", "mensalidadeValor", "valorPlano1x", "valorPlano2x", "valorPlano3x", "valorPlano4x", "taxaMatricula"]);
 const actionOf = item => {
   const labels = { criado: ["criado", "criada"], alterado: ["alterado", "alterada"], excluido: ["excluído", "excluída"] };

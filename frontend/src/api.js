@@ -356,5 +356,7 @@ export const api = {
     checkInvoicePay: (phone, invoiceId) => req("POST", `/api/portal/${encodeURIComponent(phone)}/invoice/${invoiceId}/check-pay`),
     // código de promoção na mensalidade (aluna que já estuda)
     voucher: (phone, codigo) => req("POST", `/api/portal/${encodeURIComponent(phone)}/voucher`, { codigo }),
+    // confere o código e mostra o que ele faz (o valor do pacote), sem aplicar
+    voucherPrevia: (phone, codigo) => req("POST", `/api/portal/${encodeURIComponent(phone)}/voucher/previa`, { codigo }),
   },
 };

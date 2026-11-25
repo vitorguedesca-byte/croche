@@ -1182,6 +1182,8 @@ function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago 
   const [codigo, setCodigo] = useState("");
   const [aplicando, setAplicando] = useState(false);
   const [erroCodigo, setErroCodigo] = useState("");
+  // pacote: ela vê o valor e os meses ANTES de aplicar, e confirma
+  const [previa, setPrevia] = useState(null);
 
   const t = todayISO();
   const lista = invoices || [];
@@ -1250,14 +1252,23 @@ function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago 
 
   /* O valor muda no servidor (e o QR antigo deixa de valer): descarta o Pix
      reemitido nesta tela e recarrega, para a conta e o QR saírem do valor novo. */
-  const aplicarCodigo = async () => {
+  const aplicarCodigo = async (confirmado = false) => {
     if (!codigo.trim()) return;
     setAplicando(true); setErroCodigo("");
     try {
+      /* Pacote muda o que ela paga nos próximos meses: primeiro mostra o valor,
+         e só aplica quando ela confirma. Os outros códigos seguem direto. */
+      if (!confirmado) {
+        const p = await api.portal.voucherPrevia(phone, codigo.trim());
+        if (p.pacote) { setPrevia(p); return; }
+      }
       const r = await api.portal.voucher(phone, codigo.trim());
       setPixNovo({});
       setCodigo("");
-      flash(`Código aplicado! 🎟️ ${(r.beneficios || []).join(" · ")}`);
+      setPrevia(null);
+      flash(r.pacote
+        ? `Pacote confirmado! 🎟️ O Pix de ${money(r.pacote.valor)} já está aqui, na mensalidade de ${r.pacote.texto.cobranca}.`
+        : `Código aplicado! 🎟️ ${(r.beneficios || []).join(" · ")}`);
       onPago && onPago();
     } catch (e) {
       setErroCodigo(e.message || "Não consegui aplicar o código.");
@@ -1284,6 +1295,7 @@ function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago 
           {atual ? (
             <div className="pt-sub2">
               <b className="pt-no-caps">{compLabel(atual.competencia)}</b> · vence em <b>{fmtDate(atual.dueDate)}</b>
+              {atual.descricao && <div style={{ marginTop: ".2rem" }}>{atual.descricao}</div>}
             </div>
           ) : (
             <div className="pt-sub2">
@@ -1324,18 +1336,41 @@ function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago 
       )}
 
       {cliente.plan === "mensalista" && !kiosk && (
-        <details className="pt-pix-det" open={!!erroCodigo}>
+        <details className="pt-pix-det" open={!!erroCodigo || !!previa}>
           <summary>🎟️ Tenho um código de promoção</summary>
           <div style={{ display: "flex", gap: ".5rem", marginTop: ".5rem" }}>
             <input className="pt-input" style={{ textAlign: "left", fontSize: "1rem", textTransform: "uppercase", margin: 0 }}
-              value={codigo} onChange={(e) => setCodigo(e.target.value)} placeholder="Digite o código"
+              value={codigo} onChange={(e) => { setCodigo(e.target.value); setPrevia(null); }} placeholder="Digite o código"
               onKeyDown={(e) => { if (e.key === "Enter") aplicarCodigo(); }} />
             <button type="button" className="pt-btn pt-btn-out" style={{ width: "auto", margin: 0, padding: "0 1rem" }}
-              onClick={aplicarCodigo} disabled={aplicando || !codigo.trim()}>
-              {aplicando ? "…" : "Aplicar"}
+              onClick={() => aplicarCodigo()} disabled={aplicando || !codigo.trim() || !!previa}>
+              {aplicando && !previa ? "…" : "Aplicar"}
             </button>
           </div>
           {erroCodigo && <div className="pt-err" style={{ marginTop: ".5rem" }}>{erroCodigo}</div>}
+          {previa?.pacote && (
+            <div className="pt-pix" style={{ marginTop: ".7rem" }}>
+              <div style={{ fontWeight: 700, marginBottom: ".4rem" }}>🎁 Pacote {previa.codigo}</div>
+              {previa.descricao && <div className="pt-sub2" style={{ marginBottom: ".4rem" }}>{previa.descricao}</div>}
+              {previa.pacote.gratis.length > 0 && (
+                <div className="pt-pix-row"><span>Grátis</span><b className="pt-no-caps">{previa.pacote.texto.gratis}</b></div>
+              )}
+              <div className="pt-pix-row"><span>Pagos juntos</span><b className="pt-no-caps">{previa.pacote.texto.pagos}</b></div>
+              <div className="pt-pix-row"><span>Vencimento do Pix</span><b>{fmtDate(previa.pacote.vencimento)}</b></div>
+              <div className="pt-pix-row" style={{ borderTop: "1px solid var(--line)", paddingTop: ".5rem", marginTop: ".2rem" }}>
+                <span><b>Valor do pacote</b></span><b>{money(previa.pacote.valor)}</b>
+              </div>
+              <p className="pt-hint" style={{ marginTop: ".5rem" }}>
+                Em {previa.pacote.texto.volta} a mensalidade volta a ser cobrada normalmente.
+                As regras de sempre (vencimento, multa, reposição) continuam valendo.
+                Se você cancelar durante o pacote, o valor pago não é devolvido.
+              </p>
+              <button type="button" className="pt-btn" onClick={() => aplicarCodigo(true)} disabled={aplicando} style={{ marginBottom: ".4rem" }}>
+                {aplicando ? "Confirmando…" : "Quero o pacote"}
+              </button>
+              <button type="button" className="pt-link" onClick={() => setPrevia(null)} disabled={aplicando}>Agora não</button>
+            </div>
+          )}
           <p className="pt-hint" style={{ marginTop: ".4rem" }}>
             O desconto entra na mensalidade em aberto{atual ? "" : " (ou na próxima)"} e nos meses da promoção. Cada código vale uma vez por aluna.
           </p>
@@ -1396,7 +1431,7 @@ function MensalidadeCard({ invoices, cliente, meta, phone, flash, kiosk, onPago 
           <div className="pt-mens-hist">
             {pagas.map((i) => (
               <div className="pt-mens-linha" key={i.id}>
-                <span className="pt-no-caps">{compLabel(i.competencia)}</span>
+                <span className="pt-no-caps">{compLabel(i.competencia)}{i.descricao && i.amountCents === 0 ? " · pacote" : ""}</span>
                 <b>{money(i.amountCents / 100)}</b>
                 {/* paidAt aceita data ou timestamp completo — o corte garante 'YYYY-MM-DD' */}
                 <span className="pt-mens-ok">✓ pago{i.paidAt ? ` em ${fmtDate(String(i.paidAt).slice(0, 10))}` : ""}</span>

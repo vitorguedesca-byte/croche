@@ -1710,7 +1710,10 @@ function FinanceiroMetricas({ unit }) {
                     )}
                   </td>
                   <td data-l="Unidade">{i.cli?.unit ? <span className="chip">{i.cli.unit}</span> : "—"}</td>
-                  <td data-l="Competência"><span className="badge b-sage">{compLabel(i.competencia)}</span></td>
+                  <td data-l="Competência">
+                    <span className="badge b-sage">{compLabel(i.competencia)}</span>
+                    {i.descricao && <div className="cli-sub">{i.descricao}</div>}
+                  </td>
                   <td data-l="Vencimento">{i.dueDate ? fmtDate(i.dueDate) : "—"}</td>
                   <td data-l="Data pgto.">{diaPgto(i) ? fmtDate(diaPgto(i)) : "—"}</td>
                   <td data-l="Valor"><b>{money(i.amountCents / 100)}</b></td>

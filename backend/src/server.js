@@ -75,6 +75,14 @@ import {
   situacaoCampanha,
   planosDe,
   temDesconto,
+  temPacote,
+  mesesDoPacote,
+  valorDoPacote,
+  descricaoDoPacote,
+  mesesDoPacoteNaMatricula,
+  vencimentoDoPacote,
+  listaMeses,
+  nomeMes,
   STATUS_QUE_CONTAM,
 } from "./vouchers.js";
 import { undoManager } from "./undo.js";
@@ -2942,6 +2950,8 @@ async function registrarMatriculaPaga(booking) {
         // 1º mês grátis pelo código: a fatura do mês nasce quitada em R$ 0
         // (sem ela, o "gerar mês" do painel cobraria este mês de novo)
         registrarZerada: !!usoVoucher,
+        // pacote: a fatura do mês de entrada é o próprio pacote
+        descricao: usoVoucher?.descricaoPacote || null,
       },
       // ex-aluna: o plano antigo dela não conta como "já é mensalista"
       retorno: volta,
@@ -3799,6 +3809,35 @@ async function gerarMensalidade(clientId, competencia) {
   if (existing) return existing;
   // Valor DA COMPETÊNCIA: respeita o desconto/promoção marcada para este mês.
   const valor = await valorDaCompetencia(client, comp);
+  /* PACOTE da campanha (ver gravarPacote). O mês da cobrança nasce com o valor
+     do pacote e a descrição dele; os meses cobertos nascem quitados em R$ 0 —
+     mas só depois que o Pix do pacote cair. Antes disso não nascem: a cobrança
+     do pacote em aberto já é o que ela deve, e um "pago" de R$ 0 ali daria por
+     quitado um mês que ninguém pagou. */
+  const precoPacote = await prisma.monthlyPrice.findFirst({ where: { clientId, competencia: comp, origem: "pacote" } });
+  if (precoPacote && precoPacote.amountCents === 0) {
+    const cob = await cobrancaDoPacote(clientId, comp);
+    if (!cob?.paga) {
+      throw Object.assign(
+        new Error(`${nomeMes(comp)} faz parte do pacote de ${client.name}, que ainda não foi pago — a mensalidade nasce quitada quando o Pix do pacote cair.`),
+        { code: 409, codigo: "PACOTE_NAO_PAGO" }
+      );
+    }
+    return prisma.invoice.create({
+      data: {
+        clientId, competencia: comp, amountCents: 0, dueDate: vencimentoDe(client, comp), status: "pago",
+        paidAt: cob.pagoEm || todayISO(), descricao: (precoPacote.motivo || "Coberta pelo pacote").slice(0, 200),
+      },
+    });
+  }
+  const descricao = precoPacote ? (precoPacote.motivo || "Pacote").slice(0, 200) : null;
+  /* O Pix do pacote vence no prazo da campanha (no dia do uso, ou até a data
+     marcada), não no vencimento normal daquele mês. */
+  let venceOPacote = null;
+  if (precoPacote && precoPacote.amountCents > 0) {
+    const cob = await cobrancaDoPacote(clientId, comp);
+    if (cob?.vence) venceOPacote = cob.vence < todayISO() ? todayISO() : cob.vence;
+  }
   /* Mês zerado por código de promoção (ex.: "2º mês grátis"): nasce quitado.
      O Sicredi não emite Pix de R$ 0, e sem esta saída o mês cairia no erro
      abaixo. Só o preço gravado pelo VOUCHER entra aqui — R$ 0 de qualquer
@@ -3814,7 +3853,7 @@ async function gerarMensalidade(clientId, competencia) {
     }
   }
   if (!valor) throw Object.assign(new Error("Defina o valor da mensalidade (no aluno ou nas Configurações)."), { code: 400 });
-  const dueDate = vencimentoDe(client, comp);
+  const dueDate = venceOPacote || vencimentoDe(client, comp);
   const valorCents = Math.round(valor * 100);
   let txid = null, pixCode = null, pixExpiresOn = null;
   if (sicrediConfigured()) {
@@ -3833,7 +3872,7 @@ async function gerarMensalidade(clientId, competencia) {
     }
   }
   return prisma.invoice.create({
-    data: { clientId, competencia: comp, amountCents: valorCents, dueDate, status: "pendente", txid, pixCode, pixExpiresOn, semPix: false },
+    data: { clientId, competencia: comp, amountCents: valorCents, dueDate, status: "pendente", txid, pixCode, pixExpiresOn, semPix: false, descricao },
   });
 }
 
@@ -4422,6 +4461,141 @@ async function darAulasDePresente(uso, clientId, quantidade, { origem = "campanh
   return n;
 }
 
+/* ===================== PACOTE =====================
+   A regra (que meses, quanto) mora em vouchers.js → mesesDoPacote. Aqui ela
+   vira MonthlyPrice com origem "pacote" — o mesmo mecanismo do desconto:
+   • o mês da COBRANÇA guarda o valor do pacote (a soma das mensalidades dos
+     meses pagos) e a descrição; gerarMensalidade o cobra como sempre, com Pix,
+     vencimento, multa, aviso no WhatsApp — as regras de sempre;
+   • os meses COBERTOS guardam R$ 0 e nascem quitados quando a rodada chegar
+     neles, desde que a cobrança do pacote esteja paga (cobrancaDoPacote);
+   • o mês seguinte ao pacote não tem preço gravado: volta a nascer sozinho,
+     no valor normal.
+   Cancelou a inscrição no meio do pacote? A inativação só cancela mensalidade
+   PENDENTE e para de gerar as próximas: o pacote pago fica pago (não há
+   devolução) e o mês seguinte não nasce — nada a fazer aqui. */
+async function cobrancaDoPacote(clientId, comp) {
+  const usos = await prisma.voucherUso.findMany({
+    where: { clientId, status: { in: STATUS_QUE_CONTAM } },
+    orderBy: { id: "desc" },
+  });
+  for (const u of usos) {
+    let meses;
+    try { meses = JSON.parse(u.meses || "[]"); } catch { continue; }
+    const cob = meses.find((m) => m.papel === "cobranca");
+    if (!cob || !meses.some((m) => m.comp === comp)) continue;
+    const inv = await prisma.invoice.findFirst({ where: { clientId, competencia: cob.comp } });
+    return {
+      uso: u, comp: cob.comp, invoice: inv, vence: cob.vence || null,
+      paga: inv?.status === "pago", pagoEm: inv?.paidAt ? String(inv.paidAt).slice(0, 10) : null,
+    };
+  }
+  return null;
+}
+
+/* Quanto o pacote custa para ESTA aluna (sem gravar nada): a soma do valor
+   que cada mês pago teria — plano dela, valor individual ou reajuste já
+   marcado para aquele mês. É o mesmo número que gravarPacote cobra. */
+async function resumoDoPacote(client, v) {
+  const pac = mesesDoPacote(v);
+  if (!pac) return null;
+  const valores = {};
+  for (const c of pac.pagos) valores[c] = await valorDaCompetencia(client, c);
+  return {
+    valor: valorDoPacote(v, (c) => valores[c]),
+    porMes: valores,
+    cobranca: pac.cobranca, gratis: pac.gratis, pagos: pac.pagos, volta: pac.volta,
+    vencimento: vencimentoDoPacote(v, todayISO()),
+    texto: {
+      gratis: listaMeses(pac.gratis), pagos: listaMeses(pac.pagos),
+      cobranca: nomeMes(pac.cobranca), volta: nomeMes(pac.volta),
+    },
+  };
+}
+
+async function gravarPacote(client, v, { gerarAgora = false, uso = null } = {}) {
+  const pac = mesesDoPacote(v);
+  const invs = await prisma.invoice.findMany({
+    where: { clientId: client.id, competencia: { in: pac.todos }, status: { not: "cancelado" } },
+  });
+  // Mês do pacote já pago seria pago duas vezes
+  const paga = invs.find((i) => i.status === "pago");
+  if (paga) throw erroVoucher(`A mensalidade de ${nomeMes(paga.competencia)} já está paga, então o pacote não pode ser aplicado. Fale com a gente no WhatsApp. 💚`);
+  /* Mês coberto já gerado e em aberto: ficaria pendente em R$ 0 até o pacote
+     ser pago. Não acontece no uso normal (o pacote começa depois do fim da
+     campanha); se acontecer, a escola resolve na ficha. */
+  const gerada = invs.find((i) => i.competencia !== pac.cobranca);
+  if (gerada) throw erroVoucher(`A mensalidade de ${nomeMes(gerada.competencia)} já foi gerada, então o pacote não pode ser aplicado sozinho. Fale com a gente no WhatsApp. 💚`);
+
+  const resumo = await resumoDoPacote(client, v);
+  if (!(resumo.valor > 0)) throw erroVoucher("Não consegui calcular o valor do pacote — confira o plano e o valor da mensalidade da aluna.", 400);
+  let descontoCents = 0;
+  for (const c of pac.gratis) descontoCents += Math.round((await valorDaCompetencia(client, c)) * 100);
+
+  const desc = descricaoDoPacote(v);
+  const vence = resumo.vencimento;
+  const meses = [];
+  for (const comp of pac.todos) {
+    const ehCob = comp === pac.cobranca;
+    const antes = await prisma.monthlyPrice.findUnique({
+      where: { clientId_competencia: { clientId: client.id, competencia: comp } },
+    });
+    const novo = ehCob ? resumo.valor : 0;
+    const motivo = ehCob ? desc : `Coberta pelo pacote ${v.codigo} (pago na mensalidade de ${nomeMes(pac.cobranca)})`;
+    await aplicarValorNaCompetencia(client, comp, novo, { origem: "pacote", motivo: motivo.slice(0, 200) });
+    meses.push({
+      comp, papel: ehCob ? "cobranca" : "coberto", origem: "pacote", depois: Math.round(novo * 100),
+      antes: antes ? antes.amountCents : null, antesOrigem: antes?.origem || null, antesMotivo: antes?.motivo || null,
+      ...(ehCob ? { vence } : {}),
+    });
+  }
+  // gerarMensalidade acha o prazo do pacote pelos meses do uso: grava antes
+  if (uso) await prisma.voucherUso.update({ where: { id: uso.id }, data: { meses: JSON.stringify(meses) } });
+  // A mensalidade da cobrança que já existia (em aberto) passa a dizer o que é — e vence no prazo do pacote
+  await prisma.invoice.updateMany({
+    where: { clientId: client.id, competencia: pac.cobranca, status: "pendente" },
+    data: { descricao: desc, dueDate: vence },
+  });
+  /* Quem já é aluna vê o Pix do pacote no portal na hora, sem esperar a rodada
+     do mês. Falhou (CPF, banco)? A rodada gera no prazo de sempre. */
+  if (gerarAgora && client.plan === "mensalista" && client.status !== "cancelado") {
+    try { await gerarMensalidade(client.id, pac.cobranca); }
+    catch (e) { console.warn(`[pacote] ${client.name}: Pix do pacote fica para a rodada — ${e.message}`); }
+  }
+  return { meses, valor: resumo.valor, descontoCents, resumo, pac, desc };
+}
+
+/* Pacote na MATRÍCULA (aluna nova): o Pix da reserva já foi o pacote, e a
+   mensalidade do mês de entrada nasce paga com esse valor (registrarMatriculaPaga
+   → converterEmMensalista). Aqui só gravam os meses seguintes em R$ 0, até o
+   último mês pago do pacote; o mês depois dele volta a ser cobrado no dia em
+   que ela entrou, porque o vencimento dela é o dia do pagamento da matrícula. */
+async function gravarPacoteDaMatricula(client, v, booking) {
+  const comp0 = competenciaAtual();
+  const pac = mesesDoPacoteNaMatricula(v, comp0);
+  const desc = descricaoDoPacote(v);
+  const base = await valorDaCompetencia(client, comp0);
+  const meses = [{
+    comp: comp0, papel: "cobranca", origem: "pacote",
+    depois: Math.round(mensalidadeDaReserva(booking) * 100), antes: null, antesOrigem: null, antesMotivo: null,
+  }];
+  for (const comp of pac.cobertos) {
+    const antes = await prisma.monthlyPrice.findUnique({
+      where: { clientId_competencia: { clientId: client.id, competencia: comp } },
+    });
+    await aplicarValorNaCompetencia(client, comp, 0, {
+      origem: "pacote", motivo: `Coberta pelo pacote ${v.codigo} (pago na matrícula)`.slice(0, 200),
+    });
+    meses.push({
+      comp, papel: "coberto", origem: "pacote", depois: 0,
+      antes: antes ? antes.amountCents : null, antesOrigem: antes?.origem || null, antesMotivo: antes?.motivo || null,
+    });
+  }
+  // meses que ela leva além dos que pagou (o de entrada + os cobertos − os pagos)
+  const gratis = Math.max(0, pac.cobertos.length + 1 - pac.pagos.length);
+  return { meses, desc, pac, descontoCents: Math.round(base * 100) * gratis };
+}
+
 async function confirmarVoucherDaReserva(booking, client) {
   if (!booking?.id || !client) return null;
   const uso = await prisma.voucherUso.findFirst({
@@ -4431,12 +4605,22 @@ async function confirmarVoucherDaReserva(booking, client) {
   if (!uso) return null;
   const v = uso.voucher;
   let meses = [];
-  if (uso.contexto === "matricula" && temDesconto(v)) {
+  let descontoPacote = 0;
+  let descricaoPacote = null;
+  if (uso.contexto === "matricula" && temPacote(v)) {
+    const r = await gravarPacoteDaMatricula(client, v, booking);
+    meses = r.meses;
+    descontoPacote = r.descontoCents;
+    descricaoPacote = r.desc;
+  } else if (uso.contexto === "matricula" && temDesconto(v)) {
     meses = await gravarMesesDoVoucher(client, v, mesesSeguintes(v, competenciaAtual(), somarComp));
   }
   const confirmado = await prisma.voucherUso.update({
     where: { id: uso.id },
-    data: { status: "confirmado", confirmadoAt: todayISO(), clientId: client.id, meses: JSON.stringify(meses) },
+    data: {
+      status: "confirmado", confirmadoAt: todayISO(), clientId: client.id, meses: JSON.stringify(meses),
+      ...(descontoPacote ? { descontoCents: (uso.descontoCents || 0) + descontoPacote } : {}),
+    },
   });
   // Uso que voltou de "expirado" (pagou depois do prazo) pode já ter recebido a
   // aula numa confirmação anterior: só dá se ainda não deu.
@@ -4446,7 +4630,8 @@ async function confirmarVoucherDaReserva(booking, client) {
     `🎟️ ${fmtDiaBR(todayISO())}: ${uso.contexto === "avulsa" ? "aula avulsa" : "matrícula"} com o código ${v.codigo} (${v.nome}) — ${uso.resumo || descreverBeneficios(v).join(" · ")}.` +
     (v.premio ? ` 🎁 Entregar o prêmio: ${v.premio}.` : ""));
   console.log(`[voucher] ${client.name}: código ${v.codigo} confirmado (${uso.contexto}), ${meses.length} mês(es) seguinte(s) com preço da campanha.`);
-  return confirmado;
+  // a mensalidade do mês de entrada nasce com a descrição do pacote
+  return descricaoPacote ? { ...confirmado, descricaoPacote } : confirmado;
 }
 
 /* O código zerou o 1º pagamento: não há Pix a gerar (o Sicredi não emite
@@ -4504,11 +4689,37 @@ async function aplicarVoucherNaMensalidade(client, codigo, { porAdmin = null } =
   });
   const comp0 = aberta?.competencia || (await proximaCobranca(client))?.competencia || competenciaAtual();
   const regra = { contexto: "mensalidade", freq: client.weeklyFreq, unidade: client.unit };
+  const pacote = temPacote(v);
   const uso = await reservarUsoVoucher(v, regra, {
     clientId: client.id, nome: client.name, cpf: onlyDigits(client.cpf) || null,
-    contexto: "mensalidade", invoiceId: aberta?.id || null,
+    contexto: "mensalidade", invoiceId: pacote ? null : aberta?.id || null,
     resumo: descreverBeneficios(v).join(" · ").slice(0, 300),
   });
+  /* PACOTE: não mexe na mensalidade em aberto (ela é de antes do pacote e se
+     paga como sempre). Grava os meses do pacote e já gera o Pix dele. */
+  if (pacote) {
+    try {
+      const r = await gravarPacote(client, v, { gerarAgora: true, uso });
+      const cobInv = await prisma.invoice.findFirst({ where: { clientId: client.id, competencia: r.pac.cobranca } });
+      const final = await prisma.voucherUso.update({
+        where: { id: uso.id },
+        data: {
+          meses: JSON.stringify(r.meses), descontoCents: r.descontoCents, invoiceId: cobInv?.id || null,
+          status: "confirmado", confirmadoAt: todayISO(),
+        },
+      });
+      await darAulasDePresente(uso, client.id, v.aulasExtras);
+      await anotarNaFicha(client.id,
+        `🎟️ ${fmtDiaBR(todayISO())}: pacote ${v.codigo} (${v.nome})${porAdmin ? ` aplicado por ${porAdmin}` : " escolhido pelo portal"} — ${r.desc}. ` +
+        `Valor do pacote: ${moedaBR(r.valor)}, na mensalidade de ${nomeMes(r.pac.cobranca)}, com vencimento em ${fmtDiaBR(r.resumo.vencimento)}. ` +
+        `Volta ao normal em ${nomeMes(r.pac.volta)}. Cancelando no meio do pacote, não há devolução e ${nomeMes(r.pac.volta)} não é gerada.` +
+        (v.premio ? ` 🎁 Entregar o prêmio: ${v.premio}.` : ""));
+      return { uso: final, voucher: v, meses: r.meses, pacote: { ...r.resumo, invoiceId: cobInv?.id || null } };
+    } catch (e) {
+      await prisma.voucherUso.update({ where: { id: uso.id }, data: { status: "cancelado" } }).catch(() => {});
+      throw e;
+    }
+  }
   try {
     const comps = temDesconto(v) ? [comp0, ...mesesSeguintes(v, comp0, somarComp)] : [];
     const meses = await gravarMesesDoVoucher(client, v, comps, {
@@ -4555,12 +4766,20 @@ async function aplicarVoucherNaMensalidade(client, codigo, { porAdmin = null } =
 async function cancelarUsoVoucher(uso) {
   const meses = JSON.parse(uso.meses || "[]");
   const client = uso.clientId ? await prisma.client.findUnique({ where: { id: uso.clientId } }) : null;
+  /* Pacote já pago não se desfaz por aqui: o dinheiro entrou e os meses dele
+     estão cobertos. Mudança depois disso é acerto na ficha, mês a mês. */
+  const cob = meses.find((m) => m.papel === "cobranca");
+  if (cob && client) {
+    const inv = await prisma.invoice.findFirst({ where: { clientId: client.id, competencia: cob.comp } });
+    if (inv?.status === "pago")
+      throw erroVoucher(`O pacote de ${uso.nome} já foi pago (mensalidade de ${nomeMes(cob.comp)}) e os meses dele estão cobertos — não dá para cancelar o uso. Se precisar mudar algo, ajuste as mensalidades na ficha.`, 409);
+  }
   const resultado = [];
   for (const m of client ? meses : []) {
     const atual = await prisma.monthlyPrice.findUnique({
       where: { clientId_competencia: { clientId: client.id, competencia: m.comp } },
     });
-    if (!atual || atual.origem !== "voucher" || atual.amountCents !== m.depois) {
+    if (!atual || atual.origem !== (m.origem || "voucher") || atual.amountCents !== m.depois) {
       resultado.push({ comp: m.comp, resultado: "mexido_depois" });
       continue;
     }
@@ -4568,6 +4787,13 @@ async function cancelarUsoVoucher(uso) {
       ? await aplicarValorNaCompetencia(client, m.comp, null)
       : await aplicarValorNaCompetencia(client, m.comp, m.antes / 100, { origem: m.antesOrigem || "ajuste", motivo: m.antesMotivo });
     resultado.push({ comp: m.comp, resultado: r.resultado });
+  }
+  // A mensalidade que era do pacote volta a ser a mensalidade comum do mês
+  if (cob && client) {
+    await prisma.invoice.updateMany({
+      where: { clientId: client.id, competencia: cob.comp, status: "pendente" },
+      data: { descricao: null },
+    });
   }
   /* Aula de presente ainda não marcada volta para a escola. A que já virou
      aula fica: a vaga está na agenda dela, e tirar seria desmarcar uma aula
@@ -4702,7 +4928,9 @@ app.post("/api/vouchers/usos/:id/cancelar", wrap(async (req, res) => {
   const uso = await prisma.voucherUso.findUnique({ where: { id: Number(req.params.id) } });
   if (!uso) return res.status(404).json({ error: "Uso não encontrado." });
   if (uso.status === "cancelado") return res.json({ ok: true, meses: [] });
-  const meses = await cancelarUsoVoucher(uso);
+  let meses;
+  try { meses = await cancelarUsoVoucher(uso); }
+  catch (e) { return res.status(Number(e.code) || 500).json({ error: e.message }); }
   if (uso.clientId) {
     const v = await prisma.voucher.findUnique({ where: { id: uso.voucherId } });
     await anotarNaFicha(uso.clientId, `🎟️ ${fmtDiaBR(todayISO())}: uso do código ${v?.codigo} cancelado por ${req.admin?.username || "a escola"}.`);
@@ -4724,7 +4952,7 @@ app.post("/api/clients/:id/voucher", wrap(async (req, res) => {
   if (!client) return res.status(404).json({ error: "Aluna não encontrada." });
   try {
     const r = await aplicarVoucherNaMensalidade(client, req.body?.codigo, { porAdmin: req.admin?.username || "a escola" });
-    res.json({ ok: true, uso: r.uso, meses: r.meses, beneficios: descreverBeneficios(r.voucher) });
+    res.json({ ok: true, uso: r.uso, meses: r.meses, beneficios: descreverBeneficios(r.voucher), pacote: r.pacote || null });
   } catch (e) {
     res.status(e.code || 500).json({ error: e.message });
   }
@@ -4760,10 +4988,21 @@ app.post("/api/vouchers/validar", wrap(async (req, res) => {
   } catch (e) {
     return res.status(e.code || 409).json({ error: e.message });
   }
+  /* Pacote na matrícula: o Pix da matrícula é o de sempre (mês corrente +
+     taxa); o do pacote aparece no portal depois. A tela só precisa do valor. */
+  const pac = !avulsa && temPacote(v) ? mesesDoPacote(v) : null;
+  const valorPacote = pac ? valorDoPacote(v, () => valorDoPlano(freq)) : 0;
+  const beneficios = descreverBeneficios(v);
+  if (pac && valorPacote > 0) {
+    beneficios.push(`Para quem está entrando: o pagamento de hoje é o pacote, ${moedaBR(valorPacote)} ` +
+      `(${pac.pagos.length} × ${moedaBR(valorDoPlano(freq))}), no lugar da 1ª mensalidade. ` +
+      `A próxima mensalidade vence em ${nomeMes(pac.volta)}, no mesmo dia do mês em que você entrou`);
+  }
   res.json({
     codigo: v.codigo,
     descricao: v.descricao,
-    beneficios: descreverBeneficios(v),
+    beneficios,
+    pacote: pac ? { valor: valorPacote, ...pac } : null,
     // se a campanha também serve à outra modalidade, a tela avisa ao trocar
     aulaExperimental: !!v.aulaExperimental,
     pagamento: primeiroPagamentoComVoucher(v, {
@@ -4772,6 +5011,31 @@ app.post("/api/vouchers/validar", wrap(async (req, res) => {
       taxa: avulsa ? 0 : taxaMatriculaAtual(),
       valorAvulsa: Number(SETTINGS.valorAvulsa) || 40,
     }),
+  });
+}));
+
+/* Prévia do código no portal, ANTES de aplicar: o pacote muda o que ela vai
+   pagar nos próximos meses, então ela vê o valor e confirma. Não reserva nada. */
+app.post("/api/portal/:key/voucher/previa", wrap(async (req, res) => {
+  if (excedeuTentativasVoucher(req))
+    return res.status(429).json({ error: "Muitas tentativas. Espere alguns minutos e tente de novo. 💚" });
+  const client = req.portalClient;
+  if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const pode = clientPodeAcessarPortal(client);
+  if (!pode.ok) return res.status(403).json({ error: pode.motivo });
+  if (client.plan !== "mensalista" || client.status === "cancelado")
+    return res.status(400).json({ error: "Este código vale para a mensalidade de alunas mensalistas. 💚" });
+  const v = await buscarVoucher(req.body?.codigo);
+  try {
+    await conferirVoucher(v, { contexto: "mensalidade", freq: client.weeklyFreq, unidade: client.unit, clientId: client.id, cpf: client.cpf });
+  } catch (e) {
+    return res.status(Number(e.code) || 409).json({ error: e.message });
+  }
+  res.json({
+    codigo: v.codigo,
+    descricao: v.descricao,
+    beneficios: descreverBeneficios(v),
+    pacote: temPacote(v) ? await resumoDoPacote(client, v) : null,
   });
 }));
 
@@ -4784,7 +5048,11 @@ app.post("/api/portal/:key/voucher", wrap(async (req, res) => {
   if (!pode.ok) return res.status(403).json({ error: pode.motivo });
   try {
     const r = await aplicarVoucherNaMensalidade(client, req.body?.codigo);
-    res.json({ ok: true, beneficios: descreverBeneficios(r.voucher), meses: r.meses.map((m) => ({ comp: m.comp, valor: m.depois / 100 })) });
+    res.json({
+      ok: true, beneficios: descreverBeneficios(r.voucher),
+      meses: r.meses.map((m) => ({ comp: m.comp, valor: m.depois / 100 })),
+      pacote: r.pacote || null,
+    });
   } catch (e) {
     res.status(e.code || 500).json({ error: e.message });
   }
@@ -6515,6 +6783,7 @@ async function converterEmMensalista(client, { weeklyFreq, slotId, slotIds, bill
         dueDate: mensalidadePaga.pagoEm,
         status: "pago",
         paidAt: mensalidadePaga.pagoEm,
+        descricao: mensalidadePaga.descricao || null,
         /* Guarda o txid da cobrança que ela pagou (o da RESERVA, formato FQCB).
            É só rastreabilidade: nasce paga, então nem a reemissão nem o webhook
            mexem nela — confirmarPagamentoPorTxid ignora invoice já paga. */
@@ -9021,7 +9290,10 @@ Toque abaixo para escolher 👇`,
     return waButtons(msg.from,
       `🎟️ Código *${v.codigo}* válido!${v.descricao ? "\n" + v.descricao : ""}\n\n` +
       descreverBeneficios(v).map((t) => `• ${t}`).join("\n") + "\n\n" +
-      `Pagamento de hoje: de ~${moedaBR(p.totalSem)}~ por *${moedaBR(p.total)}*.\n\nPosso usar este código?`,
+      (p.pacote
+        ? `Pagamento de hoje: *${moedaBR(p.total)}* — o pacote (${p.pacote.meses} × ${moedaBR(p.pacote.mensalidade)}${p.taxa ? ` + taxa de matrícula ${moedaBR(p.taxa)}` : ""}), no lugar da 1ª mensalidade. ` +
+          `A próxima mensalidade vence em ${p.pacote.volta}, no mesmo dia do mês de hoje.\n\nPosso usar este código?`
+        : `Pagamento de hoje: de ~${moedaBR(p.totalSem)}~ por *${moedaBR(p.total)}*.\n\nPosso usar este código?`),
       [
         { id: "cupom:ok", title: "✅ Usar o código" },
         { id: "cupom:nao", title: "Seguir sem código" },
@@ -10693,6 +10965,12 @@ const COLUNAS_ESPERADAS = [
   ["WaConversation", "humanoPedidos", "INT NOT NULL DEFAULT 0"],
   ["WaConversation", "voucher", "VARCHAR(30) NULL"],
   ["Voucher", "aulasExtras", "INT NOT NULL DEFAULT 0"],
+  // pacote nas campanhas (24/11/2026)
+  ["Voucher", "pacoteInicio", "VARCHAR(7) NULL"],
+  ["Voucher", "pacoteGratis", "INT NOT NULL DEFAULT 0"],
+  ["Voucher", "pacotePagos", "INT NOT NULL DEFAULT 0"],
+  ["Voucher", "pacoteVenceEm", "VARCHAR(10) NULL"],
+  ["Invoice", "descricao", "VARCHAR(200) NULL"],
   ["ExtraPass", "voucherUsoId", "INT NULL"],
   ["WaConversation", "lastInboundAt", "DATETIME(3) NULL"],
   // "Cadastro via WhatsApp" no painel

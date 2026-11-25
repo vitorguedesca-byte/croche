@@ -793,8 +793,14 @@ export default function FirstClassBooking({ onBack, fromSite }) {
               {/* O resumo do que vai ser cobrado fica ANTES do botão */}
               {!isAvulso && (taxa > 0 || pv) ? (
                 <div className="pt-pix" style={{ marginTop: "1rem" }}>
+                  {pv?.pacote ? (
+                    // pacote: no lugar da 1ª mensalidade, a soma dos meses pagos
+                    <div className="pt-pix-row"><span>Pacote {pv.pacote.pagos} ({pv.pacote.meses} × {money(pv.pacote.mensalidade)})</span>
+                      <b>{money(mensalidadeHoje)}</b></div>
+                  ) : (
                   <div className="pt-pix-row"><span>1ª mensalidade ({freq}x por semana)</span>
                     <b>{pv && mensalidadeHoje !== mensalidade ? <><s style={{ color: "var(--muted)", fontWeight: 400 }}>{money(mensalidade)}</s> {money(mensalidadeHoje)}</> : money(mensalidade)}</b></div>
+                  )}
                   {taxa > 0 && (
                     <div className="pt-pix-row"><span>Taxa de matrícula (uma vez só)</span>
                       <b>{pv && taxaHoje === 0 ? <><s style={{ color: "var(--muted)", fontWeight: 400 }}>{money(taxa)}</s> isenta 🎟️</> : money(taxaHoje)}</b></div>

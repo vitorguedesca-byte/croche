@@ -64,8 +64,34 @@ const VAZIO = {
   aulaExperimental: false, valorExperimental: 0,
   temPremio: false, premio: "",
   temAulas: false, aulasExtras: 1,
+  temPacote: false, pacoteInicio: "", pacoteGratis: 1, pacotePagos: 3, pacotePrazo: "uso", pacoteVenceEm: "",
   limiteUsos: "", inicio: "", fim: "", unidade: "", planos: [], ativo: true,
 };
+
+/* ---------- pacote: a mesma conta de backend/src/vouchers.js → mesesDoPacote ---------- */
+const MESES_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+const somaMes = (comp, n) => {
+  const [y, m] = comp.split("-").map(Number);
+  const t = y * 12 + (m - 1) + n;
+  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
+};
+const nomeMes = (comp) => `${MESES_PT[Number(comp.slice(5, 7)) - 1]}/${comp.slice(0, 4)}`;
+function listaMeses(comps) {
+  if (!comps.length) return "";
+  const anos = new Set(comps.map((c) => c.slice(0, 4)));
+  const nomes = anos.size === 1 ? comps.map((c) => MESES_PT[Number(c.slice(5, 7)) - 1]) : comps.map(nomeMes);
+  const txt = nomes.length === 1 ? nomes[0] : `${nomes.slice(0, -1).join(", ")} e ${nomes[nomes.length - 1]}`;
+  return anos.size === 1 ? `${txt}/${[...anos][0]}` : txt;
+}
+function mesesDoPacoteForm(f) {
+  if (!f.temPacote || !/^\d{4}-\d{2}$/.test(f.pacoteInicio || "")) return null;
+  const g = Math.max(0, Number(f.pacoteGratis) || 0), n = Math.max(1, Number(f.pacotePagos) || 1);
+  const gratis = Array.from({ length: g }, (_, i) => somaMes(f.pacoteInicio, i));
+  const pagos = Array.from({ length: n }, (_, i) => somaMes(f.pacoteInicio, g + i));
+  return { gratis, pagos, cobranca: (gratis[0] || pagos[0]), volta: somaMes(f.pacoteInicio, g + n) };
+}
+// Mês seguinte a uma data 'YYYY-MM-DD' — sugestão de início do pacote
+const mesSeguinte = (iso) => (iso ? somaMes(iso.slice(0, 7), 1) : "");
 
 const codigoLimpo = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/[^A-Z0-9_-]/g, "");
 
@@ -83,6 +109,19 @@ function comDesconto(base, f) {
 function beneficiosDoForm(form, meta) {
   const out = [];
   if (form.isentaMatricula) out.push(`Isenção da taxa de matrícula (${money(Number(meta.taxaMatricula) || 0)})`);
+  const pac = mesesDoPacoteForm(form);
+  if (pac) {
+    if (pac.gratis.length) out.push(`Mensalidade de ${listaMeses(pac.gratis)} grátis`);
+    out.push(pac.pagos.length === 1
+      ? `Mensalidade de ${nomeMes(pac.pagos[0])} paga já no pacote`
+      : `Mensalidades de ${listaMeses(pac.pagos)} pagas juntas, num Pix só (a soma das ${pac.pagos.length} mensalidades do plano)`);
+    out.push(form.pacotePrazo === "data" && form.pacoteVenceEm
+      ? `O pacote é pago até ${fmtDate(form.pacoteVenceEm)}`
+      : "O pacote é pago no dia em que a aluna usar o código");
+    out.push("Para quem está entrando: sem taxa de matrícula");
+    out.push(`Em ${nomeMes(pac.volta)} a mensalidade volta a ser cobrada normalmente`);
+    out.push("Se cancelar durante o pacote, o valor pago não é devolvido");
+  }
   if (form.temDesconto && form.descontoValor !== "") {
     const x = Number(form.descontoValor) || 0, m = Number(form.descontoMeses) || 1;
     const alcance = m === 1 ? "na 1ª mensalidade" : `nas ${m} primeiras mensalidades`;
@@ -121,6 +160,9 @@ export function CampanhaForm({ campanha }) {
     aulaExperimental: campanha.aulaExperimental, valorExperimental: campanha.valorExperimental || 0,
     temPremio: !!campanha.premio, premio: campanha.premio || "",
     temAulas: (campanha.aulasExtras || 0) > 0, aulasExtras: campanha.aulasExtras || 1,
+    temPacote: !!campanha.pacoteInicio, pacoteInicio: campanha.pacoteInicio || "",
+    pacoteGratis: campanha.pacoteInicio ? campanha.pacoteGratis : 1, pacotePagos: campanha.pacoteInicio ? campanha.pacotePagos : 3,
+    pacotePrazo: campanha.pacoteVenceEm ? "data" : "uso", pacoteVenceEm: campanha.pacoteVenceEm || "",
     limiteUsos: campanha.limiteUsos ?? "", inicio: campanha.inicio || "", fim: campanha.fim || "",
     unidade: campanha.unidade || "", planos: campanha.planos || [], ativo: campanha.ativo,
   } : VAZIO);
@@ -139,6 +181,13 @@ export function CampanhaForm({ campanha }) {
     if (!form.nome.trim()) return toast.error("Dê um nome para a campanha.");
     if (codigoLimpo(form.codigo).length < 3) return toast.error("O código precisa ter pelo menos 3 letras ou números.");
     if (!ben.length) return toast.error("Ligue pelo menos um benefício.");
+    if (form.temPacote) {
+      if (!form.pacoteInicio) return toast.error("Escolha o mês em que o pacote começa.");
+      if (!form.fim) return toast.error("Com pacote, preencha \"Vale até\": o pacote começa no mês seguinte ao fim da campanha (ou depois).");
+      if (form.fim.slice(0, 7) >= form.pacoteInicio) return toast.error("O pacote precisa começar num mês depois do fim da campanha.");
+      if (form.temDesconto) return toast.error("O pacote e o desconto na mensalidade não podem ser usados juntos.");
+      if (form.pacotePrazo === "data" && !form.pacoteVenceEm) return toast.error("Escolha até que dia o pacote pode ser pago.");
+    }
     const ok = await confirmModal({
       title: campanha ? "Salvar alterações" : "Criar campanha",
       message: `Código ${codigoLimpo(form.codigo)}\n\n${ben.join("\n")}\n\n` +
@@ -159,6 +208,10 @@ export function CampanhaForm({ campanha }) {
         valorExperimental: Number(form.valorExperimental) || 0,
         premio: form.temPremio ? form.premio : "",
         aulasExtras: form.temAulas ? Math.max(1, Number(form.aulasExtras) || 1) : 0,
+        pacoteInicio: form.temPacote ? form.pacoteInicio : null,
+        pacoteGratis: form.temPacote ? Number(form.pacoteGratis) || 0 : 0,
+        pacotePagos: form.temPacote ? Number(form.pacotePagos) || 1 : 0,
+        pacoteVenceEm: form.temPacote && form.pacotePrazo === "data" ? form.pacoteVenceEm : null,
         limiteUsos: form.limiteUsos === "" ? null : Number(form.limiteUsos),
         inicio: form.inicio || null, fim: form.fim || null,
         unidade: form.unidade || null, planos: form.planos, ativo: form.ativo,
@@ -232,6 +285,55 @@ export function CampanhaForm({ campanha }) {
               <label>Por quantos meses</label>
               <input type="number" min="1" max="12" value={form.descontoMeses} onChange={(e) => set("descontoMeses", e.target.value)} />
             </div>
+          </div>
+        )}
+
+        <Chave on={form.temPacote} onToggle={() => setForm((f) => ({
+            ...f, temPacote: !f.temPacote,
+            // sugere o mês seguinte ao fim da campanha
+            pacoteInicio: f.pacoteInicio || mesSeguinte(f.fim),
+          }))}
+          titulo="Pacote de mensalidades"
+          ligado="Meses grátis e meses pagos juntos num Pix só (a soma das mensalidades do plano dela). Quem já estuda paga o mês corrente normalmente e o Pix do pacote vence no prazo abaixo. Aluna nova paga o pacote na matrícula, no lugar da 1ª mensalidade e sem taxa de matrícula. Os meses do pacote nascem quitados e, depois, a cobrança volta sozinha, no dia de vencimento dela. Cancelando no meio, não há devolução e o mês seguinte não é gerado."
+          desligado="Sem pacote." />
+        {form.temPacote && (
+          <div className="row2" style={{ gridTemplateColumns: "1.4fr 1fr 1fr", margin: ".2rem 0 .8rem" }}>
+            <div className="field">
+              <label>Começa em (mês)</label>
+              <input type="month" value={form.pacoteInicio} onChange={(e) => set("pacoteInicio", e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Meses grátis</label>
+              <input type="number" min="0" max="6" value={form.pacoteGratis} onChange={(e) => set("pacoteGratis", e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Meses pagos juntos</label>
+              <input type="number" min="1" max="12" value={form.pacotePagos} onChange={(e) => set("pacotePagos", e.target.value)} />
+            </div>
+          </div>
+        )}
+        {form.temPacote && (
+          <div className="field" style={{ margin: "-.3rem 0 .8rem" }}>
+            <label>Quem já estuda paga o pacote</label>
+            <div className="seg">
+              <button type="button" className={form.pacotePrazo === "uso" ? "on" : ""} onClick={() => set("pacotePrazo", "uso")}>No dia em que usar o código</button>
+              <button type="button" className={form.pacotePrazo === "data" ? "on" : ""}
+                onClick={() => setForm((f) => ({ ...f, pacotePrazo: "data", pacoteVenceEm: f.pacoteVenceEm || f.fim }))}>Até uma data</button>
+            </div>
+            {form.pacotePrazo === "data" && (
+              <input type="date" style={{ maxWidth: 220, marginTop: ".5rem" }} value={form.pacoteVenceEm} onChange={(e) => set("pacoteVenceEm", e.target.value)} />
+            )}
+            <div className="help">
+              {form.pacotePrazo === "data"
+                ? "O Pix vence nessa data (quem usar o código depois dela paga no mesmo dia). Passou do prazo, valem as regras de atraso de sempre."
+                : "O Pix vence no mesmo dia em que ela usar o código. Passou do dia, valem as regras de atraso de sempre."}
+              {" "}Aluna nova sempre paga na hora, no Pix da matrícula.
+            </div>
+          </div>
+        )}
+        {form.temPacote && campanha?.usos?.total > 0 && (
+          <div className="help" style={{ marginTop: "-.5rem", marginBottom: ".8rem" }}>
+            Quem já usou o código continua com os meses que pegou. A mudança vale para os próximos usos.
           </div>
         )}
 
@@ -324,6 +426,20 @@ export function CampanhaForm({ campanha }) {
         {form.aulaExperimental && (
           <div className="help">Aula experimental: {money(avulsa)} por <b>{money(Math.min(avulsa, Number(form.valorExperimental) || 0))}</b>.</div>
         )}
+        {(() => {
+          const pac = mesesDoPacoteForm(form);
+          if (!pac) return null;
+          const planos = (form.planos.length ? form.planos : [1, 2, 3, 4]).filter((p) => Number(meta[`valorPlano${p}x`]) > 0);
+          return (
+            <div className="help">
+              Valor do pacote (aluna nova paga na matrícula, sem taxa):{" "}
+              {planos.map((p, i) => (
+                <span key={p}>{i ? " · " : ""}{p}x <b>{money(Number(meta[`valorPlano${p}x`]) * pac.pagos.length)}</b></span>
+              ))}
+              {" "}(quem tem valor próprio paga a soma do valor dela). Volta ao normal em {nomeMes(pac.volta)}.
+            </div>
+          );
+        })()}
       </div>
       </div>
     </Modal>
@@ -354,13 +470,18 @@ function UsosDaCampanha({ campanha: c }) {
     if (!cli) return toast.error("Escolha a aluna.");
     const ok = await confirmModal({
       title: "Aplicar código",
-      message: `Aplicar ${c.codigo} na mensalidade de ${cli.name}?\n\n${c.beneficios.join("\n")}\n\nA mensalidade em aberto e os meses da campanha mudam de valor, e o Pix é refeito.`,
+      message: `Aplicar ${c.codigo} na mensalidade de ${cli.name}?\n\n${c.beneficios.join("\n")}\n\n` +
+        (c.pacoteInicio
+          ? "Os meses do pacote mudam de valor e a mensalidade do pacote é gerada agora, com o Pix, para ela pagar pelo portal."
+          : "A mensalidade em aberto e os meses da campanha mudam de valor, e o Pix é refeito."),
       confirmLabel: "Aplicar",
     });
     if (!ok) return;
     try {
       const r = await api.vouchers.aplicarNaAluna(cli.id, c.codigo);
-      toast(`Código aplicado para ${cli.name}${r.meses?.length ? ` — ${r.meses.length} mês(es) com desconto` : ""}.`);
+      toast(r.pacote
+        ? `Pacote aplicado para ${cli.name}: ${money(r.pacote.valor)} na mensalidade de ${r.pacote.texto.cobranca}.`
+        : `Código aplicado para ${cli.name}${r.meses?.length ? ` — ${r.meses.length} mês(es) com desconto` : ""}.`);
       setAluna("");
       carregar(); reload?.(); avisarLista();
     } catch (e) { toast.error(e.message); }
@@ -369,7 +490,8 @@ function UsosDaCampanha({ campanha: c }) {
   const cancelar = async (u) => {
     const ok = await confirmModal({
       title: "Cancelar uso do código",
-      message: `Cancelar o uso de ${u.nome}?\n\nOs meses seguintes ainda não pagos voltam ao valor normal, a aula de presente ainda não marcada é recolhida e a vaga volta para a campanha. Mês já pago e aula já marcada não mudam, e um Pix já gerado continua com o valor dele.`,
+      message: `Cancelar o uso de ${u.nome}?\n\nOs meses seguintes ainda não pagos voltam ao valor normal, a aula de presente ainda não marcada é recolhida e a vaga volta para a campanha. Mês já pago e aula já marcada não mudam, e um Pix já gerado continua com o valor dele.` +
+        (c.pacoteInicio ? "\n\nPacote: só dá para cancelar enquanto o Pix do pacote não foi pago — a mensalidade do pacote volta ao valor normal do mês." : ""),
       confirmLabel: "Cancelar uso", tone: "danger",
     });
     if (!ok) return;

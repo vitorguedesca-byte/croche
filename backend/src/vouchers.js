@@ -32,6 +32,85 @@ export const planosDe = (v) => {
   } catch { return []; }
 };
 
+/* ---------- PACOTE (ex.: "dezembro grátis + jan, fev e mar pagos juntos") ----------
+   Uma sequência de meses a partir de `pacoteInicio` ('YYYY-MM'):
+   • os `pacoteGratis` primeiros não são cobrados;
+   • os `pacotePagos` seguintes são pagos JUNTOS, num Pix só, no valor da soma
+     das mensalidades do plano dela;
+   • passado o último mês, a mensalidade volta a nascer sozinha, no valor normal.
+   O Pix do pacote mora na mensalidade do 1º mês (a "cobrança"); os demais meses
+   nascem quitados em R$ 0 — mas só depois que o Pix do pacote cair. */
+export const PACOTE_GRATIS_MAX = 6;
+export const PACOTE_PAGOS_MAX = 12;
+const COMP_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+export const temPacote = (v) =>
+  !!v && COMP_RE.test(String(v.pacoteInicio || "")) && (Number(v.pacotePagos) || 0) >= 1;
+
+const MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+const somaMes = (comp, n) => {
+  const [y, m] = comp.split("-").map(Number);
+  const t = y * 12 + (m - 1) + n;
+  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
+};
+export const nomeMes = (comp) => `${MESES[Number(comp.slice(5, 7)) - 1]}/${comp.slice(0, 4)}`;
+// "janeiro, fevereiro e março/2027" — junta o ano quando todos são do mesmo
+export function listaMeses(comps) {
+  if (!comps.length) return "";
+  const anos = new Set(comps.map((c) => c.slice(0, 4)));
+  const nomes = anos.size === 1 ? comps.map((c) => MESES[Number(c.slice(5, 7)) - 1]) : comps.map(nomeMes);
+  const txt = nomes.length === 1 ? nomes[0] : `${nomes.slice(0, -1).join(", ")} e ${nomes[nomes.length - 1]}`;
+  return anos.size === 1 ? `${txt}/${[...anos][0]}` : txt;
+}
+
+/* Os meses do pacote. `cobranca` = o mês cuja mensalidade carrega o Pix do
+   pacote; `cobertos` = os outros, que nascem quitados em R$ 0; `volta` = o 1º
+   mês depois do pacote (cobrança normal). */
+export function mesesDoPacote(v) {
+  if (!temPacote(v)) return null;
+  const g = Math.max(0, Math.min(PACOTE_GRATIS_MAX, parseInt(v.pacoteGratis, 10) || 0));
+  const n = Math.max(1, Math.min(PACOTE_PAGOS_MAX, parseInt(v.pacotePagos, 10) || 1));
+  const gratis = Array.from({ length: g }, (_, i) => somaMes(v.pacoteInicio, i));
+  const pagos = Array.from({ length: n }, (_, i) => somaMes(v.pacoteInicio, g + i));
+  const todos = [...gratis, ...pagos];
+  return { gratis, pagos, todos, cobranca: todos[0], cobertos: todos.slice(1), volta: somaMes(v.pacoteInicio, g + n) };
+}
+
+/* Vencimento do Pix do pacote para quem já estuda: no dia em que usa o código
+   (sem data na campanha) ou até a data marcada — nunca antes de hoje. */
+export const vencimentoDoPacote = (v, hoje) =>
+  v?.pacoteVenceEm && v.pacoteVenceEm > hoje ? v.pacoteVenceEm : hoje;
+
+/* Valor do pacote: a soma das mensalidades dos meses PAGOS. `valorDoMes(comp)`
+   vem de fora (é o valor que aquele mês teria sem o pacote). */
+export function valorDoPacote(v, valorDoMes) {
+  const m = mesesDoPacote(v);
+  if (!m) return 0;
+  return centavos(m.pagos.reduce((s, c) => s + Math.max(0, Number(valorDoMes(c)) || 0), 0));
+}
+
+/* ALUNA NOVA (matrícula com o código): o Pix da matrícula JÁ É o pacote — ela
+   não paga a mensalidade do mês em que entra (o "dezembro" dela). Esse mês de
+   entrada é a cobrança; dali até o último mês pago do pacote, tudo nasce
+   quitado; a próxima mensalidade é a do mês seguinte ao pacote, no mesmo dia
+   do mês em que ela entrou (o vencimento dela é o dia do pagamento). */
+export function mesesDoPacoteNaMatricula(v, compMatricula) {
+  const m = mesesDoPacote(v);
+  if (!m) return null;
+  const cobertos = [];
+  for (let c = somaMes(compMatricula, 1); c < m.volta; c = somaMes(c, 1)) cobertos.push(c);
+  return { cobranca: compMatricula, cobertos, volta: m.volta, pagos: m.pagos, gratis: m.gratis };
+}
+
+// Texto que acompanha a mensalidade do pacote (fatura e ficha)
+export function descricaoDoPacote(v) {
+  const m = mesesDoPacote(v);
+  if (!m) return null;
+  const partes = [];
+  if (m.gratis.length) partes.push(`${listaMeses(m.gratis)} grátis`);
+  partes.push(`${listaMeses(m.pagos)} ${m.pagos.length === 1 ? "pago" : "pagos juntos"}`);
+  return `Pacote ${v.codigo}: ${partes.join(" + ")}`.slice(0, 200);
+}
+
 // "preco" aceita 0 (mês grátis); os outros precisam tirar alguma coisa
 export const temDesconto = (v) => {
   if (!v || !TIPOS_DESCONTO.includes(v.descontoTipo) || v.descontoValor == null) return false;
@@ -62,6 +141,19 @@ export function descreverBeneficios(v) {
   const out = [];
   if (!v) return out;
   if (v.isentaMatricula) out.push("Isenção da taxa de matrícula");
+  const pac = mesesDoPacote(v);
+  if (pac) {
+    if (pac.gratis.length) out.push(`Mensalidade de ${listaMeses(pac.gratis)} grátis`);
+    out.push(pac.pagos.length === 1
+      ? `Mensalidade de ${nomeMes(pac.pagos[0])} paga já no pacote`
+      : `Mensalidades de ${listaMeses(pac.pagos)} pagas juntas, num Pix só (a soma das ${pac.pagos.length} mensalidades do seu plano)`);
+    out.push(v.pacoteVenceEm
+      ? `O pacote é pago até ${fmtBR(v.pacoteVenceEm)}`
+      : "O pacote é pago no dia em que você usar o código");
+    out.push("Para quem está entrando: sem taxa de matrícula");
+    out.push(`Em ${nomeMes(pac.volta)} a mensalidade volta a ser cobrada normalmente`);
+    out.push("Se cancelar durante o pacote, o valor pago não é devolvido");
+  }
   if (temDesconto(v)) {
     const x = Number(v.descontoValor) || 0;
     const meses = Math.max(1, Number(v.descontoMeses) || 1);
@@ -110,6 +202,12 @@ export function motivoRecusa(v, { hoje, usados = 0, contexto, freq = null, unida
 
   // aula de presente e prêmio valem em qualquer lugar onde o código é aceito
   const extraOuPremio = !!v.premio || aulasDe(v) > 0;
+  const pacote = temPacote(v);
+  /* O pacote só se vende ANTES de começar: no 1º mês dele a mensalidade (ou a
+     matrícula) já está correndo pelo valor de sempre, e o "mês grátis" viraria
+     mês pago de novo. */
+  if (pacote && contexto !== "avulsa" && String(hoje || "").slice(0, 7) >= v.pacoteInicio)
+    return "O pacote desta promoção já começou — fale com a gente no WhatsApp. 💚";
   if (contexto === "avulsa") {
     if (!v.aulaExperimental && !extraOuPremio)
       return "Este código vale para os planos mensais, não para a aula avulsa. 💚";
@@ -117,13 +215,13 @@ export function motivoRecusa(v, { hoje, usados = 0, contexto, freq = null, unida
     const planos = planosDe(v);
     if (planos.length && freq && !planos.includes(Number(freq)))
       return `Este código vale só para o plano ${planos.map((p) => `${p}x`).join(", ")} por semana. 💚`;
-    if (!v.isentaMatricula && !temDesconto(v) && !extraOuPremio)
+    if (!v.isentaMatricula && !temDesconto(v) && !pacote && !extraOuPremio)
       return "Este código é da aula experimental — escolha a opção AVULSO para usar. 💚";
   } else if (contexto === "mensalidade") {
     const planos = planosDe(v);
     if (planos.length && freq && !planos.includes(Number(freq)))
       return `Este código vale só para o plano ${planos.map((p) => `${p}x`).join(", ")} por semana. 💚`;
-    if (!temDesconto(v) && !extraOuPremio)
+    if (!temDesconto(v) && !pacote && !extraOuPremio)
       return "Este código é para alunas novas, na matrícula pelo site. 💚";
   }
   return null;
@@ -142,8 +240,22 @@ export function primeiroPagamentoComVoucher(v, { avulsa, mensalidade = 0, taxa =
     };
   }
   const m0 = centavos(mensalidade), t0 = centavos(taxa);
+  /* Pacote: no lugar da 1ª mensalidade entra o pacote (a soma das mensalidades
+     dos meses pagos), e a aluna nova NÃO paga taxa de matrícula (Inêz,
+     24/11/2026). Paga-se mais hoje do que sem o código, então o "desconto no
+     ato" é só a taxa. */
+  const pac = mesesDoPacote(v);
+  const t = v?.isentaMatricula || pac ? 0 : t0;
+  if (pac) {
+    const m = centavos(m0 * pac.pagos.length);
+    const total = centavos(m + t), totalSem = centavos(m0 + t0);
+    return {
+      mensalidade: m, taxa: t, valorAvulsa: 0, total, totalSem,
+      descontoCents: Math.max(0, Math.round((t0 - t) * 100)),
+      pacote: { meses: pac.pagos.length, pagos: listaMeses(pac.pagos), volta: nomeMes(pac.volta), mensalidade: m0 },
+    };
+  }
   const m = aplicarDesconto(m0, v);
-  const t = v?.isentaMatricula ? 0 : t0;
   const total = centavos(m + t), totalSem = centavos(m0 + t0);
   return { mensalidade: m, taxa: t, valorAvulsa: 0, total, totalSem, descontoCents: Math.round((totalSem - total) * 100) };
 }
@@ -180,10 +292,27 @@ export function limparCampanha(body, { hoje } = {}) {
   const isentaMatricula = !!b.isentaMatricula;
   const premio = String(b.premio || "").trim().slice(0, 200) || null;
   const aulasExtras = aulasDe(b);
-  if (!isentaMatricula && !descontoTipo && !aulaExperimental && !premio && !aulasExtras)
-    return { erro: "Escolha pelo menos um benefício: isenção da matrícula, desconto, aula experimental, aula de presente ou prêmio." };
-  if (publico === "alunas" && !descontoTipo && !premio && !aulasExtras)
-    return { erro: "Para alunas que já estudam, o código precisa dar desconto na mensalidade, aula de presente ou prêmio." };
+
+  const pacoteInicio = b.pacoteInicio ? String(b.pacoteInicio).slice(0, 7) : null;
+  if (pacoteInicio && !COMP_RE.test(pacoteInicio)) return { erro: "Escolha o mês em que o pacote começa." };
+  const pacoteGratis = pacoteInicio ? parseInt(b.pacoteGratis, 10) || 0 : 0;
+  const pacotePagos = pacoteInicio ? parseInt(b.pacotePagos, 10) || 0 : 0;
+  if (pacoteInicio) {
+    if (pacoteGratis < 0 || pacoteGratis > PACOTE_GRATIS_MAX) return { erro: `Meses grátis do pacote: de 0 a ${PACOTE_GRATIS_MAX}.` };
+    if (pacotePagos < 1 || pacotePagos > PACOTE_PAGOS_MAX) return { erro: `Meses pagos juntos no pacote: de 1 a ${PACOTE_PAGOS_MAX}.` };
+    // Os dois mexem nos mesmos meses — juntos, ninguém saberia qual vale.
+    if (descontoTipo) return { erro: "O pacote e o desconto na mensalidade não podem ser usados juntos. Desligue um dos dois." };
+  }
+  const temPac = !!pacoteInicio;
+  const pacoteVenceEm = temPac && b.pacoteVenceEm ? String(b.pacoteVenceEm).slice(0, 10) : null;
+  if (pacoteVenceEm && !/^\d{4}-\d{2}-\d{2}$/.test(pacoteVenceEm)) return { erro: "Data de pagamento do pacote inválida." };
+  if (pacoteVenceEm && pacoteVenceEm.slice(0, 7) >= somaMes(pacoteInicio, 1))
+    return { erro: "O pacote precisa ser pago antes de terminar o 1º mês dele." };
+
+  if (!isentaMatricula && !descontoTipo && !temPac && !aulaExperimental && !premio && !aulasExtras)
+    return { erro: "Escolha pelo menos um benefício: isenção da matrícula, desconto, pacote, aula experimental, aula de presente ou prêmio." };
+  if (publico === "alunas" && !descontoTipo && !temPac && !premio && !aulasExtras)
+    return { erro: "Para alunas que já estudam, o código precisa dar desconto na mensalidade, pacote, aula de presente ou prêmio." };
 
   const planos = (Array.isArray(b.planos) ? b.planos : []).map(Number).filter((n) => [1, 2, 3, 4].includes(n));
   const dataOk = (d) => !d || /^\d{4}-\d{2}-\d{2}$/.test(d);
@@ -191,6 +320,12 @@ export function limparCampanha(body, { hoje } = {}) {
   const fim = b.fim ? String(b.fim).slice(0, 10) : null;
   if (!dataOk(inicio) || !dataOk(fim)) return { erro: "Data inválida." };
   if (inicio && fim && fim < inicio) return { erro: "A data de fim é antes da data de início." };
+  /* O pacote precisa começar DEPOIS do último dia de uso do código: quem usa o
+     código no mês em que o pacote já começou teria esse mês cobrado normalmente
+     (a matrícula paga o mês corrente) e ganharia os meses cobertos sem pagar. */
+  if (temPac && !fim) return { erro: "Com pacote, a campanha precisa de uma data final (o pacote começa no mês seguinte a ela, ou depois)." };
+  if (temPac && fim.slice(0, 7) >= pacoteInicio)
+    return { erro: "O pacote precisa começar num mês DEPOIS do fim da campanha." };
   void hoje;
   const limiteUsos = b.limiteUsos === "" || b.limiteUsos == null ? null : parseInt(b.limiteUsos, 10);
   if (limiteUsos != null && (!Number.isInteger(limiteUsos) || limiteUsos < 1)) return { erro: "O limite de usos precisa ser 1 ou mais (ou vazio para sem limite)." };
@@ -201,6 +336,7 @@ export function limparCampanha(body, { hoje } = {}) {
       descricao: String(b.descricao || "").trim().slice(0, 500) || null,
       isentaMatricula, descontoTipo, descontoValor, descontoMeses,
       aulaExperimental, valorExperimental, premio, aulasExtras,
+      pacoteInicio, pacoteGratis, pacotePagos, pacoteVenceEm,
       planos: JSON.stringify([...new Set(planos)].sort()),
       unidade: String(b.unidade || "").trim() || null,
       inicio, fim, limiteUsos,

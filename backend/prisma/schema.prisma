@@ -204,6 +204,10 @@ model Invoice {
      mensalidade já paga" — o segundo vira PixAlerta. Não confundir com `txid`,
      que é a via mais recente emitida (e marca até onde as reemissões foram). */
   pagoPorTxid   String?  @db.VarChar(40)
+  /* O que esta mensalidade é, quando não é "a mensalidade do mês" comum —
+     ex.: "Pacote VERAO: dezembro/2026 grátis + janeiro, fevereiro e março/2027
+     pagos juntos" ou "Coberta pelo pacote". null = mensalidade comum. */
+  descricao     String?  @db.VarChar(200)
   /* Quando cada aviso automático de WhatsApp saiu ('YYYY-MM-DD'). Datas, e não
      booleanos, porque o que interessa é *quando* falamos com a aluna — e
      porque assim o reenvio acidental fica visível no banco.
@@ -562,6 +566,15 @@ model Voucher {
   valorExperimental Float    @default(0) // preço da aula experimental; 0 = grátis
   premio            String?  @db.VarChar(200) // ex.: "Kit de agulhas", "1 novelo"
   aulasExtras       Int      @default(0) // aulas avulsas de presente por uso (0 = não dá)
+  /* Pacote (24/11/2026): a partir de pacoteInicio, os pacoteGratis primeiros
+     meses não são cobrados e os pacotePagos seguintes são pagos juntos, num Pix
+     só, na mensalidade do 1º mês. Ver mesesDoPacote em src/vouchers.js. */
+  pacoteInicio      String?  @db.VarChar(7) // 'YYYY-MM'; null = sem pacote
+  pacoteGratis      Int      @default(0)
+  pacotePagos       Int      @default(0)
+  // Até quando a aluna que já estuda paga o Pix do pacote: null = no dia em
+  // que ela usa o código; 'YYYY-MM-DD' = até essa data (nunca antes de hoje).
+  pacoteVenceEm     String?  @db.VarChar(10)
   planos            String   @default("[]") @db.VarChar(40) // JSON [1,2,...] — planos aceitos; [] = todos
   unidade           String?  @db.VarChar(100) // null = todas as unidades
   inicio            String?  @db.VarChar(10) // 'YYYY-MM-DD' — vale a partir de (inclusive)
