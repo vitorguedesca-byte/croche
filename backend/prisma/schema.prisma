@@ -813,6 +813,11 @@ model WaDisparo {
   modo      String    @db.VarChar(12) // template | texto
   template  String?   @db.VarChar(80) // nome do template, no modo template
   texto     String?   @db.Text // mensagem, no modo texto
+  /* Tudo o que o laço de envio precisa (JSON: modo, texto, template com as
+     variáveis e a mídia já subida na Meta). Com isso o servidor que sobe depois
+     de um deploy CONTINUA o disparo de onde parou, em vez de dar erro para
+     quem ainda estava na fila (25/11/2026: 262 de 294 ficaram sem a Black). */
+  config    String?   @db.Text
   inicioEm  DateTime  @default(now())
   fimEm     DateTime? // nulo = ainda enviando
   itens     WaDisparoItem[]
@@ -832,7 +837,9 @@ model WaDisparoItem {
   leadId    Int?
   nome      String    @db.VarChar(120)
   phone     String    @default("") @db.VarChar(30)
-  // na fila | enviado | pulada | erro
+  /* na fila | enviando | enviado | pulada | erro. "enviando" é a reserva: o
+     processo que vai mandar marca antes, e só quem conseguiu marcar manda —
+     durante o deploy dois servidores rodam juntos e não podem repetir ninguém. */
   situacao  String    @default("na fila") @db.VarChar(12)
   motivo    String?   @db.VarChar(200) // por que pulou ou deu erro
   wamid     String?   @db.VarChar(160) // chave para a entrega em WaMessage

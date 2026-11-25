@@ -213,6 +213,7 @@ function EscolherMidia({ tipo, valor, onChange }) {
 
 const SITUACAO_ENVIO = {
   "na fila": ["b-muted", "⏳ na fila"],
+  enviando: ["b-info", "📤 enviando"],
   enviado: ["b-info", "📤 enviada"],
   pulada: ["b-warn", "⏭ pulada"],
   erro: ["b-danger", "⚠️ erro"],
@@ -1257,14 +1258,15 @@ function Andamento({ id, onNovo }) {
   const recebeu = (i) => i.entrega === "entregue" || i.entrega === "lido";
   const conta = (f) => d.itens.filter(f).length;
   const total = d.itens.length;
-  const processadas = conta((i) => i.situacao !== "na fila");
+  const naFila = (i) => i.situacao === "na fila" || i.situacao === "enviando";
+  const processadas = conta((i) => !naFila(i));
   const enviadas = conta((i) => i.situacao === "enviado");
   const entregues = conta(recebeu);
   const lidas = conta((i) => i.entrega === "lido");
-  const aguardando = conta((i) => i.situacao === "na fila" || i.entrega === "enviado");
+  const aguardando = conta((i) => naFila(i) || i.entrega === "enviado");
   const naoChegaram = conta((i) => i.situacao === "erro" || i.entrega === "falhou");
   const puladas = conta((i) => i.situacao === "pulada");
-  const faltaram = d.itens.filter((i) => !recebeu(i) && i.situacao !== "na fila");
+  const faltaram = d.itens.filter((i) => !recebeu(i) && !naFila(i));
 
   const itens = d.itens.filter((i) =>
     filtro === "receberam" ? recebeu(i)

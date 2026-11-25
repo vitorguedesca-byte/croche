@@ -8024,7 +8024,7 @@ async function resumirDisparos(quantos = 6) {
       puladas: conta((i) => i.situacao === "pulada"),
       erros: conta((i) => i.situacao === "erro"),
       entregues: conta((i) => ["entregue", "lido"].includes(entregaDe(i))),
-      aguardando: conta((i) => i.situacao === "na fila" || entregaDe(i) === "enviado"),
+      aguardando: conta((i) => i.situacao === "na fila" || i.situacao === "enviando" || entregaDe(i) === "enviado"),
       naoChegaram: conta((i) => i.situacao === "erro" || entregaDe(i) === "falhou"),
     };
   });
@@ -8035,13 +8035,15 @@ async function resumirDisparos(quantos = 6) {
    disparo em andamento" — e, pior, quem não chegou a receber ficaria
    eternamente "na fila", que é mentira. Vira erro com o motivo escrito, para a
    escola poder selecionar essas alunas e mandar de novo. */
-async function fecharDisparosInterrompidos() {
-  const abertos = await prisma.waDisparo.findMany({ where: { fimEm: null }, select: { id: true } });
-  if (!abertos.length) return;
-  const ids = abertos.map((d) => d.id);
+async function fecharDisparosInterrompidos(ids) {
+  if (!ids.length) return;
   const r = await prisma.waDisparoItem.updateMany({
     where: { disparoId: { in: ids }, situacao: "na fila" },
     data: { situacao: "erro", motivo: "o servidor reiniciou antes de enviar — não recebeu nada" },
+  });
+  await prisma.waDisparoItem.updateMany({
+    where: { disparoId: { in: ids }, situacao: "enviando" },
+    data: { situacao: "erro", motivo: MOTIVO_ENVIO_INCERTO },
   });
   await prisma.waDisparo.updateMany({ where: { id: { in: ids } }, data: { fimEm: new Date() } });
   console.warn(`[wa disparo] ${ids.length} disparo(s) interrompido(s) por reinício — ${r.count} aluna(s) ficaram sem mensagem.`);
@@ -8215,13 +8217,23 @@ app.post("/api/wa/disparo", wrap(async (req, res) => {
   if (!destinos.length) return res.status(400).json({ error: "Nenhuma das pessoas escolhidas existe mais." });
   const id = crypto.randomUUID();
   const por = req.admin?.username || "painel";
+  // só o que o laço de envio usa: é o que o servidor seguinte precisa para continuar
+  const config = {
+    modo,
+    texto: modo === "texto" ? String(texto).slice(0, 4000) : null,
+    tpl: tpl ? {
+      name: tpl.name, language: tpl.language, headerMidia: tpl.headerMidia || null,
+      valoresHeader: tpl.valoresHeader, valoresBody: tpl.valoresBody,
+    } : null,
+  };
   await prisma.waDisparo.create({
     data: {
       id,
       por,
       modo,
       template: tpl ? tpl.name : null,
-      texto: modo === "texto" ? String(texto).slice(0, 4000) : null,
+      texto: config.texto,
+      config: JSON.stringify(config),
       itens: {
         create: destinos
           .sort((a, b) => a.nome.localeCompare(b.nome))
@@ -8234,12 +8246,44 @@ app.post("/api/wa/disparo", wrap(async (req, res) => {
 
   // Daqui em diante a requisição já respondeu: o envio segue sozinho, gravando
   // aluna por aluna — quem acompanha (e quem abrir a tela depois) lê do banco.
-  rodarDisparo(id, { modo, texto, tpl }).catch((e) => console.error("[wa disparo]", e));
+  rodarDisparo(id, config).catch((e) => console.error("[wa disparo]", e));
 }));
 
+/* DISPARO QUE SOBREVIVE AO DEPLOY (25/11/2026). O laço de envio mora no
+   processo do backend; num deploy o Easypanel sobe o container novo e derruba
+   o antigo em segundos. Antes, o novo dava erro para todo mundo que ainda
+   estava na fila — foi assim que 262 de 294 ficaram sem a Black.
+
+   Agora:
+   - cada pessoa é RESERVADA ("na fila" → "enviando") antes do envio, numa
+     troca condicional no banco. Só quem conseguiu reservar manda; com dois
+     servidores rodando juntos na troca, ninguém recebe duas vezes;
+   - o servidor que está sendo desligado (SIGTERM) termina a mensagem que está
+     mandando e para de reservar; o que sobrou continua "na fila";
+   - o servidor que sobe retoma os disparos abertos a partir da config gravada.
+   "enviando" que sobra no fim é de um processo que morreu no meio da chamada à
+   Meta: não dá para saber se chegou, então vira erro com isso escrito — nunca
+   reenvio às cegas. */
+let encerrandoServidor = false;
+const disparosNesteProcesso = new Set();
+const MOTIVO_ENVIO_INCERTO = "o servidor caiu enquanto mandava — confira se ela recebeu antes de mandar de novo";
+
+async function fecharSeAcabou(id) {
+  const pendentes = await prisma.waDisparoItem.count({ where: { disparoId: id, situacao: { in: ["na fila", "enviando"] } } });
+  if (pendentes) return false;
+  const r = await prisma.waDisparo.updateMany({ where: { id, fimEm: null }, data: { fimEm: new Date() } });
+  if (r.count) {
+    const s = (await resumirDisparos(5).catch(() => [])).find((d) => d.id === id);
+    if (s) console.log(`[wa disparo] ${id} terminou: ${s.enviadas} enviadas, ${s.puladas} puladas, ${s.erros} com erro`);
+  }
+  return true;
+}
+
 async function rodarDisparo(id, { modo, texto, tpl }) {
+  if (disparosNesteProcesso.has(id)) return;
+  disparosNesteProcesso.add(id);
   try {
-    const itens = await prisma.waDisparoItem.findMany({ where: { disparoId: id }, orderBy: { id: "asc" } });
+    const itens = await prisma.waDisparoItem.findMany({ where: { disparoId: id, situacao: "na fila" }, orderBy: { id: "asc" } });
     // a unidade não fica no item: vem da ficha, para {unidade} e {endereco}
     const fichas = await prisma.client.findMany({ where: { id: { in: itens.map((i) => i.clientId).filter(Boolean) } }, select: { id: true, unit: true } });
     const leadsDoDisparo = await prisma.lead.findMany({ where: { id: { in: itens.map((i) => i.leadId).filter(Boolean) } }, select: { id: true, unit: true } });
@@ -8251,6 +8295,9 @@ async function rodarDisparo(id, { modo, texto, tpl }) {
       ? PEDE_ENDERECO.test(texto)
       : [...tpl.valoresHeader, ...tpl.valoresBody].some((v) => PEDE_ENDERECO.test(v));
     for (const it of itens) {
+      if (encerrandoServidor) break; // o próximo servidor continua daqui
+      const reserva = await prisma.waDisparoItem.updateMany({ where: { id: it.id, situacao: "na fila" }, data: { situacao: "enviando" } });
+      if (!reserva.count) continue; // outro servidor já pegou esta pessoa
       const cli = { name: it.nome, unit: unidadeDe.get(it.clientId ? `c:${it.clientId}` : `l:${it.leadId}`) || "" };
       let dados;
       try {
@@ -8287,10 +8334,47 @@ async function rodarDisparo(id, { modo, texto, tpl }) {
       await prisma.waDisparoItem.update({ where: { id: it.id }, data: dados });
     }
   } finally {
-    await prisma.waDisparo.update({ where: { id }, data: { fimEm: new Date() } }).catch(() => {});
-    const r = (await resumirDisparos(3).catch(() => [])).find((d) => d.id === id);
-    if (r) console.log(`[wa disparo] ${id} terminou: ${r.enviadas} enviadas, ${r.puladas} puladas, ${r.erros} com erro`);
+    disparosNesteProcesso.delete(id);
+    if (encerrandoServidor) {
+      console.warn(`[wa disparo] ${id}: servidor desligando — o que falta continua no próximo.`);
+    } else {
+      // pessoa reservada por um servidor que já morreu: a chamada à Meta pode ter saído
+      await prisma.waDisparoItem.updateMany({ where: { disparoId: id, situacao: "enviando" }, data: { situacao: "erro", motivo: MOTIVO_ENVIO_INCERTO } }).catch(() => {});
+      await fecharSeAcabou(id).catch((e) => console.error("[wa disparo] ao fechar", e.message));
+    }
   }
+}
+
+/* No boot: continua os disparos que ficaram abertos. Disparo antigo, sem
+   config gravada, não tem como continuar — fecha como antes, com erro escrito
+   para a escola selecionar quem faltou e mandar de novo. Também não continua
+   o que começou há mais de 6h (servidor parado de madrugada, por exemplo):
+   promoção chegando no dia seguinte, fora de hora, é pior que erro visível. */
+const RETOMAR_ATE_MS = 6 * 3600_000;
+async function retomarDisparos() {
+  const abertos = await prisma.waDisparo.findMany({ where: { fimEm: null }, select: { id: true, config: true, inicioEm: true } });
+  for (const d of abertos) {
+    let config = null;
+    try { config = d.config ? JSON.parse(d.config) : null; } catch {}
+    if (!config || !waConfigured() || Date.now() - d.inicioEm.getTime() > RETOMAR_ATE_MS) {
+      await fecharDisparosInterrompidos([d.id]);
+      continue;
+    }
+    const falta = await prisma.waDisparoItem.count({ where: { disparoId: d.id, situacao: { in: ["na fila", "enviando"] } } });
+    console.warn(`[wa disparo] ${d.id}: retomando depois do reinício — ${falta} pessoa(s) ainda na fila.`);
+    rodarDisparo(d.id, config).catch((e) => console.error("[wa disparo] retomada", e));
+  }
+}
+
+/* Desligamento (deploy, restart): para de reservar gente nova, espera a
+   mensagem em curso terminar (até 7s — o Docker mata em 10s) e sai. */
+for (const sinal of ["SIGTERM", "SIGINT"]) {
+  process.once(sinal, async () => {
+    encerrandoServidor = true;
+    const t0 = Date.now();
+    while (disparosNesteProcesso.size && Date.now() - t0 < 7000) await new Promise((ok) => setTimeout(ok, 100));
+    process.exit(0);
+  });
 }
 
 /* Andamento + ENTREGA de verdade.
@@ -11867,8 +11951,8 @@ async function ensureSchema() {
 const PORT = process.env.PORT || 4000;
 ensureSchema()
   .catch((e) => console.error("Falha ao garantir schema:", e.message))
-  .then(() => fecharDisparosInterrompidos())
-  .catch((e) => console.error("Falha ao fechar disparos interrompidos:", e.message))
+  .then(() => retomarDisparos())
+  .catch((e) => console.error("Falha ao retomar disparos interrompidos:", e.message))
   .then(() => loadSettings())
   .catch((e) => console.error("Falha ao carregar configurações:", e.message))
   .then(() => loadFeriados())
