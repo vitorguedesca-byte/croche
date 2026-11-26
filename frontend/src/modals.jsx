@@ -25,7 +25,7 @@ import {
 const openWa = (phone, msg) => window.open(waLink(phone, msg), "_blank");
 
 /* Opções reaproveitadas pelos seletores (<Select> em ui.jsx) */
-const FORMAS_PAGAMENTO = [
+export const FORMAS_PAGAMENTO = [
   { value: "Pix", label: "Pix", icon: "⚡" },
   { value: "Dinheiro", label: "Dinheiro", icon: "💵" },
   { value: "Cartão", label: "Cartão", icon: "💳" },
@@ -886,14 +886,47 @@ export function BaixarLeadModal({ client, onComplete }) {
 
   const bk = bookings[0];
 
+  /* Código de campanha (ex.: PACOTEVERAO pago por fora): o servidor faz a
+     conta da campanha e a matrícula entra como se o Pix com o código tivesse
+     caído. Se ela começou pelo site com o código, ele já vem preenchido. */
+  const [codigo, setCodigo] = useState("");
+  const [cod, setCod] = useState(null); // prévia do código aplicado
+  const [semCodigo, setSemCodigo] = useState(false);
+  const [erroCod, setErroCod] = useState("");
+  const [conferindo, setConferindo] = useState(false);
+  useEffect(() => {
+    if (!isMensalista) return;
+    api.baixarLeadPrevia(client.id, {}).then((r) => {
+      if (r?.codigo) { setCod(r); setCodigo(r.codigo); setValue(r.pagamento.total); }
+    }).catch(() => {});
+  }, [client.id]);
+  const aplicarCodigo = async () => {
+    const c = codigo.trim();
+    if (!c) return;
+    setConferindo(true); setErroCod("");
+    try {
+      const r = await api.baixarLeadPrevia(client.id, { codigo: c });
+      setCod(r); setSemCodigo(false); setValue(r.pagamento.total);
+    } catch (e) {
+      setCod(null); setErroCod(e.message || "Não consegui conferir o código.");
+    } finally { setConferindo(false); }
+  };
+  const tirarCodigo = () => {
+    if (cod?.daReserva) setSemCodigo(true); // o uso da reserva é cancelado na baixa
+    setCod(null); setCodigo(""); setErroCod(""); setValue(valorPadrao);
+  };
+
   const confirmar = async (e) => {
     e?.preventDefault();
+    if (codigo.trim() && !cod) { toast("Toque em Aplicar para conferir o código antes de dar baixa.", "info"); return; }
     setBusy(true);
     try {
       const res = await run(api.baixarLead(client.id, {
         paymentMethod: method,
         paymentDate: pdate,
         value: Number(value) || valorPadrao,
+        codigo: cod?.codigo || "",
+        semCodigo: !cod && semCodigo,
       }));
       toast(res?.message || `Baixa registrada! ${client.name} agora está ativa.`, "success");
       close();
@@ -947,14 +980,44 @@ export function BaixarLeadModal({ client, onComplete }) {
         </div>
       </div>
 
+      {isMensalista && (
+        <div className="field">
+          <label>Código da campanha (opcional)</label>
+          <div style={{ display: "flex", gap: ".5rem" }}>
+            <input
+              value={codigo}
+              placeholder="Ex.: PACOTEVERAO"
+              disabled={!!cod}
+              onChange={(e) => { setCodigo(e.target.value.toUpperCase()); setErroCod(""); }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); aplicarCodigo(); } }}
+            />
+            {cod
+              ? <button type="button" className="btn ghost sm" onClick={tirarCodigo}>Tirar</button>
+              : <button type="button" className="btn sec sm" onClick={aplicarCodigo} disabled={conferindo || !codigo.trim()}>{conferindo ? "..." : "Aplicar"}</button>}
+          </div>
+          {erroCod && <div className="help" style={{ color: "var(--danger)" }}>{erroCod}</div>}
+          {cod && (
+            <div className="help">
+              🎟️ <b>{cod.codigo}</b>{cod.daReserva ? " (ela escolheu no site)" : ""}: {cod.beneficios.join(" · ")}
+              <br />
+              {cod.pacote
+                ? <>Valor do pacote: <b>{money(cod.pagamento.total)}</b>{cod.pagamento.taxa ? ` (com ${money(cod.pagamento.taxa)} de taxa)` : ", sem taxa de matrícula"}. A próxima mensalidade vence em {cod.pacote.volta}, no dia do pagamento.</>
+                : <>Valor com o código: <b>{money(cod.pagamento.total)}</b>.</>}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="field">
         <label>Valor cobrado (R$)</label>
         <input
           type="number"
           step="0.01"
           value={value}
+          disabled={!!cod}
           onChange={(e) => setValue(e.target.value)}
         />
+        {cod && <div className="help">Valor da campanha — o sistema calcula, como no Pix.</div>}
       </div>
     </Modal>
   );

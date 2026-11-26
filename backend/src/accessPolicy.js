@@ -50,7 +50,7 @@ export function requirement(method, path) {
   if (path.startsWith("/api/relatorios/")) return [["relatorios", 1]];
   if (path.startsWith("/api/wa/")) return [["whatsapp", level]];
   if (path.startsWith("/api/funil")) return [["funil", level]];
-  if (/^\/api\/vouchers(\/|$)/.test(path) || /^\/api\/clients\/\d+\/voucher$/.test(path)) return [["campanhas", level]];
+  if (/^\/api\/vouchers(\/|$)/.test(path) || /^\/api\/clients\/\d+\/voucher(\/previa)?$/.test(path)) return [["campanhas", level]];
   if (/^\/api\/(settings|feriados)(\/|-|$)/.test(path)) return [["configuracoes", level]];
   if (path.startsWith("/api/testimonials")) return [["depoimentos", level]];
   if (/^\/api\/(slots|bookings|agenda|waitlist)(\/|$)/.test(path) || /^\/api\/clients\/\d+\/(batch-book|batch-unbook|makeup-book|extra-book|presente-book)$/.test(path)) return [["agenda", level]];

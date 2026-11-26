@@ -6,6 +6,7 @@ import { Chave } from "./Config.jsx";
 import { api, canAccess } from "./api.js";
 import { money, fmtDate, compLabel } from "./helpers.js";
 import { CriarTemplate } from "./Disparo.jsx";
+import { FORMAS_PAGAMENTO } from "./modals.jsx";
 
 /* ============================================================
    Campanhas com código (voucher).
@@ -553,6 +554,22 @@ function UsosDaCampanha({ campanha: c }) {
   const { close } = useModal();
   const [usos, setUsos] = useState(null);
   const [aluna, setAluna] = useState("");
+  /* Pacote pago por fora (dinheiro, Pix direto para a escola): aplica e já dá
+     a baixa — a mensalidade do pacote nasce quitada, sem Pix. */
+  const [porFora, setPorFora] = useState(false);
+  const [forma, setForma] = useState("Dinheiro");
+  const [dataPg, setDataPg] = useState(() => new Date().toLocaleDateString("sv-SE"));
+  const [previa, setPrevia] = useState(null);
+  const [erroPrevia, setErroPrevia] = useState("");
+  useEffect(() => {
+    setPrevia(null); setErroPrevia("");
+    if (!aluna || !c.pacoteInicio) return;
+    let vivo = true;
+    api.vouchers.previaNaAluna(aluna, c.codigo)
+      .then((r) => { if (vivo) setPrevia(r); })
+      .catch((e) => { if (vivo) setErroPrevia(e.message); });
+    return () => { vivo = false; };
+  }, [aluna, c.id]);
 
   const carregar = async () => {
     try { setUsos(await api.vouchers.usos(c.id)); }
@@ -569,21 +586,27 @@ function UsosDaCampanha({ campanha: c }) {
   const aplicar = async () => {
     const cli = (data?.clients || []).find((x) => x.id === aluna);
     if (!cli) return toast.error("Escolha a aluna.");
+    const fora = !!c.pacoteInicio && porFora;
+    const valorTxt = previa?.pacote ? ` (${money(previa.pacote.valor)})` : "";
     const ok = await confirmModal({
-      title: "Aplicar código",
+      title: fora ? "Aplicar e dar baixa" : "Aplicar código",
       message: `Aplicar ${c.codigo} na mensalidade de ${cli.name}?\n\n${c.beneficios.join("\n")}\n\n` +
-        (c.pacoteInicio
+        (fora
+          ? `O pacote${valorTxt} fica PAGO por fora (${forma}) em ${fmtDate(dataPg)}: a mensalidade de ${previa?.pacote?.texto?.cobranca || "cobrança do pacote"} nasce quitada, sem Pix, e entra no recebido do Financeiro. Os meses do pacote ficam cobertos e a mensalidade volta sozinha em ${previa?.pacote?.texto?.volta || "o mês de volta"}.`
+          : c.pacoteInicio
           ? "Os meses do pacote mudam de valor e a mensalidade do pacote é gerada agora, com o Pix, para ela pagar pelo portal."
           : "A mensalidade em aberto e os meses da campanha mudam de valor, e o Pix é refeito."),
-      confirmLabel: "Aplicar",
+      confirmLabel: fora ? "✓ Aplicar e dar baixa" : "Aplicar",
     });
     if (!ok) return;
     try {
-      const r = await api.vouchers.aplicarNaAluna(cli.id, c.codigo);
+      const r = await api.vouchers.aplicarNaAluna(cli.id, c.codigo, fora ? { data: dataPg, forma } : null);
       toast(r.pacote
-        ? `Pacote aplicado para ${cli.name}: ${money(r.pacote.valor)} na mensalidade de ${r.pacote.texto.cobranca}.`
+        ? (fora
+          ? `Pacote de ${cli.name} pago por fora: ${money(r.pacote.valor)} quitado na mensalidade de ${r.pacote.texto.cobranca}.`
+          : `Pacote aplicado para ${cli.name}: ${money(r.pacote.valor)} na mensalidade de ${r.pacote.texto.cobranca}.`)
         : `Código aplicado para ${cli.name}${r.meses?.length ? ` — ${r.meses.length} mês(es) com desconto` : ""}.`);
-      setAluna("");
+      setAluna(""); setPorFora(false);
       carregar(); reload?.(); avisarLista();
     } catch (e) { toast.error(e.message); }
   };
@@ -653,8 +676,37 @@ Cada uma escolhe o horário pelo portal, sem pagar.`,
             <label>Aplicar o código na mensalidade de uma aluna</label>
             <Select value={aluna} onChange={setAluna} options={opcoesAlunas} placeholder="Escolha a aluna" searchable />
           </div>
-          <button data-access="campanhas:2" className="btn sec sm" onClick={aplicar} disabled={!aluna}>Aplicar código</button>
-          <div className="help">Para quando ela mandar o código pelo WhatsApp.</div>
+          {c.pacoteInicio && aluna && (
+            <div className="help" style={{ marginTop: "-.3rem", marginBottom: ".6rem", color: erroPrevia ? "var(--danger)" : undefined }}>
+              {erroPrevia || (previa?.pacote
+                ? <>Pacote para ela: <b>{money(previa.pacote.valor)}</b> ({previa.pacote.texto.pagos}). Volta ao normal em {previa.pacote.texto.volta}.</>
+                : "Calculando o valor do pacote...")}
+            </div>
+          )}
+          {c.pacoteInicio && (
+            <>
+              <Chave on={porFora} onToggle={() => setPorFora(!porFora)}
+                titulo="Ela já pagou o pacote por fora"
+                ligado="A mensalidade do pacote nasce quitada, sem Pix (baixa manual)."
+                desligado="O Pix do pacote é gerado para ela pagar pelo portal." />
+              {porFora && (
+                <div className="row2">
+                  <div className="field">
+                    <label>Forma de pagamento</label>
+                    <Select value={forma} onChange={setForma} options={FORMAS_PAGAMENTO} />
+                  </div>
+                  <div className="field">
+                    <label>Data do pagamento</label>
+                    <input type="date" value={dataPg} max={new Date().toLocaleDateString("sv-SE")} onChange={(e) => setDataPg(e.target.value)} />
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          <button data-access="campanhas:2" className="btn sec sm" onClick={aplicar} disabled={!aluna || (porFora && !!erroPrevia)}>
+            {c.pacoteInicio && porFora ? "✓ Aplicar e dar baixa" : "Aplicar código"}
+          </button>
+          <div className="help">Para quando ela mandar o código pelo WhatsApp{c.pacoteInicio ? " ou pagar o pacote direto na escola" : ""}.</div>
         </div>
       )}
 

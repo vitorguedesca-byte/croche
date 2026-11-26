@@ -156,6 +156,8 @@ export const api = {
   deleteClient: (id) => req("DELETE", `/api/clients/${id}`),
   reativarClient: (id) => req("POST", `/api/clients/${id}/reativar`),
   baixarLead: (id, data = {}) => req("POST", `/api/clients/${id}/baixa-lead`, data),
+  // valor da campanha na baixa (ex.: PACOTEVERAO pago por fora), antes de confirmar
+  baixarLeadPrevia: (id, data = {}) => req("POST", `/api/clients/${id}/baixa-lead/previa`, data),
   undo: () => req("POST", "/api/undo"),
   getUndoStatus: () => req("GET", "/api/undo/status"),
 
@@ -288,7 +290,9 @@ export const api = {
     darAula: (usoId, quantidade = 1) => req("POST", `/api/vouchers/usos/${usoId}/aula`, { quantidade }),
     darAulaTodas: (voucherId, quantidade = 1) => req("POST", `/api/vouchers/${voucherId}/aula-todas`, { quantidade }),
     // a escola aplica o código na mensalidade da aluna (ela mandou pelo WhatsApp)
-    aplicarNaAluna: (clientId, codigo) => req("POST", `/api/clients/${clientId}/voucher`, { codigo }),
+    // pagoPorFora: { data, forma } — pacote pago por fora, a mensalidade dele nasce quitada
+    aplicarNaAluna: (clientId, codigo, pagoPorFora = null) => req("POST", `/api/clients/${clientId}/voucher`, { codigo, pagoPorFora }),
+    previaNaAluna: (clientId, codigo) => req("POST", `/api/clients/${clientId}/voucher/previa`, { codigo }),
     validar: (data) => req("POST", "/api/vouchers/validar", data),
   },
 

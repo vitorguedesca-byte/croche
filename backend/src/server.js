@@ -4815,11 +4815,16 @@ const usoDeVoucherDaReserva = (bookingId) =>
 /* Código na MENSALIDADE de quem já é aluna (portal ou painel). Vale a partir
    da mensalidade em aberto mais antiga — ou, sem nenhuma em aberto, da próxima
    que vai nascer — e segue pelos meses da campanha. */
-async function aplicarVoucherNaMensalidade(client, codigo, { porAdmin = null } = {}) {
+async function aplicarVoucherNaMensalidade(client, codigo, { porAdmin = null, pagoPorFora = null } = {}) {
   const v = await buscarVoucher(codigo);
   if (!v) throw erroVoucher("Código não encontrado. Confira se digitou certinho. 💚", 404);
   if (client.plan !== "mensalista" || client.status === "cancelado")
     throw erroVoucher("Este código vale para a mensalidade de alunas mensalistas. 💚", 400);
+  /* Baixa junto com o código (a Inêz, 26/11/2026): só para pacote, que é um
+     pagamento único. Desconto mês a mês se paga mensalidade por mensalidade,
+     com a baixa de sempre no Financeiro. */
+  if (pagoPorFora && !temPacote(v))
+    throw erroVoucher(`O código ${v.codigo} não é de pacote: aplique o código e dê a baixa da mensalidade no Financeiro.`, 400);
   const aberta = await prisma.invoice.findFirst({
     where: { clientId: client.id, status: "pendente" },
     orderBy: { competencia: "asc" },
@@ -4836,8 +4841,10 @@ async function aplicarVoucherNaMensalidade(client, codigo, { porAdmin = null } =
      paga como sempre). Grava os meses do pacote e já gera o Pix dele. */
   if (pacote) {
     try {
-      const r = await gravarPacote(client, v, { gerarAgora: true, uso });
-      const cobInv = await prisma.invoice.findFirst({ where: { clientId: client.id, competencia: r.pac.cobranca } });
+      // pago por fora: não há Pix a gerar — a mensalidade do pacote nasce quitada logo abaixo
+      const r = await gravarPacote(client, v, { gerarAgora: !pagoPorFora, uso });
+      let cobInv = await prisma.invoice.findFirst({ where: { clientId: client.id, competencia: r.pac.cobranca } });
+      if (pagoPorFora) cobInv = await quitarPacotePorFora(client, r, cobInv, pagoPorFora);
       const final = await prisma.voucherUso.update({
         where: { id: uso.id },
         data: {
@@ -4850,6 +4857,7 @@ async function aplicarVoucherNaMensalidade(client, codigo, { porAdmin = null } =
         `🎟️ ${fmtDiaBR(todayISO())}: pacote ${v.codigo} (${v.nome})${porAdmin ? ` aplicado por ${porAdmin}` : " escolhido pelo portal"} — ${r.desc}. ` +
         `Valor do pacote: ${moedaBR(r.valor)}, na mensalidade de ${nomeMes(r.pac.cobranca)}, com vencimento em ${fmtDiaBR(r.resumo.vencimento)}. ` +
         `Volta ao normal em ${nomeMes(r.pac.volta)}. Cancelando no meio do pacote, não há devolução e ${nomeMes(r.pac.volta)} não é gerada.` +
+        (pagoPorFora ? ` 💵 Pago por fora (${pagoPorFora.forma}) em ${fmtDiaBR(pagoPorFora.data)} — baixa manual${porAdmin ? ` de ${porAdmin}` : ""}.` : "") +
         (v.premio ? ` 🎁 Entregar o prêmio: ${v.premio}.` : ""));
       return { uso: final, voucher: v, meses: r.meses, pacote: { ...r.resumo, invoiceId: cobInv?.id || null } };
     } catch (e) {
@@ -4894,6 +4902,30 @@ async function aplicarVoucherNaMensalidade(client, codigo, { porAdmin = null } =
     await prisma.voucherUso.update({ where: { id: uso.id }, data: { status: "cancelado" } }).catch(() => {});
     throw e;
   }
+}
+
+/* Pacote pago POR FORA (dinheiro, Pix direto para a escola...): a mensalidade
+   da cobrança do pacote fica quitada com o valor do pacote, como se o Pix dele
+   tivesse caído — e daí em diante tudo segue o caminho de sempre: os meses
+   cobertos nascem quitados em R$ 0 (cobrancaDoPacote → paga) e a mensalidade
+   volta a ser cobrada no mês de volta. Se a mensalidade já existia em aberto,
+   o QR dela fecha no banco: paga por fora, não pode continuar pagável. */
+async function quitarPacotePorFora(client, r, inv, { data, forma }) {
+  const dados = {
+    amountCents: Math.round(r.valor * 100), status: "pago", paidAt: data, baixaManual: true,
+    descricao: r.desc.slice(0, 200), pixCode: null, pixExpiresOn: null,
+  };
+  let quitada;
+  if (inv) {
+    quitada = await prisma.invoice.update({ where: { id: inv.id }, data: dados });
+    await fecharPixDaMensalidade(inv, "pacote pago por fora");
+  } else {
+    quitada = await prisma.invoice.create({
+      data: { clientId: client.id, competencia: r.pac.cobranca, dueDate: r.resumo.vencimento, ...dados },
+    });
+  }
+  console.log(`[pacote] ${client.name}: pacote de ${moedaBR(r.valor)} pago por fora (${forma}) em ${data} — mensalidade ${r.pac.cobranca} quitada.`);
+  return quitada;
 }
 
 /* Desfaz um uso (só a escola). Os meses que ganharam preço do voucher voltam
@@ -5095,12 +5127,39 @@ app.post("/api/vouchers/usos/:id/premio", wrap(async (req, res) => {
   res.json(uso);
 }));
 
+/* Pagamento por fora informado pela Inêz: data (não no futuro) e forma. */
+function pagamentoPorFora(b) {
+  if (!b) return null;
+  const data = /^\d{4}-\d{2}-\d{2}$/.test(String(b.data || "")) ? String(b.data) : todayISO();
+  if (data > todayISO()) throw erroVoucher("A data do pagamento não pode ser no futuro.", 400);
+  return { data, forma: String(b.forma || "por fora").trim().slice(0, 40) || "por fora" };
+}
+
+/* Prévia para a tela da campanha: quanto o pacote dá para ESTA aluna, antes
+   de aplicar (é o valor que a Inêz cobra quando ela paga por fora). */
+app.post("/api/clients/:id/voucher/previa", wrap(async (req, res) => {
+  const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
+  if (!client) return res.status(404).json({ error: "Aluna não encontrada." });
+  if (client.plan !== "mensalista" || client.status === "cancelado")
+    return res.status(400).json({ error: "Este código vale para a mensalidade de alunas mensalistas." });
+  const v = await buscarVoucher(req.body?.codigo);
+  try {
+    await conferirVoucher(v, { contexto: "mensalidade", freq: client.weeklyFreq, unidade: client.unit, clientId: client.id, cpf: client.cpf });
+  } catch (e) {
+    return res.status(Number(e.code) || 409).json({ error: e.message });
+  }
+  res.json({ codigo: v.codigo, beneficios: descreverBeneficios(v), pacote: temPacote(v) ? await resumoDoPacote(client, v) : null });
+}));
+
 // A Inêz aplica o código pela aluna (ex.: ela mandou o código pelo WhatsApp)
 app.post("/api/clients/:id/voucher", wrap(async (req, res) => {
   const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
   if (!client) return res.status(404).json({ error: "Aluna não encontrada." });
   try {
-    const r = await aplicarVoucherNaMensalidade(client, req.body?.codigo, { porAdmin: req.admin?.username || "a escola" });
+    const r = await aplicarVoucherNaMensalidade(client, req.body?.codigo, {
+      porAdmin: req.admin?.username || "a escola",
+      pagoPorFora: pagamentoPorFora(req.body?.pagoPorFora),
+    });
     res.json({ ok: true, uso: r.uso, meses: r.meses, beneficios: descreverBeneficios(r.voucher), pacote: r.pacote || null });
   } catch (e) {
     res.status(e.code || 500).json({ error: e.message });
@@ -10443,6 +10502,77 @@ app.post(
   })
 );
 
+/* CÓDIGO DE CAMPANHA na baixa da lead (26/11/2026): a aluna nova que pagou por
+   fora (ex.: o PACOTEVERAO em dinheiro) entra exatamente como se o Pix da
+   matrícula com o código tivesse caído — o valor é o da campanha, calculado
+   aqui (nunca o digitado), e a matrícula segue por registrarMatriculaPaga →
+   confirmarVoucherDaReserva, que grava os meses do pacote.
+   O código vem da tela ou da própria reserva (ela começou pelo site com o
+   código e o Pix venceu). `semCodigo`: a Inêz tirou o código — o uso da
+   reserva é cancelado e a vaga volta para a campanha.
+   `reservar`: false só confere (prévia da tela). */
+async function codigoDaBaixaDaLead(client, booking, { codigo = "", semCodigo = false, reservar = false } = {}) {
+  const usoDaReserva = booking
+    ? await prisma.voucherUso.findFirst({
+        where: { bookingId: booking.id, contexto: "matricula", status: { in: ["reservado", "expirado"] } },
+        include: { voucher: true }, orderBy: { id: "desc" },
+      })
+    : null;
+  const pedido = String(codigo || "").trim();
+  if (semCodigo || (!pedido && !usoDaReserva)) {
+    if (reservar && usoDaReserva) await prisma.voucherUso.update({ where: { id: usoDaReserva.id }, data: { status: "cancelado" } });
+    return null;
+  }
+  if (!booking)
+    throw erroVoucher(`Marque a aula de matrícula de ${client.name} na agenda antes de dar baixa com o código — o pacote nasce da matrícula.`, 400);
+  const freq = freqDoPlano(client.weeklyFreq);
+  let v = usoDaReserva?.voucher || null;
+  let uso = usoDaReserva;
+  if (pedido) {
+    const outro = await buscarVoucher(pedido);
+    if (!outro) throw erroVoucher("Código não encontrado. Confira se digitou certinho.", 404);
+    if (!v || v.id !== outro.id) { v = outro; uso = null; }
+  }
+  const pagamento = primeiroPagamentoComVoucher(v, {
+    avulsa: false, mensalidade: valorDoPlano(freq), taxa: taxaMatriculaAtual(),
+    valorAvulsa: Number(SETTINGS.valorAvulsa) || 40,
+  });
+  const regra = { contexto: "matricula", freq, unidade: booking.unit || client.unit || null };
+  if (!uso) {
+    if (!reservar) {
+      await conferirVoucher(v, { ...regra, clientId: client.id, cpf: client.cpf });
+    } else {
+      // trocou de código: o da reserva sai e devolve a vaga
+      if (usoDaReserva) await prisma.voucherUso.update({ where: { id: usoDaReserva.id }, data: { status: "cancelado" } });
+      uso = await reservarUsoVoucher(v, regra, {
+        clientId: client.id, nome: client.name, cpf: onlyDigits(client.cpf) || null,
+        contexto: "matricula", bookingId: booking.id, descontoCents: pagamento.descontoCents,
+        resumo: descreverBeneficios(v).join(" · ").slice(0, 300),
+      });
+    }
+  }
+  return { v, uso, pagamento, daReserva: !!usoDaReserva && usoDaReserva.voucherId === v.id };
+}
+
+/* Prévia da baixa com código: a tela mostra o valor da campanha antes de confirmar. */
+app.post("/api/clients/:id/baixa-lead/previa", wrap(async (req, res) => {
+  const client = await prisma.client.findUnique({ where: { id: Number(req.params.id) } });
+  if (!client) return res.status(404).json({ error: "Aluno não encontrado." });
+  const bookings = await prisma.booking.findMany({ where: { ...bookingWhere(client) }, orderBy: { id: "desc" } });
+  const bk = bookings.find((b) => ehPagamentoDeMatricula(b.paymentMethod) || b.status === "aguardando") || bookings[0] || null;
+  try {
+    const r = await codigoDaBaixaDaLead(client, bk, { codigo: req.body?.codigo, semCodigo: !!req.body?.semCodigo });
+    if (!r) return res.json({ codigo: null });
+    res.json({
+      codigo: r.v.codigo, nome: r.v.nome, daReserva: r.daReserva, beneficios: descreverBeneficios(r.v),
+      pagamento: r.pagamento,
+      pacote: temPacote(r.v) ? { ...mesesDoPacote(r.v), volta: nomeMes(mesesDoPacote(r.v).volta) } : null,
+    });
+  } catch (e) {
+    res.status(Number(e.code) || 409).json({ error: e.message });
+  }
+}));
+
 /* Dar baixa manual em Lead (1ª aula avulsa ou matrícula/mensalidade paga por fora).
    - Atualiza o status do cliente para "ativo" (sai da lista de Leads)
    - Confirma a reserva e registra o pagamento
@@ -10474,6 +10604,7 @@ app.post(
     let bookingAtualizado = null;
     let matriculaConvertida = null;
     let reativouAula = false;
+    let comCodigoLog = null;
 
     if (isMensalista) {
       // Caso Mensalista / Matrícula
@@ -10482,6 +10613,16 @@ app.post(
 
       // Procura reserva de matrícula ou a mais recente
       const bkMatricula = bookings.find((b) => ehPagamentoDeMatricula(b.paymentMethod) || b.status === "aguardando") || bookings[0];
+      // Código de campanha (ex.: pacote pago por fora): o valor é o da campanha
+      let comCodigo = null;
+      try {
+        comCodigo = await codigoDaBaixaDaLead(client, bkMatricula || null, {
+          codigo: req.body?.codigo, semCodigo: !!req.body?.semCodigo, reservar: true,
+        });
+      } catch (e) {
+        return res.status(Number(e.code) || 409).json({ error: e.message });
+      }
+      if (comCodigo) { valorFinal = comCodigo.pagamento.total; comCodigoLog = comCodigo.v.codigo; }
       if (bkMatricula) {
         bookingAtualizado = await prisma.booking.update({
           where: { id: bkMatricula.id },
@@ -10493,9 +10634,16 @@ app.post(
             holdUntil: null,
             absenceReason: "",
             value: valorFinal,
+            // com código, a taxa é a que a campanha deixou (0 na isenção) — é ela
+            // que separa a mensalidade do pagamento (mensalidadeDaReserva)
+            ...(comCodigo ? { taxaMatricula: comCodigo.pagamento.taxa || null } : {}),
           },
         });
         matriculaConvertida = await registrarMatriculaPaga(bookingAtualizado);
+        if (comCodigo) {
+          await anotarNaFicha(client.id,
+            `💵 ${fmtDiaBR(dataPgto)}: matrícula com o código ${comCodigo.v.codigo} paga por fora (${formaPgto}), ${moedaBR(valorFinal)} — baixa manual${req.admin?.username ? ` de ${req.admin.username}` : ""}.`);
+        }
         await avisarMatriculaConfirmada(bookingAtualizado);
       } else {
         // Sem booking prévio: atualiza cliente diretamente
@@ -10592,7 +10740,7 @@ app.post(
     await fecharPixDasReservas(bookings, "baixa manual do lead");
 
     const clientAtualizado = await prisma.client.findUnique({ where: { id: client.id } });
-    console.log(`[baixa lead] ${client.name} (id ${client.id}) ativado com pagamento ${formaPgto} R$ ${valorFinal}.`);
+    console.log(`[baixa lead] ${client.name} (id ${client.id}) ativado com pagamento ${formaPgto} R$ ${valorFinal}${comCodigoLog ? ` com o código ${comCodigoLog}` : ""}.`);
 
     res.json({
       ok: true,
