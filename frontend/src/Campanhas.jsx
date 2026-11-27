@@ -565,11 +565,12 @@ function UsosDaCampanha({ campanha: c }) {
     setPrevia(null); setErroPrevia("");
     if (!aluna || !c.pacoteInicio) return;
     let vivo = true;
-    api.vouchers.previaNaAluna(aluna, c.codigo)
+    // pago por fora: a campanha é conferida no dia do pagamento
+    api.vouchers.previaNaAluna(aluna, c.codigo, porFora ? { data: dataPg, forma } : null)
       .then((r) => { if (vivo) setPrevia(r); })
       .catch((e) => { if (vivo) setErroPrevia(e.message); });
     return () => { vivo = false; };
-  }, [aluna, c.id]);
+  }, [aluna, c.id, porFora, dataPg]);
 
   const carregar = async () => {
     try { setUsos(await api.vouchers.usos(c.id)); }

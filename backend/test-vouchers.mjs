@@ -58,7 +58,8 @@ ok(mesesSeguintes({ ...base, isentaMatricula: true }, "2026-11", somarComp).leng
 console.log("\n— quem pode usar —");
 const ctx = { hoje: HOJE, usados: 0 };
 ok(motivoRecusa(null, ctx) !== null, "código inexistente recusa");
-ok(motivoRecusa({ ...v1, ativo: false }, { ...ctx, contexto: "matricula" }).includes("encerrada"), "pausada recusa");
+ok(motivoRecusa({ ...v1, ativo: false }, { ...ctx, contexto: "matricula" }).includes("ainda não está valendo"), "pausada no prazo: ainda não vale");
+ok(motivoRecusa({ ...v1, ativo: false, fim: "2026-09-29" }, { ...ctx, contexto: "matricula" }).includes("encerrada"), "pausada depois do fim: encerrada");
 ok(motivoRecusa({ ...v1, fim: "2026-09-29" }, { ...ctx, contexto: "matricula" }).includes("encerrada"), "vencida recusa");
 ok(motivoRecusa({ ...v1, inicio: "2026-10-01" }, { ...ctx, contexto: "matricula" }).includes("começa"), "futura recusa");
 ok(motivoRecusa({ ...v1, fim: HOJE }, { ...ctx, contexto: "matricula" }) === null, "vale no último dia");

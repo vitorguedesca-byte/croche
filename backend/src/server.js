@@ -4431,10 +4431,10 @@ async function buscarVoucher(codigo) {
 }
 
 /* Confere sem reservar: é o que a tela mostra ao tocar em "Aplicar". */
-async function conferirVoucher(v, { contexto, freq, unidade, clientId, cpf }) {
+async function conferirVoucher(v, { contexto, freq, unidade, clientId, cpf, hoje = todayISO() }) {
   if (v) await conciliarUsosVoucher(v.id);
   const usados = v ? await contarUsosVoucher(v.id) : 0;
-  const motivo = motivoRecusa(v, { hoje: todayISO(), usados, contexto, freq, unidade });
+  const motivo = motivoRecusa(v, { hoje, usados, contexto, freq, unidade });
   if (motivo) throw erroVoucher(motivo, v ? 409 : 404);
   if (await jaUsouVoucher(v.id, { clientId, cpf }))
     throw erroVoucher("Você já usou este código — cada pessoa usa uma vez. 💚");
@@ -4830,7 +4830,9 @@ async function aplicarVoucherNaMensalidade(client, codigo, { porAdmin = null, pa
     orderBy: { competencia: "asc" },
   });
   const comp0 = aberta?.competencia || (await proximaCobranca(client))?.competencia || competenciaAtual();
-  const regra = { contexto: "mensalidade", freq: client.weeklyFreq, unidade: client.unit };
+  /* Pago por fora: a campanha vale no DIA DO PAGAMENTO, não no dia em que a
+     Inêz registra — pagou em 30/11 e a baixa ficou para 01/12, o código vale. */
+  const regra = { contexto: "mensalidade", freq: client.weeklyFreq, unidade: client.unit, ...(pagoPorFora ? { hoje: pagoPorFora.data } : {}) };
   const pacote = temPacote(v);
   const uso = await reservarUsoVoucher(v, regra, {
     clientId: client.id, nome: client.name, cpf: onlyDigits(client.cpf) || null,
@@ -5144,7 +5146,9 @@ app.post("/api/clients/:id/voucher/previa", wrap(async (req, res) => {
     return res.status(400).json({ error: "Este código vale para a mensalidade de alunas mensalistas." });
   const v = await buscarVoucher(req.body?.codigo);
   try {
-    await conferirVoucher(v, { contexto: "mensalidade", freq: client.weeklyFreq, unidade: client.unit, clientId: client.id, cpf: client.cpf });
+    // com o pagamento por fora, a campanha é conferida no dia do pagamento
+    const fora = req.body?.pagoPorFora ? pagamentoPorFora(req.body.pagoPorFora) : null;
+    await conferirVoucher(v, { contexto: "mensalidade", freq: client.weeklyFreq, unidade: client.unit, clientId: client.id, cpf: client.cpf, ...(fora ? { hoje: fora.data } : {}) });
   } catch (e) {
     return res.status(Number(e.code) || 409).json({ error: e.message });
   }
@@ -10511,7 +10515,7 @@ app.post(
    código e o Pix venceu). `semCodigo`: a Inêz tirou o código — o uso da
    reserva é cancelado e a vaga volta para a campanha.
    `reservar`: false só confere (prévia da tela). */
-async function codigoDaBaixaDaLead(client, booking, { codigo = "", semCodigo = false, reservar = false } = {}) {
+async function codigoDaBaixaDaLead(client, booking, { codigo = "", semCodigo = false, reservar = false, pagoEm = null } = {}) {
   const usoDaReserva = booking
     ? await prisma.voucherUso.findFirst({
         where: { bookingId: booking.id, contexto: "matricula", status: { in: ["reservado", "expirado"] } },
@@ -10537,7 +10541,11 @@ async function codigoDaBaixaDaLead(client, booking, { codigo = "", semCodigo = f
     avulsa: false, mensalidade: valorDoPlano(freq), taxa: taxaMatriculaAtual(),
     valorAvulsa: Number(SETTINGS.valorAvulsa) || 40,
   });
-  const regra = { contexto: "matricula", freq, unidade: booking.unit || client.unit || null };
+  /* A campanha vale no DIA DO PAGAMENTO (pagou em 30/11, a baixa ficou para
+     01/12: o código vale). Data no futuro não adianta nada: vale hoje. */
+  const hoje = todayISO();
+  const diaDaRegra = /^\d{4}-\d{2}-\d{2}$/.test(String(pagoEm || "")) && pagoEm < hoje ? pagoEm : hoje;
+  const regra = { contexto: "matricula", freq, unidade: booking.unit || client.unit || null, hoje: diaDaRegra };
   if (!uso) {
     if (!reservar) {
       await conferirVoucher(v, { ...regra, clientId: client.id, cpf: client.cpf });
@@ -10561,7 +10569,7 @@ app.post("/api/clients/:id/baixa-lead/previa", wrap(async (req, res) => {
   const bookings = await prisma.booking.findMany({ where: { ...bookingWhere(client) }, orderBy: { id: "desc" } });
   const bk = bookings.find((b) => ehPagamentoDeMatricula(b.paymentMethod) || b.status === "aguardando") || bookings[0] || null;
   try {
-    const r = await codigoDaBaixaDaLead(client, bk, { codigo: req.body?.codigo, semCodigo: !!req.body?.semCodigo });
+    const r = await codigoDaBaixaDaLead(client, bk, { codigo: req.body?.codigo, semCodigo: !!req.body?.semCodigo, pagoEm: req.body?.paymentDate });
     if (!r) return res.json({ codigo: null });
     res.json({
       codigo: r.v.codigo, nome: r.v.nome, daReserva: r.daReserva, beneficios: descreverBeneficios(r.v),
@@ -10617,7 +10625,7 @@ app.post(
       let comCodigo = null;
       try {
         comCodigo = await codigoDaBaixaDaLead(client, bkMatricula || null, {
-          codigo: req.body?.codigo, semCodigo: !!req.body?.semCodigo, reservar: true,
+          codigo: req.body?.codigo, semCodigo: !!req.body?.semCodigo, reservar: true, pagoEm: dataPgto,
         });
       } catch (e) {
         return res.status(Number(e.code) || 409).json({ error: e.message });

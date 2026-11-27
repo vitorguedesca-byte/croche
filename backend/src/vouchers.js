@@ -198,6 +198,11 @@ export function situacaoCampanha(v, { hoje, usados = 0 }) {
 export function motivoRecusa(v, { hoje, usados = 0, contexto, freq = null, unidade = null }) {
   if (!v) return "Código não encontrado. Confira se digitou certinho. 💚";
   const sit = situacaoCampanha(v, { hoje, usados });
+  /* Pausada ainda dentro do prazo (ex.: criada pausada, à espera de ser
+     ligada): "encerrada" fazia a aluna achar que tinha perdido a promoção
+     (Gisele, 26/11/2026). Pausada depois do fim é encerrada mesmo. */
+  if (sit.codigo === "pausada" && !(v.fim && hoje > v.fim))
+    return "Esta promoção ainda não está valendo. Fale com a gente no WhatsApp. 💚";
   if (sit.codigo === "pausada" || sit.codigo === "encerrada") return "Esta promoção já foi encerrada. 💚";
   if (sit.codigo === "agendada") return `Esta promoção começa em ${fmtBR(v.inicio)}. 💚`;
   if (sit.codigo === "esgotada") return "Que pena! As vagas desta promoção já acabaram. 💚";

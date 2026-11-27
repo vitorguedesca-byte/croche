@@ -292,7 +292,7 @@ export const api = {
     // a escola aplica o código na mensalidade da aluna (ela mandou pelo WhatsApp)
     // pagoPorFora: { data, forma } — pacote pago por fora, a mensalidade dele nasce quitada
     aplicarNaAluna: (clientId, codigo, pagoPorFora = null) => req("POST", `/api/clients/${clientId}/voucher`, { codigo, pagoPorFora }),
-    previaNaAluna: (clientId, codigo) => req("POST", `/api/clients/${clientId}/voucher/previa`, { codigo }),
+    previaNaAluna: (clientId, codigo, pagoPorFora = null) => req("POST", `/api/clients/${clientId}/voucher/previa`, { codigo, pagoPorFora }),
     validar: (data) => req("POST", "/api/vouchers/validar", data),
   },
 

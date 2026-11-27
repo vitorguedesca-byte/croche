@@ -905,12 +905,14 @@ export function BaixarLeadModal({ client, onComplete }) {
     if (!c) return;
     setConferindo(true); setErroCod("");
     try {
-      const r = await api.baixarLeadPrevia(client.id, { codigo: c });
+      const r = await api.baixarLeadPrevia(client.id, { codigo: c, paymentDate: pdate });
       setCod(r); setSemCodigo(false); setValue(r.pagamento.total);
     } catch (e) {
       setCod(null); setErroCod(e.message || "Não consegui conferir o código.");
     } finally { setConferindo(false); }
   };
+  // a campanha é conferida no dia do pagamento: mudou a data, confere de novo
+  useEffect(() => { if (cod && !cod.daReserva) aplicarCodigo(); }, [pdate]);
   const tirarCodigo = () => {
     if (cod?.daReserva) setSemCodigo(true); // o uso da reserva é cancelado na baixa
     setCod(null); setCodigo(""); setErroCod(""); setValue(valorPadrao);
